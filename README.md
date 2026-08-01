@@ -70,6 +70,18 @@ prawdziwego sprzętu ani zainstalowanego `smartctl`/`mdadm`:
 python3 -m unittest discover -s tests -v
 ```
 
+## Wygląd
+
+Wyśrodkowany układ (max 1080px), jasny/ciemny motyw z przełącznikiem w
+nagłówku (zapamiętywany w `localStorage`, domyślnie idzie za preferencją
+systemu). Żaden z motywów nie jest czystą bielą/czernią - tokeny kolorów
+(tło, tekst, akcent, kolory statusu) są w `static/style.css` na górze
+pliku. Kolor akcentu (stalowy niebieski) celowo różni się od zielonego
+"ok", żeby przycisk akcji nigdy nie mylił się ze statusem "wszystko
+dobrze". Sprawdzone realnie (Playwright + Chromium w sandboxie): kontrast
+tekstu spełnia WCAG AA w obu motywach, wyśrodkowanie liczone z rzeczywistej
+geometrii strony, nie tylko wizualnie.
+
 ## Struktura projektu i architektura
 
 Projekt jest pomyślany jako narzędzie uniwersalne (nie tylko SMB) - dlatego
@@ -128,13 +140,36 @@ klienta), więc ta separacja jest zamierzona.
    rollback do poprzedniej treści, nic nie zostaje zepsute. Wykrywanie
    pokazuje też udziały zdefiniowane ręcznie wprost w głównym `smb.conf`
    (oznaczone jako spoza tego narzędzia, tylko do podglądu - edycja/usuwanie
-   działa wyłącznie na udziałach zarządzanych tutaj). Dostęp do udziału
-   przypisuje się **per użytkownik** (nie przez ręczne wybieranie grupy) -
-   pod spodem narzędzie samo zarządza dedykowaną grupą `<udział>_access`
-   (tworzy ją, dopisuje/wypisuje wybranych userów przy edycji, kasuje przy
-   usunięciu udziału) i ustawia ją jako właściciela folderu (setgid) oraz
-   `force group` w smb.conf, więc zapis działa spójnie niezależnie od
-   pozostałych grup łączącego się użytkownika.
+   działa wyłącznie na udziałach zarządzanych tutaj).
+
+   **Dostęp per użytkownik, trzy poziomy** (jak w OMV): każdy użytkownik ma
+   dla danego udziału `Brak dostępu` / `Tylko odczyt` / `Odczyt i zapis`.
+   Pod spodem: udział jest zawsze `read only = no`, a użytkownicy z
+   poziomem "odczyt" trafiają do `read list` (Samba wymusza im tryb
+   tylko-do-odczytu niezależnie od domyślnego trybu udziału). Dostęp do
+   udziału w ogóle (czy ktoś może się nawet połączyć) idzie przez
+   dedykowaną, samodzielnie zarządzaną grupę `<udział>_access` (tworzona
+   automatycznie, userzy dopisywani/wypisywani przy edycji, kasowana przy
+   usunięciu udziału) - właściciel folderu (setgid) i `force group` w
+   smb.conf, więc zapis działa spójnie niezależnie od pozostałych grup
+   łączącego się użytkownika.
+
+   **Bezpieczeństwo grup, wynikłe z realnego incydentu**: udział założony
+   starą wersją (pojedyncza grupa z listy, sprzed modelu per-użytkownik)
+   mógł wskazywać na DOWOLNĄ istniejącą grupę - łącznie z prywatną grupą
+   czyjegoś konta. Naprawione trzema niezależnymi zabezpieczeniami:
+   (1) edycja takiego udziału automatycznie migruje go na własną,
+   dedykowaną grupę, nigdy nie modyfikując "obcej" grupy; (2) usuwanie
+   udziału kasuje grupę tylko wtedy, gdy jej nazwa odpowiada własnej
+   konwencji narzędzia (`<udział>_access`); (3) grupy dostępowe udziałów
+   są ukryte z ogólnej checklisty edycji użytkownika w sekcji Użytkownicy,
+   żeby przypadkowa edycja kogoś nie odebrała mu po cichu dostępu do
+   udziału.
+
+   **Ważne**: tworzenie/zmiana hasła SMB (`smbpasswd -a`) nie synchronizuje
+   prawdziwego hasła logowania systemowego mimo `unix password sync = yes`
+   w domyślnym `smb.conf` - sprawdzone bezpośrednio (hash w `/etc/shadow`
+   nie zmienia się). To odrębne dane, tak jak zaprojektowano.
 4. **Zarządzanie RAID** - tworzenie/rozbudowa/usuwanie macierzy. Ustalono:
    operacje mają wykonywać się automatycznie po potwierdzeniu w UI (nie
    tylko generować komendę do ręcznego wklejenia). Wymaga dodatkowych

@@ -43,35 +43,70 @@ class TestManagedFileRoundTrip(unittest.TestCase):
     def test_missing_file_is_empty_list(self):
         self.assertEqual(smb_shares._read_managed_shares(self.managed_path), [])
 
-    def test_render_then_read_round_trip(self):
+    def test_render_then_read_round_trip_mixed_rw_ro(self):
         shares = [
-            {"name": "dane", "path": "/srv/dane", "comment": "Wspólne", "read_only": False, "access_group": "dane_access"},
-            {"name": "backup", "path": "/srv/backup", "comment": "", "read_only": True, "access_group": None},
+            {
+                "name": "dane",
+                "path": "/srv/dane",
+                "comment": "Wspólne",
+                "access_group": "dane_access",
+                "permissions": {"tomek": "rw", "wieslaw": "ro"},
+            },
+            {
+                "name": "backup",
+                "path": "/srv/backup",
+                "comment": "",
+                "access_group": None,
+                "permissions": {},
+            },
         ]
         content = smb_shares._render_managed_shares(shares)
         with open(self.managed_path, "w") as fh:
             fh.write(content)
 
         with mock.patch("nas_monitor.smb_shares.grp.getgrnam") as mock_getgrnam:
-            mock_getgrnam.return_value = mock.Mock(gr_mem=["tomek", "wacek"])
+            mock_getgrnam.return_value = mock.Mock(gr_mem=["tomek", "wieslaw"])
             parsed = smb_shares._read_managed_shares(self.managed_path)
 
         by_name = {s["name"]: s for s in parsed}
         self.assertEqual(by_name["dane"]["path"], "/srv/dane")
         self.assertEqual(by_name["dane"]["comment"], "Wspólne")
-        self.assertFalse(by_name["dane"]["read_only"])
-        self.assertEqual(by_name["dane"]["users"], ["tomek", "wacek"])
+        self.assertEqual(by_name["dane"]["permissions"], {"tomek": "rw", "wieslaw": "ro"})
         self.assertEqual(by_name["dane"]["access_group"], "dane_access")
-        self.assertTrue(by_name["backup"]["read_only"])
-        self.assertEqual(by_name["backup"]["users"], [])
+        self.assertEqual(by_name["backup"]["permissions"], {})
         self.assertIsNone(by_name["backup"]["access_group"])
 
-    def test_render_includes_force_group_for_reliable_write_permissions(self):
+    def test_render_always_writable_at_share_level_uses_read_list_for_ro(self):
         content = smb_shares._render_managed_shares(
-            [{"name": "dane", "path": "/srv/dane", "comment": "", "read_only": False, "access_group": "dane_access"}]
+            [
+                {
+                    "name": "dane",
+                    "path": "/srv/dane",
+                    "comment": "",
+                    "access_group": "dane_access",
+                    "permissions": {"tomek": "rw", "wieslaw": "ro"},
+                }
+            ]
         )
+        self.assertIn("read only = no", content)
+        self.assertIn("read list = wieslaw", content)
+        self.assertNotIn("read list = tomek", content)
         self.assertIn("force group = @dane_access", content)
         self.assertIn("valid users = @dane_access", content)
+
+    def test_no_read_list_line_when_everyone_is_rw(self):
+        content = smb_shares._render_managed_shares(
+            [
+                {
+                    "name": "dane",
+                    "path": "/srv/dane",
+                    "comment": "",
+                    "access_group": "dane_access",
+                    "permissions": {"tomek": "rw"},
+                }
+            ]
+        )
+        self.assertNotIn("read list", content)
 
     def test_corrupted_managed_file_does_not_crash_detection(self):
         with open(self.managed_path, "w") as fh:
@@ -99,7 +134,6 @@ class TestEnsureIncludeDirective(unittest.TestCase):
         self.assertIn(f"include = {self.managed}", content_after_first)
         self.assertIn("workgroup = WORKGROUP", content_after_first)  # untouched
 
-        # calling again must not duplicate the line
         r2 = smb_shares._ensure_include_directive(self.smb_conf, self.managed)
         self.assertTrue(r2["success"])
         with open(self.smb_conf) as fh:
@@ -148,7 +182,7 @@ class TestValidateAndApply(unittest.TestCase):
         self.assertFalse(result["success"])
         with open(self.managed) as fh:
             content = fh.read()
-        self.assertEqual(content, "# old content\n")  # rolled back, not the broken content
+        self.assertEqual(content, "# old content\n")
         self.assertNotIn("[dane", content)
 
     @mock.patch("nas_monitor.smb_shares._ensure_include_directive", return_value={"success": True, "error": None})
@@ -165,10 +199,10 @@ class TestValidateAndApply(unittest.TestCase):
     @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(0, "OK", ""))
     def test_reload_failure_is_a_soft_warning_not_a_rollback(self, mock_run, mock_find, mock_reload, mock_include):
         result = smb_shares._validate_and_apply("[dane]\n   path = /srv/dane\n", self.managed)
-        self.assertTrue(result["success"])  # config is valid and saved
+        self.assertTrue(result["success"])
         self.assertIn("warning", result)
         with open(self.managed) as fh:
-            self.assertIn("[dane]", fh.read())  # new content kept, not rolled back
+            self.assertIn("[dane]", fh.read())
 
 
 class TestMissingSmbPasswordWarning(unittest.TestCase):
@@ -195,7 +229,7 @@ class TestMissingSmbPasswordWarning(unittest.TestCase):
 
 
 @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
-class TestCreateShareWithUsers(unittest.TestCase):
+class TestCreateShareWithPermissions(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.managed = os.path.join(self.tmpdir, "shares.conf")
@@ -207,8 +241,10 @@ class TestCreateShareWithUsers(unittest.TestCase):
     @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
     @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
     @mock.patch("nas_monitor.smb_shares.users_mod.add_user_to_group", return_value={"success": True, "error": None})
-    def test_adds_each_selected_user_to_auto_managed_group(self, mock_add, mock_dir, mock_apply, mock_smb):
-        result = smb_shares.create_share("dane", users=["tomek", "wacek"], managed_conf_path=self.managed)
+    def test_adds_every_permission_holder_to_the_access_group(self, mock_add, mock_dir, mock_apply, mock_smb):
+        result = smb_shares.create_share(
+            "dane", permissions={"tomek": "rw", "wacek": "ro"}, managed_conf_path=self.managed
+        )
         self.assertTrue(result["success"])
         self.assertEqual(mock_add.call_count, 2)
         mock_add.assert_any_call("tomek", "dane_access")
@@ -216,16 +252,21 @@ class TestCreateShareWithUsers(unittest.TestCase):
         mock_dir.assert_called_once_with(smb_shares.share_path("dane"), "dane_access")
 
     @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
-    def test_no_users_means_no_access_group(self, mock_dir, mock_smb):
+    def test_no_permissions_means_no_access_group(self, mock_dir, mock_smb):
         with mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True}):
-            smb_shares.create_share("public", users=[], managed_conf_path=self.managed)
+            smb_shares.create_share("public", permissions={}, managed_conf_path=self.managed)
         mock_dir.assert_called_once_with(smb_shares.share_path("public"), None)
 
     @mock.patch("nas_monitor.smb_shares.users_mod.add_user_to_group", return_value={"success": False, "error": "brak takiego uzytkownika"})
     def test_stops_and_reports_error_if_a_user_cannot_be_added(self, mock_add, mock_smb):
-        result = smb_shares.create_share("dane", users=["ghost"], managed_conf_path=self.managed)
+        result = smb_shares.create_share("dane", permissions={"ghost": "rw"}, managed_conf_path=self.managed)
         self.assertFalse(result["success"])
         self.assertIn("ghost", result["error"])
+
+    def test_rejects_invalid_permission_level(self, mock_smb):
+        result = smb_shares.create_share("dane", permissions={"tomek": "admin"}, managed_conf_path=self.managed)
+        self.assertFalse(result["success"])
+        self.assertIn("tomek", result["error"])
 
 
 @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
@@ -240,10 +281,8 @@ class TestLegacyAccessGroupMigration(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.managed = os.path.join(self.tmpdir, "shares.conf")
-        # access_group is "tomek" - NOT "test_access" - simulating the
-        # real legacy state found in production
         content = smb_shares._render_managed_shares(
-            [{"name": "test", "path": "/srv/test", "comment": "", "read_only": False, "access_group": "tomek"}]
+            [{"name": "test", "path": "/srv/test", "comment": "", "access_group": "tomek", "permissions": {}}]
         )
         with open(self.managed, "w") as fh:
             fh.write(content)
@@ -258,9 +297,8 @@ class TestLegacyAccessGroupMigration(unittest.TestCase):
     def test_update_migrates_to_dedicated_group_and_never_touches_foreign_group(
         self, mock_add, mock_remove, mock_dir, mock_apply, mock_smb
     ):
-        result = smb_shares.update_share("test", users=["wieslaw"], managed_conf_path=self.managed)
+        result = smb_shares.update_share("test", permissions={"wieslaw": "rw"}, managed_conf_path=self.managed)
         self.assertTrue(result["success"])
-        # added to the tool's own group, never diffed/removed against "tomek"
         mock_add.assert_called_once_with("wieslaw", "test_access")
         mock_remove.assert_not_called()
         mock_dir.assert_called_once_with("/srv/test", "test_access")
@@ -277,7 +315,7 @@ class TestLegacyAccessGroupMigration(unittest.TestCase):
     @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
     def test_delete_does_groupdel_its_own_dedicated_group(self, mock_apply, mock_run, mock_find, mock_smb):
         content = smb_shares._render_managed_shares(
-            [{"name": "test", "path": "/srv/test", "comment": "", "read_only": False, "access_group": "test_access"}]
+            [{"name": "test", "path": "/srv/test", "comment": "", "access_group": "test_access", "permissions": {}}]
         )
         with open(self.managed, "w") as fh:
             fh.write(content)
@@ -286,15 +324,19 @@ class TestLegacyAccessGroupMigration(unittest.TestCase):
 
 
 @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
-class TestUpdateShareWithUsers(unittest.TestCase):
+class TestUpdateShareWithPermissions(unittest.TestCase):
     def setUp(self):
         self.tmpdir = tempfile.mkdtemp()
         self.managed = os.path.join(self.tmpdir, "shares.conf")
-        content = smb_shares._render_managed_shares(
-            [{"name": "dane", "path": "/srv/dane", "comment": "", "read_only": False, "access_group": "dane_access"}]
-        )
-        with open(self.managed, "w") as fh:
-            fh.write(content)
+        open(self.managed, "a").close()
+        self.existing_share = {
+            "name": "dane",
+            "path": "/srv/dane",
+            "comment": "",
+            "access_group": "dane_access",
+            "permissions": {"tomek": "rw"},
+            "managed": True,
+        }
 
     def tearDown(self):
         shutil.rmtree(self.tmpdir)
@@ -303,11 +345,12 @@ class TestUpdateShareWithUsers(unittest.TestCase):
     @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
     @mock.patch("nas_monitor.smb_shares.users_mod.remove_user_from_group", return_value={"success": True, "error": None})
     @mock.patch("nas_monitor.smb_shares.users_mod.add_user_to_group", return_value={"success": True, "error": None})
-    @mock.patch("nas_monitor.smb_shares._resolve_group_members", return_value=["tomek"])
-    def test_diffs_membership_add_and_remove(self, mock_resolve, mock_add, mock_remove, mock_dir, mock_apply, mock_smb):
-        # currently only "tomek" has access - update to ["tomek", "wacek"]
-        # should add wacek, and NOT touch tomek (already a member)
-        result = smb_shares.update_share("dane", users=["tomek", "wacek"], managed_conf_path=self.managed)
+    @mock.patch("nas_monitor.smb_shares._read_managed_shares")
+    def test_adds_new_member_without_touching_existing_one(self, mock_read, mock_add, mock_remove, mock_dir, mock_apply, mock_smb):
+        mock_read.return_value = [dict(self.existing_share)]
+        result = smb_shares.update_share(
+            "dane", permissions={"tomek": "rw", "wacek": "ro"}, managed_conf_path=self.managed
+        )
         self.assertTrue(result["success"])
         mock_add.assert_called_once_with("wacek", "dane_access")
         mock_remove.assert_not_called()
@@ -316,18 +359,38 @@ class TestUpdateShareWithUsers(unittest.TestCase):
     @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
     @mock.patch("nas_monitor.smb_shares.users_mod.remove_user_from_group", return_value={"success": True, "error": None})
     @mock.patch("nas_monitor.smb_shares.users_mod.add_user_to_group", return_value={"success": True, "error": None})
-    @mock.patch("nas_monitor.smb_shares._resolve_group_members", return_value=["tomek", "wacek"])
-    def test_removing_a_user_from_the_list_revokes_group_membership(self, mock_resolve, mock_add, mock_remove, mock_dir, mock_apply, mock_smb):
-        # currently tomek+wacek have access - update to just ["tomek"]
-        result = smb_shares.update_share("dane", users=["tomek"], managed_conf_path=self.managed)
+    @mock.patch("nas_monitor.smb_shares._read_managed_shares")
+    def test_changing_rw_to_ro_does_not_touch_group_membership(self, mock_read, mock_add, mock_remove, mock_dir, mock_apply, mock_smb):
+        mock_read.return_value = [dict(self.existing_share)]
+        result = smb_shares.update_share("dane", permissions={"tomek": "ro"}, managed_conf_path=self.managed)
         self.assertTrue(result["success"])
-        mock_remove.assert_called_once_with("wacek", "dane_access")
+        mock_add.assert_not_called()
+        mock_remove.assert_not_called()
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares.users_mod.remove_user_from_group", return_value={"success": True, "error": None})
+    @mock.patch("nas_monitor.smb_shares.users_mod.add_user_to_group", return_value={"success": True, "error": None})
+    @mock.patch("nas_monitor.smb_shares._read_managed_shares")
+    def test_removing_a_user_revokes_group_membership(self, mock_read, mock_add, mock_remove, mock_dir, mock_apply, mock_smb):
+        mock_read.return_value = [dict(self.existing_share)]
+        result = smb_shares.update_share("dane", permissions={}, managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        mock_remove.assert_called_once_with("tomek", "dane_access")
         mock_add.assert_not_called()
 
-    def test_rejects_update_on_unknown_share(self, mock_smb):
+    @mock.patch("nas_monitor.smb_shares._read_managed_shares")
+    def test_rejects_update_on_unknown_share(self, mock_read, mock_smb):
+        mock_read.return_value = [dict(self.existing_share)]
         result = smb_shares.update_share("does-not-exist", comment="x", managed_conf_path=self.managed)
         self.assertFalse(result["success"])
         self.assertIn("nie istnieje", result["error"])
+
+    @mock.patch("nas_monitor.smb_shares._read_managed_shares")
+    def test_rejects_invalid_permission_level(self, mock_read, mock_smb):
+        mock_read.return_value = [dict(self.existing_share)]
+        result = smb_shares.update_share("dane", permissions={"tomek": "sudo"}, managed_conf_path=self.managed)
+        self.assertFalse(result["success"])
 
 
 class TestPrepareShareDirectory(unittest.TestCase):

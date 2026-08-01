@@ -103,13 +103,19 @@ def _read_managed_shares(managed_conf_path: str = MANAGED_CONF_PATH) -> list[dic
         valid_users = section.get("valid users", "").split()
         raw_groups = [u[1:] for u in valid_users if u.startswith("@")]
         resolved_users = _resolve_group_members(raw_groups)
+
+        read_list_raw = section.get("read list", "").split()
+        read_only_users = set(u for u in read_list_raw if not u.startswith("@"))
+        read_only_users |= set(_resolve_group_members([g[1:] for g in read_list_raw if g.startswith("@")]))
+
+        permissions = {u: ("ro" if u in read_only_users else "rw") for u in resolved_users}
+
         shares.append(
             {
                 "name": name,
                 "path": section.get("path", ""),
                 "comment": section.get("comment", ""),
-                "read_only": section.get("read only", "no").strip().lower() in ("yes", "true", "1"),
-                "users": resolved_users,
+                "permissions": permissions,
                 "access_group": raw_groups[0] if raw_groups else None,
                 "managed": True,
             }
@@ -140,9 +146,13 @@ def _render_managed_shares(shares: list[dict[str, Any]]) -> str:
         lines.append(f"   path = {s['path']}")
         if s.get("comment"):
             lines.append(f"   comment = {s['comment']}")
-        lines.append(f"   read only = {'yes' if s.get('read_only') else 'no'}")
+        # Always writable at the share level - per-user restriction to
+        # read-only happens via "read list" below, which lets RW and RO
+        # users coexist on the same share (OMV-style per-user access).
+        lines.append("   read only = no")
         lines.append("   browseable = yes")
         access_group = s.get("access_group")
+        permissions = s.get("permissions") or {}
         if access_group:
             lines.append(f"   valid users = @{access_group}")
             # force group makes newly created files belong to this group
@@ -150,6 +160,9 @@ def _render_managed_shares(shares: list[dict[str, Any]]) -> str:
             # groups the client happened to negotiate - more reliable than
             # depending on group inheritance alone.
             lines.append(f"   force group = @{access_group}")
+        read_only_users = sorted(u for u, level in permissions.items() if level == "ro")
+        if read_only_users:
+            lines.append(f"   read list = {' '.join(read_only_users)}")
         lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -299,13 +312,30 @@ def list_shares(
         plain_users = [u for u in valid_users if not u.startswith("@")]
         group_refs = [u[1:] for u in valid_users if u.startswith("@")]
         resolved = sorted(set(plain_users) | set(_resolve_group_members(group_refs)))
+
+        share_read_only = section.get("read only", "yes").strip().lower() in ("yes", "true", "1")
+        read_list_raw = section.get("read list", "").split()
+        explicit_ro = set(u for u in read_list_raw if not u.startswith("@"))
+        explicit_ro |= set(_resolve_group_members([g[1:] for g in read_list_raw if g.startswith("@")]))
+        write_list_raw = section.get("write list", "").split()
+        explicit_rw = set(u for u in write_list_raw if not u.startswith("@"))
+        explicit_rw |= set(_resolve_group_members([g[1:] for g in write_list_raw if g.startswith("@")]))
+
+        permissions = {}
+        for u in resolved:
+            if u in explicit_ro:
+                permissions[u] = "ro"
+            elif u in explicit_rw:
+                permissions[u] = "rw"
+            else:
+                permissions[u] = "ro" if share_read_only else "rw"
+
         others.append(
             {
                 "name": name,
                 "path": section.get("path", ""),
                 "comment": section.get("comment", ""),
-                "read_only": section.get("read only", "yes").strip().lower() in ("yes", "true", "1"),
-                "users": resolved,
+                "permissions": permissions,
                 "access_group": None,
                 "managed": False,
             }
@@ -356,10 +386,12 @@ def _prepare_share_directory(path: str, group: str | None) -> dict[str, Any]:
 def create_share(
     name: str,
     comment: str = "",
-    users: list[str] | None = None,
-    read_only: bool = False,
+    permissions: dict[str, str] | None = None,
     managed_conf_path: str = MANAGED_CONF_PATH,
 ) -> dict[str, Any]:
+    """permissions maps username -> "rw" or "ro". A user not present in
+    the dict has no access at all (not added to the share's access group,
+    so Samba's own valid users check blocks them - not just a UI hide)."""
     result: dict[str, Any] = {"name": name, "success": False, "error": None}
 
     if not is_valid_share_name(name):
@@ -374,11 +406,16 @@ def create_share(
         result["error"] = f"Udział '{name}' już istnieje"
         return result
 
-    users = users or []
-    group = access_group_name(name) if users else None
+    permissions = dict(permissions or {})
+    for u, level in permissions.items():
+        if level not in ("rw", "ro"):
+            result["error"] = f"Nieprawidłowy poziom dostępu dla '{u}': {level!r} (oczekiwano 'rw' lub 'ro')"
+            return result
+
+    group = access_group_name(name) if permissions else None
 
     if group:
-        for u in users:
+        for u in permissions:
             add_result = users_mod.add_user_to_group(u, group)
             if not add_result["success"]:
                 result["error"] = f"Nie udało się dodać '{u}' do grupy dostępu: {add_result['error']}"
@@ -394,7 +431,7 @@ def create_share(
         "name": name,
         "path": path,
         "comment": comment,
-        "read_only": read_only,
+        "permissions": permissions,
         "access_group": group,
     }
     new_content = _render_managed_shares(existing + [new_share])
@@ -405,8 +442,8 @@ def create_share(
 
     result["success"] = True
     result["path"] = path
-    result["users"] = users
-    warnings = [w for w in [apply_result.get("warning"), _missing_smb_password_warning(users)] if w]
+    result["permissions"] = permissions
+    warnings = [w for w in [apply_result.get("warning"), _missing_smb_password_warning(list(permissions))] if w]
     if warnings:
         result["warning"] = " ".join(warnings)
     return result
@@ -415,8 +452,7 @@ def create_share(
 def update_share(
     name: str,
     comment: str | None = None,
-    users: list[str] | None = None,
-    read_only: bool | None = None,
+    permissions: dict[str, str] | None = None,
     managed_conf_path: str = MANAGED_CONF_PATH,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {"name": name, "success": False, "error": None}
@@ -429,10 +465,13 @@ def update_share(
 
     if comment is not None:
         match["comment"] = comment
-    if read_only is not None:
-        match["read_only"] = read_only
 
-    if users is not None:
+    if permissions is not None:
+        for u, level in permissions.items():
+            if level not in ("rw", "ro"):
+                result["error"] = f"Nieprawidłowy poziom dostępu dla '{u}': {level!r} (oczekiwano 'rw' lub 'ro')"
+                return result
+
         dedicated_group = access_group_name(name)
         existing_group = match.get("access_group")
         if existing_group and existing_group != dedicated_group:
@@ -444,9 +483,9 @@ def update_share(
             # group, without touching the old group's membership at all.
             current_users = set()
         else:
-            current_users = set(_resolve_group_members([dedicated_group]))
+            current_users = set(match.get("permissions") or {})
         group = dedicated_group
-        desired_users = set(users)
+        desired_users = set(permissions)
 
         for u in desired_users - current_users:
             add_result = users_mod.add_user_to_group(u, group)
@@ -460,6 +499,7 @@ def update_share(
                 return result
 
         match["access_group"] = group if desired_users else None
+        match["permissions"] = permissions
         if desired_users:
             dir_result = _prepare_share_directory(match["path"], group)
             if not dir_result["success"]:
@@ -473,7 +513,7 @@ def update_share(
         return result
 
     result["success"] = True
-    warnings = [w for w in [apply_result.get("warning"), _missing_smb_password_warning(users or [])] if w]
+    warnings = [w for w in [apply_result.get("warning"), _missing_smb_password_warning(list(permissions or {}))] if w]
     if warnings:
         result["warning"] = " ".join(warnings)
     return result

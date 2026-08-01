@@ -151,10 +151,13 @@ def api_shares_create():
     data = request.get_json(force=True, silent=True) or {}
     name = (data.get("name") or "").strip().lower()
     comment = (data.get("comment") or "").strip()
-    users_list = [u.strip() for u in (data.get("users") or []) if u.strip()]
-    read_only = bool(data.get("read_only", False))
+    permissions = {
+        u.strip(): level
+        for u, level in (data.get("permissions") or {}).items()
+        if u.strip() and level in ("rw", "ro")
+    }
 
-    result = smb_shares.create_share(name, comment=comment, users=users_list, read_only=read_only)
+    result = smb_shares.create_share(name, comment=comment, permissions=permissions)
     if not result["success"]:
         return jsonify({"success": False, "error": result["error"]}), 400
     return jsonify({"success": True, "share": result})
@@ -164,16 +167,17 @@ def api_shares_create():
 def api_shares_update(name):
     data = request.get_json(force=True, silent=True) or {}
     comment = data.get("comment")
-    users_list = data.get("users")
-    if users_list is not None:
-        users_list = [u.strip() for u in users_list if u.strip()]
-    read_only = data.get("read_only")
+    raw_permissions = data.get("permissions")
+    permissions = None
+    if raw_permissions is not None:
+        permissions = {
+            u.strip(): level for u, level in raw_permissions.items() if u.strip() and level in ("rw", "ro")
+        }
 
     result = smb_shares.update_share(
         name,
         comment=comment,
-        users=users_list,
-        read_only=bool(read_only) if read_only is not None else None,
+        permissions=permissions,
     )
     if not result["success"]:
         return jsonify({"success": False, "error": result["error"]}), 400

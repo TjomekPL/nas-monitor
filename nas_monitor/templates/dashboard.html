@@ -5,16 +5,28 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>NAS monitor</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script>
+    // Runs before first paint so there's no flash of the wrong theme.
+    (function () {
+      var saved = localStorage.getItem("nas-monitor-theme");
+      if (saved === "light" || saved === "dark") {
+        document.documentElement.setAttribute("data-theme", saved);
+      }
+    })();
+  </script>
 </head>
 <body>
   <header class="top">
     <div>
       <h1>NAS monitor</h1>
-      <p class="subtitle">Tylko odczyt &mdash; stan dysków i macierzy RAID</p>
+      <p class="subtitle">Monitoring, użytkownicy i udziały Samby</p>
     </div>
-    <div class="refresh-info">
-      <span id="last-updated">&ndash;</span>
-      <span class="dot" id="conn-dot" title="Status połączenia"></span>
+    <div class="header-right">
+      <div class="refresh-info">
+        <span id="last-updated">&ndash;</span>
+        <span class="dot" id="conn-dot" title="Status połączenia"></span>
+      </div>
+      <button type="button" class="theme-toggle" id="theme-toggle" title="Przełącz jasny/ciemny" aria-label="Przełącz motyw"></button>
     </div>
   </header>
 
@@ -61,14 +73,9 @@
       </label>
 
       <fieldset>
-        <legend>Kto ma dostęp</legend>
-        <div id="share-users-checklist" class="groups-checklist"></div>
+        <legend>Dostęp</legend>
+        <div id="share-permissions-list" class="permissions-list"></div>
       </fieldset>
-
-      <label class="checkbox-row">
-        <input type="checkbox" id="share-read-only">
-        Tylko do odczytu
-      </label>
 
       <p class="form-error" id="share-error"></p>
 
@@ -176,8 +183,7 @@
         <div class="mono username sub path"></div>
       </td>
       <td class="comment"></td>
-      <td class="mode-cell"><span class="pill"></span></td>
-      <td class="share-users mono"></td>
+      <td class="share-users"></td>
       <td class="row-actions">
         <button type="button" class="link-btn edit-btn">Edytuj</button>
         <button type="button" class="link-btn danger delete-btn">Usuń</button>

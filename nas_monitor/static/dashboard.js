@@ -390,15 +390,27 @@ const addShareBtn = document.getElementById("add-share-btn");
 const shareCancel = document.getElementById("share-cancel");
 const shareError = document.getElementById("share-error");
 const shareDialogTitle = document.getElementById("share-dialog-title");
-const shareNameLabel = document.getElementById("share-name-label");
 const shareNameInput = document.getElementById("share-name");
 const sharePathPreview = document.getElementById("share-path-preview");
 const shareCommentInput = document.getElementById("share-comment");
-const shareUsersChecklist = document.getElementById("share-users-checklist");
-const shareReadOnlyInput = document.getElementById("share-read-only");
+const sharePermissionsList = document.getElementById("share-permissions-list");
 const shareSubmitBtn = document.getElementById("share-submit");
 
+const PERMISSION_LABELS = { none: "Brak dostępu", ro: "Tylko odczyt", rw: "Odczyt i zapis" };
+
 let editingShareName = null;
+
+function formatPermissionsSummary(permissions) {
+  const entries = Object.entries(permissions || {});
+  if (!entries.length) return "\u2013 (nikt nie ma dostępu)";
+  return entries
+    .map(([user, level]) => {
+      const u = lastKnownUsersData.find((x) => x.username === user);
+      const label = u ? (u.display_name || u.username) : user;
+      return `${label} (${level === "rw" ? "RW" : "R"})`;
+    })
+    .join(", ");
+}
 
 function renderShares(sharesList) {
   sharesContainer.innerHTML = "";
@@ -407,19 +419,14 @@ function renderShares(sharesList) {
     return;
   }
   const table = document.createElement("table");
-  table.innerHTML = "<thead><tr><th>Udział</th><th>Komentarz</th><th>Tryb</th><th>Dostęp</th><th></th></tr></thead>";
+  table.innerHTML = "<thead><tr><th>Udział</th><th>Komentarz</th><th>Dostęp</th><th></th></tr></thead>";
   const tbody = document.createElement("tbody");
   for (const sh of sharesList) {
     const row = shareRowTemplate.content.cloneNode(true);
     row.querySelector(".display-name").textContent = sh.name + (sh.managed ? "" : " (spoza tego narzędzia)");
     row.querySelector(".path").textContent = sh.path;
     row.querySelector(".comment").textContent = sh.comment || "\u2013";
-
-    const pill = row.querySelector(".mode-cell .pill");
-    pill.textContent = sh.read_only ? "odczyt" : "odczyt/zapis";
-    pill.classList.add(sh.read_only ? "pill-neutral" : "pill-ok");
-
-    row.querySelector(".share-users").textContent = sh.users && sh.users.length ? sh.users.join(", ") : "\u2013 (bez ograniczeń)";
+    row.querySelector(".share-users").textContent = formatPermissionsSummary(sh.permissions);
 
     const editBtn = row.querySelector(".edit-btn");
     const deleteBtn = row.querySelector(".delete-btn");
@@ -439,36 +446,57 @@ function renderShares(sharesList) {
   sharesContainer.appendChild(table);
 }
 
-function populateShareUsersChecklist(selectedUsers) {
-  const selected = new Set(selectedUsers || []);
-  shareUsersChecklist.innerHTML = "";
+function populateSharePermissionsList(existingPermissions) {
+  const current = existingPermissions || {};
+  sharePermissionsList.innerHTML = "";
   if (!lastKnownUsersData.length) {
     const p = document.createElement("p");
     p.className = "empty-state";
     p.textContent = "Brak wykrytych użytkowników - dodaj ich najpierw w sekcji Użytkownicy.";
-    shareUsersChecklist.appendChild(p);
+    sharePermissionsList.appendChild(p);
     return;
   }
   for (const u of lastKnownUsersData) {
-    const label = document.createElement("label");
-    label.className = "inline";
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.value = u.username;
-    cb.name = "share-user";
-    cb.checked = selected.has(u.username);
-    label.appendChild(cb);
-    const name = u.display_name || u.username;
-    label.append(u.has_smb ? ` ${name}` : ` ${name} `);
+    const row = document.createElement("div");
+    row.className = "permission-row";
+
+    const name = document.createElement("span");
+    name.className = "permission-user";
+    name.textContent = u.display_name || u.username;
+    row.appendChild(name);
+
     if (!u.has_smb) {
       const warn = document.createElement("span");
       warn.className = "field-hint";
       warn.style.color = "var(--warn)";
-      warn.textContent = "(brak hasła SMB - nie zaloguje się)";
-      label.appendChild(warn);
+      warn.textContent = "(brak hasła SMB)";
+      row.appendChild(warn);
     }
-    shareUsersChecklist.appendChild(label);
+
+    const select = document.createElement("select");
+    select.dataset.username = u.username;
+    select.className = "permission-select";
+    for (const [value, label] of Object.entries(PERMISSION_LABELS)) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      select.appendChild(opt);
+    }
+    select.value = current[u.username] || "none";
+    row.appendChild(select);
+
+    sharePermissionsList.appendChild(row);
   }
+}
+
+function collectSharePermissions() {
+  const permissions = {};
+  sharePermissionsList.querySelectorAll(".permission-select").forEach((select) => {
+    if (select.value !== "none") {
+      permissions[select.dataset.username] = select.value;
+    }
+  });
+  return permissions;
 }
 
 async function loadShares() {
@@ -492,7 +520,7 @@ shareNameInput.addEventListener("input", updateSharePathPreview);
 function openShareDialog(mode, share) {
   shareForm.reset();
   shareError.textContent = "";
-  populateShareUsersChecklist(mode === "edit" ? share.users : undefined);
+  populateSharePermissionsList(mode === "edit" ? share.permissions : undefined);
 
   if (mode === "edit") {
     editingShareName = share.name;
@@ -501,7 +529,6 @@ function openShareDialog(mode, share) {
     shareNameInput.disabled = true; // renaming not supported - delete + recreate instead
     sharePathPreview.textContent = `ścieżka: ${share.path} (nie do zmiany tutaj)`;
     shareCommentInput.value = share.comment || "";
-    shareReadOnlyInput.checked = !!share.read_only;
     shareSubmitBtn.textContent = "Zapisz zmiany";
   } else {
     editingShareName = null;
@@ -522,19 +549,19 @@ shareForm.addEventListener("submit", async (ev) => {
   shareError.textContent = "";
 
   const comment = shareCommentInput.value.trim();
-  const users = Array.from(shareUsersChecklist.querySelectorAll("input[name='share-user']:checked")).map((cb) => cb.value);
-  const readOnly = shareReadOnlyInput.checked;
+  const permissions = collectSharePermissions();
 
   let url, body, confirmMsg;
+  const summary = formatPermissionsSummary(permissions);
   if (editingShareName) {
-    confirmMsg = `Zapisać zmiany dla udziału "${editingShareName}"?`;
+    confirmMsg = `Zapisać zmiany dla udziału "${editingShareName}"?\n\nDostęp: ${summary}`;
     url = `/api/shares/${encodeURIComponent(editingShareName)}/update`;
-    body = { comment, users, read_only: readOnly };
+    body = { comment, permissions };
   } else {
     const name = shareNameInput.value.trim().toLowerCase();
-    confirmMsg = `Utworzyć udział "${name}" pod /srv/${name}?`;
+    confirmMsg = `Utworzyć udział "${name}" pod /srv/${name}?\n\nDostęp: ${summary}`;
     url = "/api/shares/create";
-    body = { name, comment, users, read_only: readOnly };
+    body = { name, comment, permissions };
   }
   if (!window.confirm(confirmMsg)) return;
 
