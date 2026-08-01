@@ -15,51 +15,17 @@ from __future__ import annotations
 
 import json
 import re
-import os
-import shutil
-import subprocess
-from dataclasses import dataclass, field
 from typing import Any
 
+from nas_monitor import system_tools
 
-SUBPROCESS_TIMEOUT = 8  # seconds - smartctl can be slow to wake spun-down disks
 
-# Fallback search dirs used when a binary isn't on PATH - this matters a lot
-# under systemd, where a unit's PATH= directive is easy to accidentally set
-# to something that doesn't include /usr/sbin etc. (see nas-monitor.service).
-_COMMON_BIN_DIRS = ("/usr/sbin", "/sbin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/local/bin")
+def _run(cmd: list[str]) -> tuple[int, str, str]:
+    return system_tools.run(cmd)
 
 
 def _find_binary(name: str) -> str | None:
-    """Resolve a binary to an absolute path, independent of the current
-    process's PATH. Tries shutil.which() first (respects PATH when it's
-    sane), then falls back to the common system directories."""
-    found = shutil.which(name)
-    if found:
-        return found
-    for directory in _COMMON_BIN_DIRS:
-        candidate = os.path.join(directory, name)
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-    return None
-
-
-def _run(cmd: list[str], timeout: int = SUBPROCESS_TIMEOUT) -> tuple[int, str, str]:
-    """Run a command, never raise. Returns (returncode, stdout, stderr)."""
-    try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        return proc.returncode, proc.stdout, proc.stderr
-    except FileNotFoundError:
-        return 127, "", f"{cmd[0]}: not installed"
-    except subprocess.TimeoutExpired:
-        return 124, "", f"{cmd[0]}: timed out after {timeout}s"
-    except Exception as exc:  # pragma: no cover - defensive catch-all
-        return 1, "", str(exc)
+    return system_tools.find_binary(name)
 
 
 def _human_size(num_bytes: int) -> str:

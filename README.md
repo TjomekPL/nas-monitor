@@ -12,16 +12,17 @@ się do kontenera bez takiego dostępu.
 ## Wymagania systemowe
 
 ```bash
-sudo apt install smartmontools mdadm python3-venv
+sudo apt install smartmontools mdadm samba python3-venv
 ```
 
-(`mdadm` jest potrzebny tylko do sekcji RAID — jeśli hosta nie ma żadnej
-macierzy, ta sekcja po prostu pokaże "brak wykrytych macierzy".)
+(`mdadm` jest potrzebny tylko do sekcji RAID - jeśli hosta nie ma żadnej
+macierzy, ta sekcja po prostu pokaże "brak wykrytych macierzy". `samba`
+daje `smbpasswd`/`pdbedit`, potrzebne do zarządzania użytkownikami SMB.)
 
 ## Instalacja (jedna komenda)
 
 ```bash
-git clone https://github.com/TjomekPL/nas-monitor.git
+git clone https://github.com/<konto>/nas-monitor.git
 cd nas-monitor
 sudo ./install.sh
 ```
@@ -66,34 +67,54 @@ ma testy jednostkowe działające na przykładowych danych — nie wymagają
 prawdziwego sprzętu ani zainstalowanego `smartctl`/`mdadm`:
 
 ```bash
-python3 -m unittest tests.test_monitor -v
+python3 -m unittest discover -s tests -v
 ```
 
-## Struktura projektu
+## Struktura projektu i architektura
+
+Projekt jest pomyślany jako narzędzie uniwersalne (nie tylko SMB) - dlatego
+kod jest podzielony na warstwę rdzenia (protokół-agnostyczną) i warstwy
+protokołów, żeby dodanie kolejnego (np. NFS) kiedyś było "dopisz nowy plik",
+a nie przepisywanie wszystkiego:
 
 ```
 nas_monitor/
-  app.py            - Flask app (routes: / oraz /api/status)
-  monitor.py         - cała logika: lsblk, smartctl, mdadm (czysty odczyt)
+  system_tools.py   - wspólne: bezpieczne odpalanie poleceń, szukanie binarek
+  monitor.py         - rdzeń: dyski, SMART, RAID (czysty odczyt)
+  users.py           - rdzeń: użytkownicy i grupy systemowe (wykrywanie + tworzenie)
+  smb.py             - backend SMB: hasła Samby, dowiązanie do kont systemowych
+  app.py              - Flask app, wszystkie trasy
   templates/
     dashboard.html
   static/
     style.css
-    dashboard.js      - odpytuje /api/status co 20s, bez frameworków
+    dashboard.js      - odpytuje /api/status i /api/users co 20s, bez frameworków
 tests/
-  test_monitor.py     - testy parsowania na przykładowych danych
-nas-monitor.service   - jednostka systemd (uruchamia przez gunicorn)
+  test_monitor.py     - testy dysków/SMART/RAID na przykładowych danych
+  test_users.py        - testy kont/grup systemowych
+  test_smb.py           - testy warstwy SMB
+nas-monitor.service      - jednostka systemd (uruchamia przez gunicorn)
 ```
 
-## Plan / kolejne fazy (jeszcze nie zaimplementowane)
+**Ważne rozróżnienie w `users.py`/`smb.py`**: konto systemowe (Linux, z
+własnym shellem) i dostęp SMB (osobne hasło przez `smbpasswd`) to dwie
+różne rzeczy, nawet dla tego samego użytkownika. Nowe konta domyślnie
+dostają `nologin` (nie mogą się zalogować do systemu/SSH) - dostęp SMB jest
+całkowicie niezależny od tego. Jeśli kiedyś dojdzie NFS, nie miałby w ogóle
+pojęcia "hasło użytkownika" (NFS klasycznie działa przez UID/GID i adres
+klienta), więc ta separacja jest zamierzona.
 
-To narzędzie ma docelowo być uniwersalnym web UI do zarządzania
-Debian + Samba, nie tylko monitoringiem. Ustalona kolejność:
+## Plan / kolejne fazy
 
-1. **Monitoring dysków i RAID (odczyt)** — ✅ ta wersja.
-2. **Zarządzanie Samba** — udziały, użytkownicy, edycja `smb.conf` +
-   walidacja `testparm` przed reloadem.
-3. **Zarządzanie RAID** — tworzenie/rozbudowa/usuwanie macierzy. Ustalono:
+1. **Monitoring dysków i RAID (odczyt)** - ✅ zrobione.
+2. **Użytkownicy i grupy (wykrywanie + tworzenie)** - ✅ zrobione. Wykrywanie
+   czyta rzeczywisty stan systemu (`pwd`/`grp`/`pdbedit -L`), nie osobną
+   bazę. Tworzenie: jeden formularz zakłada konto systemowe (domyślnie
+   `nologin`) + hasło SMB + przypisanie do grup (nowe grupy tworzone
+   automatycznie, jeśli nie istnieją).
+3. **Udziały Samby** - jeszcze nie zaimplementowane: tworzenie/edycja
+   `smb.conf`, przypisywanie użytkowników/grup do konkretnych udziałów.
+4. **Zarządzanie RAID** - tworzenie/rozbudowa/usuwanie macierzy. Ustalono:
    operacje mają wykonywać się automatycznie po potwierdzeniu w UI (nie
    tylko generować komendę do ręcznego wklejenia). Wymaga dodatkowych
    zabezpieczeń przed budową: weryfikacja że dysk jest pusty/niezamontowany,

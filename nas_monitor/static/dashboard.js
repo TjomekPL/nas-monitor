@@ -99,3 +99,131 @@ async function refresh() {
 
 refresh();
 setInterval(refresh, REFRESH_MS);
+
+// --------------------------------------------------------------------
+// Users
+// --------------------------------------------------------------------
+
+const usersContainer = document.getElementById("users-container");
+const userRowTemplate = document.getElementById("user-row-template");
+const addUserDialog = document.getElementById("add-user-dialog");
+const addUserForm = document.getElementById("add-user-form");
+const addUserBtn = document.getElementById("add-user-btn");
+const addUserCancel = document.getElementById("add-user-cancel");
+const addUserError = document.getElementById("add-user-error");
+const groupsChecklist = document.getElementById("groups-checklist");
+
+let knownGroups = [];
+
+function renderUsers(usersList) {
+  usersContainer.innerHTML = "";
+  if (!usersList.length) {
+    emptyState(usersContainer, "Nie wykryto żadnych kont użytkowników.");
+    return;
+  }
+  const table = document.createElement("table");
+  table.innerHTML = "<thead><tr><th>Użytkownik</th><th>Logowanie/SSH</th><th>Dostęp SMB</th><th>Grupy</th></tr></thead>";
+  const tbody = document.createElement("tbody");
+  for (const u of usersList) {
+    const row = userRowTemplate.content.cloneNode(true);
+    row.querySelector(".username").textContent = u.username;
+
+    const loginPill = row.querySelector(".login-cell .pill");
+    loginPill.textContent = u.can_login ? "tak" : "nie";
+    loginPill.classList.add(u.can_login ? "pill-warn" : "pill-ok");
+
+    const smbPill = row.querySelector(".smb-cell .pill");
+    smbPill.textContent = u.has_smb ? "tak" : "nie";
+    smbPill.classList.add(u.has_smb ? "pill-ok" : "pill-neutral");
+
+    row.querySelector(".groups").textContent = u.groups && u.groups.length ? u.groups.join(", ") : "\u2013";
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+  usersContainer.appendChild(table);
+}
+
+function renderGroupsChecklist(groups) {
+  knownGroups = groups;
+  groupsChecklist.innerHTML = "";
+  if (!groups.length) {
+    const p = document.createElement("p");
+    p.className = "empty-state";
+    p.textContent = "Brak wykrytych grup - możesz utworzyć nową poniżej.";
+    groupsChecklist.appendChild(p);
+    return;
+  }
+  for (const g of groups) {
+    const label = document.createElement("label");
+    label.className = "inline";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = g.name;
+    cb.name = "group";
+    label.appendChild(cb);
+    label.append(` ${g.name}`);
+    groupsChecklist.appendChild(label);
+  }
+}
+
+async function loadUsers() {
+  try {
+    const res = await fetch("/api/users");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderUsers(data.users || []);
+    renderGroupsChecklist(data.groups || []);
+  } catch (err) {
+    emptyState(usersContainer, `Błąd wczytywania użytkowników (${err.message})`);
+  }
+}
+
+addUserBtn.addEventListener("click", () => {
+  addUserForm.reset();
+  addUserError.textContent = "";
+  addUserDialog.showModal();
+});
+
+addUserCancel.addEventListener("click", () => addUserDialog.close());
+
+addUserForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  addUserError.textContent = "";
+
+  const username = document.getElementById("new-username").value.trim();
+  const password = document.getElementById("new-password").value;
+  const allowLogin = document.getElementById("new-allow-login").checked;
+  const newGroupName = document.getElementById("new-group-name").value.trim();
+
+  const groups = Array.from(groupsChecklist.querySelectorAll("input[name='group']:checked")).map((cb) => cb.value);
+  if (newGroupName) groups.push(newGroupName);
+
+  const confirmMsg = allowLogin
+    ? `Utworzyć użytkownika "${username}" z możliwością logowania/SSH?`
+    : `Utworzyć użytkownika "${username}" bez możliwości logowania (tylko SMB)?`;
+  if (!window.confirm(confirmMsg)) return;
+
+  const submitBtn = document.getElementById("add-user-submit");
+  submitBtn.disabled = true;
+  try {
+    const res = await fetch("/api/users/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ username, password, groups, allow_login: allowLogin }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      addUserError.textContent = data.error || `Błąd HTTP ${res.status}`;
+      return;
+    }
+    addUserDialog.close();
+    await loadUsers();
+  } catch (err) {
+    addUserError.textContent = `Błąd połączenia: ${err.message}`;
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+loadUsers();
+setInterval(loadUsers, REFRESH_MS);

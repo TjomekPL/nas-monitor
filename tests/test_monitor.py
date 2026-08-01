@@ -126,7 +126,7 @@ class TestClassifyHealth(unittest.TestCase):
 
 
 class TestGetSmartHealth(unittest.TestCase):
-    @mock.patch("nas_monitor.monitor.shutil.which", return_value="/usr/sbin/smartctl")
+    @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/usr/sbin/smartctl")
     @mock.patch("nas_monitor.monitor._run")
     def test_parses_ata_disk(self, mock_run, mock_which):
         mock_run.return_value = (0, json.dumps(SAMPLE_SMART_ATA_HEALTHY), "")
@@ -137,14 +137,14 @@ class TestGetSmartHealth(unittest.TestCase):
         self.assertEqual(result["power_on_hours"], 12000)
         self.assertEqual(monitor.classify_health(result), "ok")
 
-    @mock.patch("nas_monitor.monitor.shutil.which", return_value="/usr/sbin/smartctl")
+    @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/usr/sbin/smartctl")
     @mock.patch("nas_monitor.monitor._run")
     def test_parses_failing_ata_disk(self, mock_run, mock_which):
         mock_run.return_value = (0, json.dumps(SAMPLE_SMART_ATA_FAILING), "")
         result = monitor.get_smart_health("/dev/sda")
         self.assertEqual(monitor.classify_health(result), "critical")  # pending sectors
 
-    @mock.patch("nas_monitor.monitor.shutil.which", return_value="/usr/sbin/smartctl")
+    @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/usr/sbin/smartctl")
     @mock.patch("nas_monitor.monitor._run")
     def test_parses_nvme_disk(self, mock_run, mock_which):
         mock_run.return_value = (0, json.dumps(SAMPLE_SMART_NVME), "")
@@ -159,7 +159,7 @@ class TestGetSmartHealth(unittest.TestCase):
         self.assertFalse(result["available"])
         self.assertIn("not installed", result["error"])
 
-    @mock.patch("nas_monitor.monitor.shutil.which", return_value="/usr/sbin/smartctl")
+    @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/usr/sbin/smartctl")
     @mock.patch("nas_monitor.monitor._run")
     def test_garbage_output_does_not_crash(self, mock_run, mock_which):
         mock_run.return_value = (0, "not json at all", "")
@@ -197,7 +197,7 @@ class TestMdstatParsing(unittest.TestCase):
 
 
 class TestGetRaidArrays(unittest.TestCase):
-    @mock.patch("nas_monitor.monitor.shutil.which", return_value="/sbin/mdadm")
+    @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/sbin/mdadm")
     @mock.patch("nas_monitor.monitor._run")
     @mock.patch("nas_monitor.monitor._parse_mdstat")
     def test_healthy_array_end_to_end(self, mock_mdstat, mock_run, mock_which):
@@ -237,6 +237,27 @@ class TestGetRaidArrays(unittest.TestCase):
     @mock.patch("nas_monitor.monitor._parse_mdstat", return_value={})
     def test_no_arrays_present(self, mock_mdstat):
         self.assertEqual(monitor.get_raid_arrays(), [])
+
+
+class TestFindBinary(unittest.TestCase):
+    @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/usr/bin/lsblk")
+    def test_uses_which_when_path_is_sane(self, mock_which):
+        self.assertEqual(monitor._find_binary("lsblk"), "/usr/bin/lsblk")
+
+    def test_falls_back_when_path_is_restricted(self):
+        # Simulates the actual bug: systemd's PATH= only contains the venv
+        # dir, so shutil.which() (which only searches PATH) finds nothing -
+        # but the binary is still on disk at its usual location.
+        with mock.patch("nas_monitor.system_tools.shutil.which", return_value=None), \
+             mock.patch("nas_monitor.system_tools.os.path.isfile") as mock_isfile, \
+             mock.patch("nas_monitor.system_tools.os.access", return_value=True):
+            mock_isfile.side_effect = lambda p: p == "/usr/sbin/smartctl"
+            self.assertEqual(monitor._find_binary("smartctl"), "/usr/sbin/smartctl")
+
+    def test_returns_none_when_truly_not_installed(self):
+        with mock.patch("nas_monitor.system_tools.shutil.which", return_value=None), \
+             mock.patch("nas_monitor.system_tools.os.path.isfile", return_value=False):
+            self.assertIsNone(monitor._find_binary("nope-does-not-exist"))
 
 
 if __name__ == "__main__":

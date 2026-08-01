@@ -28,7 +28,53 @@
       <h2>Dyski</h2>
       <div id="disks-container" class="cards"></div>
     </section>
+
+    <section>
+      <div class="section-head">
+        <h2>Użytkownicy</h2>
+        <button id="add-user-btn" class="btn-primary" type="button">+ Dodaj użytkownika</button>
+      </div>
+      <div id="users-container" class="user-table"></div>
+    </section>
   </main>
+
+  <dialog id="add-user-dialog">
+    <form id="add-user-form" method="dialog">
+      <h3>Nowy użytkownik</h3>
+
+      <label>
+        Nazwa użytkownika
+        <input type="text" id="new-username" pattern="[a-z_][a-z0-9_-]{0,31}" required
+               placeholder="np. share1" autocomplete="off">
+      </label>
+
+      <label>
+        Hasło SMB
+        <input type="password" id="new-password" required autocomplete="new-password">
+      </label>
+
+      <fieldset>
+        <legend>Grupy</legend>
+        <div id="groups-checklist" class="groups-checklist"></div>
+        <label class="inline">
+          <input type="text" id="new-group-name" placeholder="nowa grupa (opcjonalnie)"
+                 pattern="[a-z_][a-z0-9_-]{0,31}" autocomplete="off">
+        </label>
+      </fieldset>
+
+      <label class="checkbox-row">
+        <input type="checkbox" id="new-allow-login">
+        Zezwól na logowanie do systemu / SSH (zwykle NIE dla kont udostępniania)
+      </label>
+
+      <p class="form-error" id="add-user-error"></p>
+
+      <div class="dialog-actions">
+        <button type="button" id="add-user-cancel">Anuluj</button>
+        <button type="submit" id="add-user-submit" class="btn-primary">Utwórz</button>
+      </div>
+    </form>
+  </dialog>
 
   <template id="raid-card-template">
     <article class="card">
@@ -62,6 +108,15 @@
       </dl>
       <p class="error"></p>
     </article>
+  </template>
+
+  <template id="user-row-template">
+    <tr>
+      <td class="mono username"></td>
+      <td class="login-cell"><span class="pill"></span></td>
+      <td class="smb-cell"><span class="pill"></span></td>
+      <td class="groups mono"></td>
+    </tr>
   </template>
 
   <script src="{{ url_for('static', filename='dashboard.js') }}"></script>

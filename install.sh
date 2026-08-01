@@ -10,9 +10,9 @@ fi
 
 APP_DIR="/opt/nas-monitor"
 
-echo "==> Instalowanie pakietów systemowych (smartmontools, mdadm, python3-venv)..."
+echo "==> Instalowanie pakietów systemowych (smartmontools, mdadm, samba, python3-venv)..."
 apt-get update -qq
-apt-get install -y smartmontools mdadm python3-venv
+apt-get install -y smartmontools mdadm samba python3-venv
 
 echo "==> Kopiowanie plików do ${APP_DIR}..."
 mkdir -p "${APP_DIR}"
