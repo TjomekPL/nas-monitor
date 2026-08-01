@@ -1,5 +1,8 @@
 import os
 import sys
+import shlex
+import tempfile
+import shutil
 import unittest
 from unittest import mock
 
@@ -73,6 +76,18 @@ class TestGenerateKey(unittest.TestCase):
 
 
 class TestDeployKeyToRemote(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        os.makedirs(os.path.join(self.tmpdir, ".ssh"), exist_ok=True)
+        with open(os.path.join(self.tmpdir, ".ssh", "id_ed25519.pub"), "w") as fh:
+            fh.write("ssh-ed25519 AAAAtest tomek@nas-monitor\n")
+        self.state_patch = mock.patch("nas_monitor.ssh_keys.state_store.STATE_DIR", self.tmpdir)
+        self.state_patch.start()
+
+    def tearDown(self):
+        self.state_patch.stop()
+        shutil.rmtree(self.tmpdir)
+
     @mock.patch("nas_monitor.ssh_keys.get_key_status", return_value={"has_key": True})
     def test_rejects_empty_password(self, mock_status):
         result = ssh_keys.deploy_key_to_remote("tomek", "192.168.0.20", "wieslaw", "")
@@ -98,7 +113,7 @@ class TestDeployKeyToRemote(unittest.TestCase):
     @mock.patch("nas_monitor.ssh_keys.system_tools.find_binary", side_effect=lambda name: f"/usr/bin/{name}")
     @mock.patch("nas_monitor.ssh_keys.get_key_status", return_value={"has_key": True})
     def test_sends_password_via_env_not_argv(self, mock_status, mock_find, mock_run, mock_pwnam):
-        mock_pwnam.return_value = _fake_pwent("tomek", "/bin/bash")
+        mock_pwnam.return_value = _fake_pwent("tomek", "/bin/bash", home=self.tmpdir)
         result = ssh_keys.deploy_key_to_remote("tomek", "192.168.0.20", "wieslaw", "hunter2")
         self.assertTrue(result["success"])
         called_cmd = mock_run.call_args[0][0]
@@ -116,6 +131,124 @@ class TestDeployKeyToRemote(unittest.TestCase):
         result = ssh_keys.deploy_key_to_remote("tomek", "192.168.0.20", "wieslaw", "wrongpass")
         self.assertFalse(result["success"])
         self.assertIn("Permission denied", result["error"])
+
+
+class TestDeploymentTracking(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.state_patch = mock.patch("nas_monitor.ssh_keys.state_store.STATE_DIR", self.tmpdir)
+        self.state_patch.start()
+
+    def tearDown(self):
+        self.state_patch.stop()
+        shutil.rmtree(self.tmpdir)
+
+    @mock.patch("nas_monitor.ssh_keys.pwd.getpwnam")
+    @mock.patch("nas_monitor.ssh_keys.system_tools.run", return_value=(0, "", ""))
+    @mock.patch("nas_monitor.ssh_keys.system_tools.find_binary", side_effect=lambda name: f"/usr/bin/{name}")
+    @mock.patch("nas_monitor.ssh_keys.get_key_status")
+    def test_deploy_records_deployment_and_marks_it_current(self, mock_status, mock_find, mock_run, mock_pwnam):
+        mock_pwnam.return_value = _fake_pwent("tomek", "/bin/bash", home=self.tmpdir)
+        mock_status.return_value = {"has_key": True}
+        os.makedirs(os.path.join(self.tmpdir, ".ssh"), exist_ok=True)
+        pub_path = os.path.join(self.tmpdir, ".ssh", "id_ed25519.pub")
+        with open(pub_path, "w") as fh:
+            fh.write("ssh-ed25519 AAAAtest tomek@nas-monitor\n")
+
+        ssh_keys.deploy_key_to_remote("tomek", "192.168.0.20", "wieslaw", "hunter2")
+        deployments = ssh_keys.get_deployments("tomek")
+        self.assertEqual(len(deployments), 1)
+        self.assertEqual(deployments[0]["host"], "192.168.0.20")
+        self.assertTrue(deployments[0]["is_current"])
+
+    @mock.patch("nas_monitor.ssh_keys.pwd.getpwnam")
+    def test_regenerating_key_marks_old_deployment_stale(self, mock_pwnam):
+        mock_pwnam.return_value = _fake_pwent("tomek", "/bin/bash", home=self.tmpdir)
+        os.makedirs(os.path.join(self.tmpdir, ".ssh"), exist_ok=True)
+        pub_path = os.path.join(self.tmpdir, ".ssh", "id_ed25519.pub")
+
+        with open(pub_path, "w") as fh:
+            fh.write("ssh-ed25519 AAAAoriginal tomek@nas-monitor\n")
+        ssh_keys._record_deployment("tomek", "192.168.0.20", "wieslaw", "ssh-ed25519 AAAAoriginal tomek@nas-monitor")
+
+        # key regenerated - pub file now has DIFFERENT content, deployment record untouched
+        with open(pub_path, "w") as fh:
+            fh.write("ssh-ed25519 AAAAbrandnew tomek@nas-monitor\n")
+
+        deployments = ssh_keys.get_deployments("tomek")
+        self.assertEqual(len(deployments), 1)
+        self.assertFalse(deployments[0]["is_current"])
+
+    @mock.patch("nas_monitor.ssh_keys.system_tools.run")
+    @mock.patch("nas_monitor.ssh_keys.system_tools.find_binary", side_effect=lambda name: f"/usr/bin/{name}")
+    def test_remove_deployment_never_relies_on_env_var_reaching_remote_shell(self, mock_find, mock_run):
+        # This is the exact bug class that was caught by hand: env vars set
+        # for the LOCAL ssh subprocess do NOT propagate to the REMOTE shell,
+        # so the removal command must never reference the pubkey via a
+        # remote $VAR - it must be embedded, pre-quoted, in the command
+        # string built locally. If this regresses, `grep -vF ""` on the
+        # remote would match nothing and silently wipe authorized_keys.
+        mock_run.return_value = (0, "", "")
+        pubkey_with_spaces = "ssh-ed25519 AAAAtest tomek@nas-monitor"
+        ssh_keys._record_deployment("tomek", "192.168.0.20", "wieslaw", pubkey_with_spaces)
+
+        ssh_keys.remove_deployment("tomek", "192.168.0.20", "wieslaw", "hunter2")
+
+        called_cmd = mock_run.call_args[0][0]
+        remote_script = called_cmd[-1]
+        # the exact pubkey text must appear directly in the command string
+        # sent to ssh - not behind a $VAR expansion that depends on
+        # something SSH doesn't forward by default
+        self.assertIn("AAAAtest", remote_script)
+        self.assertNotIn("$NAS_MONITOR_PUBKEY", remote_script)
+        self.assertNotIn("grep -vF -- \"\"", remote_script)  # the exact failure mode: empty pattern = wipe everything
+
+    @mock.patch("nas_monitor.ssh_keys.pwd.getpwnam")
+    @mock.patch("nas_monitor.ssh_keys.system_tools.run", return_value=(0, "", ""))
+    @mock.patch("nas_monitor.ssh_keys.system_tools.find_binary", side_effect=lambda name: f"/usr/bin/{name}")
+    def test_remove_deployment_drops_local_record_on_success(self, mock_find, mock_run, mock_pwnam):
+        mock_pwnam.return_value = _fake_pwent("tomek", "/bin/bash", home=self.tmpdir)
+        ssh_keys._record_deployment("tomek", "192.168.0.20", "wieslaw", "ssh-ed25519 AAAAtest x")
+        result = ssh_keys.remove_deployment("tomek", "192.168.0.20", "wieslaw", "hunter2")
+        self.assertTrue(result["success"])
+        self.assertEqual(ssh_keys.get_deployments("tomek"), [])
+
+    def test_remove_deployment_rejects_unknown_entry(self):
+        result = ssh_keys.remove_deployment("tomek", "1.2.3.4", "nobody", "x")
+        self.assertFalse(result["success"])
+        self.assertIn("Nie znaleziono", result["error"])
+
+    def test_remove_deployment_rejects_empty_password(self):
+        ssh_keys._record_deployment("tomek", "192.168.0.20", "wieslaw", "ssh-ed25519 AAAAtest x")
+        result = ssh_keys.remove_deployment("tomek", "192.168.0.20", "wieslaw", "")
+        self.assertFalse(result["success"])
+
+    def test_remote_removal_script_succeeds_when_removed_key_was_the_only_line(self):
+        # Real regression test (runs actual /bin/sh, not mocked): grep -v
+        # exits 1 when EVERY line matched and got filtered out - i.e.
+        # exactly what happens when the key being removed is the only
+        # line in authorized_keys. That is success, not an error - a
+        # naive `grep ... && mv ...` chain would skip the mv and silently
+        # leave the old file in place. Caught by hand once already.
+        import subprocess
+
+        key_text = "ssh-ed25519 AAAAonlyline tomek@nas-monitor"
+        auth_keys_path = os.path.join(self.tmpdir, "authorized_keys")
+        with open(auth_keys_path, "w") as fh:
+            fh.write(key_text + "\n")
+
+        quoted = shlex.quote(key_text)
+        script = (
+            f"f={shlex.quote(auth_keys_path)}; "
+            f"if [ -f \"$f\" ]; then "
+            f"grep -vF -- {quoted} \"$f\" > \"$f.tmp\" || true; "
+            f"mv \"$f.tmp\" \"$f\"; "
+            f"fi"
+        )
+        proc = subprocess.run(["sh", "-c", script], capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        with open(auth_keys_path) as fh:
+            self.assertEqual(fh.read(), "")
 
 
 if __name__ == "__main__":

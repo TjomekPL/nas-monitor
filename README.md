@@ -97,6 +97,7 @@ nas_monitor/
   smb.py             - backend SMB: hasła Samby, dowiązanie do kont systemowych
   smb_shares.py       - backend SMB: udziały (tworzenie/edycja/usuwanie pod /srv, testparm+rollback)
   ssh_keys.py          - klucze SSH per użytkownik: generowanie + wysyłanie na zdalne urządzenie
+  state_store.py        - mały lokalny magazyn JSON na stan, którego nie da się wyczytać z systemu (śledzenie wdrożeń kluczy, docelowo log)
   app.py              - Flask app, wszystkie trasy
   templates/
     dashboard.html
@@ -189,10 +190,31 @@ klienta), więc ta separacja jest zamierzona.
    zmienną środowiskową (nie argv, gdzie `ps` by je widział), nigdzie nie
    zapisywane. Sprawdzone naprawdę: cały łańcuch (generuj → wyślij →
    prawdziwe bezhasłowe SSH) na żywym `sshd`.
-6. **Zdalne montowanie** - jeszcze nie omówione w szczegółach.
-7. **Backupy przez rsync (lub inne metody)** - jeszcze nie omówione w
+
+   **Śledzenie wdrożeń** - lista urządzeń, na które klucz wysłano, przy
+   każdym pigułka: zielona = klucz na urządzeniu wciąż zgadza się z
+   aktualnym lokalnym (`~/.ssh/id_ed25519.pub`), czerwona = klucz od tego
+   czasu wygenerowano ponownie bez ponownego wysłania (urządzenie ma stary,
+   już niepasujący klucz). Pierwszy stan trzymany lokalnie przez to
+   narzędzie, niederywowalny z systemu (`nas_monitor/state_store.py`,
+   `/etc/nas-monitor/*.json`) - ten sam mechanizm posłuży do loga operacji.
+   "Usuń z urządzenia" naprawdę usuwa właściwą linię z `authorized_keys`
+   (dopasowanie po treści zapisanej przy wysyłce, nie po aktualnym kluczu -
+   działa też dla nieaktualnych wpisów), zostawiając inne wpisy nietknięte.
+   Po drodze złapane i naprawione ręcznie dwa realne błędy: zmienne
+   środowiskowe nie przechodzą przez SSH do zdalnej powłoki (próba
+   przekazania tak treści klucza zostawiłaby pusty wzorzec i `grep -vF ""`
+   wyczyściłby cały plik), i `grep -v` zwraca kod wyjścia 1, gdy usuwana
+   linia była jedyną w pliku (to sukces, nie błąd - naiwne `grep && mv`
+   by to pomijało).
+6. **Zakładki zamiast jednej długiej strony** - ✅ zrobione. Pasek zakładek
+   pod nagłówkiem (Dyski i macierze / Użytkownicy / Certyfikaty / Udziały),
+   wybór zapamiętywany w `localStorage`.
+7. **Zdalne montowanie** - jeszcze nie omówione w szczegółach.
+8. **Backupy przez rsync (lub inne metody)** - jeszcze nie omówione w
    szczegółach.
-8. **Log operacji** - osobna sekcja z jasnym podziałem: co się wykonało
+9. **Log operacji** - osobna sekcja z jasnym podziałem: co się wykonało
    poprawnie, co się nie udało i dlaczego. Zaplanowane jako następny krok,
    żeby objąć od razu wszystkie istniejące operacje (użytkownicy, udziały,
-   klucze) zamiast dorabiać to osobno do każdej.
+   klucze) zamiast dorabiać to osobno do każdej. Magazyn stanu
+   (`state_store.py`) już gotowy od funkcji certyfikatów.

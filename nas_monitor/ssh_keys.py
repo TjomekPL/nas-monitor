@@ -18,13 +18,17 @@ from __future__ import annotations
 import os
 import pwd
 import re
+import shlex
+from datetime import datetime, timezone
 from typing import Any
 
 from nas_monitor import system_tools
 from nas_monitor import users as users_mod
+from nas_monitor import state_store
 
 KEY_COMMENT_SUFFIX = "@nas-monitor"
 _HOST_RE = re.compile(r"^[a-zA-Z0-9_.-]{1,255}$")
+_DEPLOYMENTS_FILE = "ssh-deployments.json"
 
 
 def _ssh_dir(username: str) -> str:
@@ -34,6 +38,59 @@ def _ssh_dir(username: str) -> str:
 def _key_paths(username: str) -> tuple[str, str]:
     ssh_dir = _ssh_dir(username)
     return os.path.join(ssh_dir, "id_ed25519"), os.path.join(ssh_dir, "id_ed25519.pub")
+
+
+def _load_deployments() -> dict[str, list[dict[str, Any]]]:
+    return state_store.load(_DEPLOYMENTS_FILE, default={}) or {}
+
+
+def _save_deployments(data: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    return state_store.save(_DEPLOYMENTS_FILE, data)
+
+
+def _record_deployment(username: str, host: str, remote_user: str, public_key: str) -> None:
+    data = _load_deployments()
+    entries = data.setdefault(username, [])
+    entries[:] = [e for e in entries if not (e["host"] == host and e["remote_user"] == remote_user)]
+    entries.append(
+        {
+            "host": host,
+            "remote_user": remote_user,
+            "public_key": public_key,
+            "deployed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+    )
+    _save_deployments(data)
+
+
+def get_deployments(username: str) -> list[dict[str, Any]]:
+    """Every remote host this key has ever been deployed to, each flagged
+    is_current: True if that deployment's public key still matches what's
+    currently on disk for this user - False means the key was regenerated
+    since (see generate_key) and that device now has a stale entry."""
+    data = _load_deployments()
+    entries = data.get(username, [])
+
+    current_pub = None
+    _, pub_path = _key_paths(username)
+    if os.path.isfile(pub_path):
+        try:
+            with open(pub_path, "r") as fh:
+                current_pub = fh.read().strip()
+        except OSError:
+            pass
+
+    result = []
+    for e in sorted(entries, key=lambda e: e.get("deployed_at", "")):
+        result.append(
+            {
+                "host": e["host"],
+                "remote_user": e["remote_user"],
+                "deployed_at": e.get("deployed_at"),
+                "is_current": current_pub is not None and e.get("public_key") == current_pub,
+            }
+        )
+    return result
 
 
 def get_key_status(username: str) -> dict[str, Any]:
@@ -57,6 +114,7 @@ def get_key_status(username: str) -> dict[str, Any]:
             result["error"] = str(exc)
 
     result["can_login"] = pw.pw_shell not in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "/usr/bin/false", "")
+    result["deployments"] = get_deployments(username)
     return result
 
 
@@ -192,6 +250,77 @@ def deploy_key_to_remote(
     code, out, err = system_tools.run(cmd, timeout=20, extra_env={"SSHPASS": remote_password})
     if code != 0:
         result["error"] = (err.strip() or out.strip() or f"ssh-copy-id exited {code}")[:400]
+        return result
+
+    with open(pub_path, "r") as fh:
+        pub_content = fh.read().strip()
+    _record_deployment(username, remote_host, remote_user, pub_content)
+
+    result["success"] = True
+    return result
+
+
+def remove_deployment(
+    username: str, remote_host: str, remote_user: str, remote_password: str
+) -> dict[str, Any]:
+    """Remove this key from a remote host's authorized_keys (using the
+    PUBLIC KEY TEXT recorded at deploy time, not the current local key -
+    matters for a stale entry, where the current local key is a different
+    one entirely) and drop the local tracking record. Needs the remote
+    password again - there's no other way to reliably reach a host whose
+    key might already be stale/replaced."""
+    result: dict[str, Any] = {"success": False, "error": None}
+
+    if not remote_password:
+        result["error"] = "Puste hasło zdalnego konta"
+        return result
+
+    data = _load_deployments()
+    entries = data.get(username, [])
+    match = next((e for e in entries if e["host"] == remote_host and e["remote_user"] == remote_user), None)
+    if match is None:
+        result["error"] = "Nie znaleziono zapisu o tym wdrożeniu"
+        return result
+
+    sshpass_path = system_tools.find_binary("sshpass")
+    ssh_path = system_tools.find_binary("ssh")
+    if sshpass_path is None or ssh_path is None:
+        result["error"] = "sshpass/ssh not installed"
+        return result
+
+    # Fixed-string grep -v removes exactly the one recorded line, leaving
+    # any other authorized_keys entries (from this tool or elsewhere)
+    # untouched. The pubkey text is shell-quoted HERE, locally, and sent
+    # as a single already-escaped command string - env vars do NOT
+    # propagate through SSH to the remote shell by default, so passing
+    # the value that way would leave $VAR empty on the other end and
+    # turn `grep -vF ""` into "match everything", wiping the whole file.
+    quoted_pubkey = shlex.quote(match["public_key"])
+    remote_script = (
+        f"f=~/.ssh/authorized_keys; "
+        f"if [ -f \"$f\" ]; then "
+        f"grep -vF -- {quoted_pubkey} \"$f\" > \"$f.tmp\" || true; "
+        f"mv \"$f.tmp\" \"$f\"; "
+        f"fi"
+    )
+    cmd = [
+        sshpass_path, "-e",
+        ssh_path,
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ConnectTimeout=10",
+        f"{remote_user}@{remote_host}",
+        remote_script,
+    ]
+    code, out, err = system_tools.run(cmd, timeout=20, extra_env={"SSHPASS": remote_password})
+    if code != 0:
+        result["error"] = (err.strip() or out.strip() or f"exit {code}")[:400]
+        return result
+
+    entries[:] = [e for e in entries if not (e["host"] == remote_host and e["remote_user"] == remote_user)]
+    data[username] = entries
+    save_result = _save_deployments(data)
+    if not save_result["success"]:
+        result["error"] = f"Usunięto ze zdalnego urządzenia, ale nie udało się zapisać lokalnie: {save_result['error']}"
         return result
 
     result["success"] = True

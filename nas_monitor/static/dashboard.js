@@ -30,6 +30,30 @@ themeToggleBtn.addEventListener("click", () => {
 
 applyThemeIcon();
 
+// --------------------------------------------------------------------
+// Tabs
+// --------------------------------------------------------------------
+
+const tabButtons = document.querySelectorAll(".tab-btn");
+const tabPanels = document.querySelectorAll(".tab-panel");
+
+function activateTab(name) {
+  let matched = false;
+  tabButtons.forEach((btn) => {
+    const isMatch = btn.dataset.tab === name;
+    btn.classList.toggle("active", isMatch);
+    if (isMatch) matched = true;
+  });
+  tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.tab === name));
+  if (matched) localStorage.setItem("nas-monitor-tab", name);
+}
+
+tabButtons.forEach((btn) => {
+  btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+});
+
+activateTab(localStorage.getItem("nas-monitor-tab") || tabButtons[0].dataset.tab);
+
 const raidContainer = document.getElementById("raid-container");
 const disksContainer = document.getElementById("disks-container");
 const lastUpdatedEl = document.getElementById("last-updated");
@@ -641,7 +665,16 @@ const deployRemoteUserInput = document.getElementById("deploy-remote-user");
 const deployPasswordInput = document.getElementById("deploy-password");
 const deployKeySubmitBtn = document.getElementById("deploy-key-submit");
 
+const removeDeploymentDialog = document.getElementById("remove-deployment-dialog");
+const removeDeploymentForm = document.getElementById("remove-deployment-form");
+const removeDeploymentTitle = document.getElementById("remove-deployment-title");
+const removeDeploymentCancel = document.getElementById("remove-deployment-cancel");
+const removeDeploymentError = document.getElementById("remove-deployment-error");
+const removeDeploymentPasswordInput = document.getElementById("remove-deployment-password");
+const removeDeploymentSubmitBtn = document.getElementById("remove-deployment-submit");
+
 let deployingKeyForUsername = null;
+let removingDeployment = null; // { username, host, remote_user }
 
 function renderSshKeys(keysList) {
   sshKeysContainer.innerHTML = "";
@@ -650,7 +683,7 @@ function renderSshKeys(keysList) {
     return;
   }
   const table = document.createElement("table");
-  table.innerHTML = "<thead><tr><th>Użytkownik</th><th>Klucz</th><th>Klucz publiczny</th><th></th></tr></thead>";
+  table.innerHTML = "<thead><tr><th>Użytkownik</th><th>Klucz</th><th>Wysłano na</th><th></th></tr></thead>";
   const tbody = document.createElement("tbody");
   for (const k of keysList) {
     if (k.error) continue; // user lookup failed - skip silently, shouldn't normally happen
@@ -665,7 +698,29 @@ function renderSshKeys(keysList) {
     pill.textContent = k.has_key ? "jest" : "brak";
     pill.classList.add(k.has_key ? "pill-ok" : "pill-neutral");
 
-    row.querySelector(".pubkey").textContent = k.public_key ? k.public_key.slice(0, 40) + "..." : "\u2013";
+    const depCell = row.querySelector(".deployments-cell");
+    const deployments = k.deployments || [];
+    if (!deployments.length) {
+      depCell.textContent = "\u2013";
+    } else {
+      for (const dep of deployments) {
+        const pillEl = document.createElement("span");
+        pillEl.className = "deployment-pill " + (dep.is_current ? "current" : "stale");
+        pillEl.title = dep.is_current
+          ? `Aktualny klucz wysłany na ${dep.remote_user}@${dep.host}`
+          : `Nieaktualne - klucz wygenerowano ponownie od czasu wysłania na ${dep.remote_user}@${dep.host}`;
+        const label = document.createElement("span");
+        label.textContent = dep.host;
+        pillEl.appendChild(label);
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "\u00d7";
+        removeBtn.title = "Usuń z tego urządzenia";
+        removeBtn.addEventListener("click", () => openRemoveDeploymentDialog(k.username, dep));
+        pillEl.appendChild(removeBtn);
+        depCell.appendChild(pillEl);
+      }
+    }
 
     const generateBtn = row.querySelector(".generate-btn");
     const deployBtn = row.querySelector(".deploy-btn");
@@ -693,7 +748,7 @@ function renderSshKeys(keysList) {
 }
 
 async function loadSshKeys() {
-  if (deployKeyDialog.open) return;
+  if (deployKeyDialog.open || removeDeploymentDialog.open) return;
   try {
     const res = await fetch("/api/ssh-keys");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -772,6 +827,46 @@ deployKeyForm.addEventListener("submit", async (ev) => {
     deployKeyError.textContent = `Błąd połączenia: ${err.message}`;
   } finally {
     deployKeySubmitBtn.disabled = false;
+  }
+});
+
+function openRemoveDeploymentDialog(username, deployment) {
+  removeDeploymentForm.reset();
+  removeDeploymentError.textContent = "";
+  removingDeployment = { username, host: deployment.host, remote_user: deployment.remote_user };
+  removeDeploymentTitle.textContent = `Usuń klucz z ${deployment.remote_user}@${deployment.host}`;
+  removeDeploymentDialog.showModal();
+}
+
+removeDeploymentCancel.addEventListener("click", () => removeDeploymentDialog.close());
+
+removeDeploymentForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  removeDeploymentError.textContent = "";
+
+  const password = removeDeploymentPasswordInput.value;
+  const { username, host, remote_user } = removingDeployment;
+
+  if (!window.confirm(`Na pewno usunąć klucz z ${remote_user}@${host}? Ten host straci dostęp bez hasła.`)) return;
+
+  removeDeploymentSubmitBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/ssh-keys/${encodeURIComponent(username)}/deployments/remove`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ remote_host: host, remote_user, remote_password: password }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      removeDeploymentError.textContent = data.error || `Błąd HTTP ${res.status}`;
+      return;
+    }
+    removeDeploymentDialog.close();
+    await loadSshKeys();
+  } catch (err) {
+    removeDeploymentError.textContent = `Błąd połączenia: ${err.message}`;
+  } finally {
+    removeDeploymentSubmitBtn.disabled = false;
   }
 });
 

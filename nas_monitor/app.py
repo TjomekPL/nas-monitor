@@ -231,6 +231,19 @@ def api_ssh_keys_delete(username):
     return jsonify({"success": True})
 
 
+@app.route("/api/ssh-keys/<username>/deployments/remove", methods=["POST"])
+def api_ssh_keys_remove_deployment(username):
+    data = request.get_json(force=True, silent=True) or {}
+    remote_host = (data.get("remote_host") or "").strip()
+    remote_user = (data.get("remote_user") or "").strip()
+    remote_password = data.get("remote_password") or ""
+
+    result = ssh_keys.remove_deployment(username, remote_host, remote_user, remote_password)
+    if not result["success"]:
+        return jsonify({"success": False, "error": result["error"]}), 400
+    return jsonify({"success": True})
+
+
 def main():
     # Binds to all interfaces so it's reachable on the LAN - this is a
     # read-only dashboard with no authentication yet, so only run it on

@@ -30,38 +30,53 @@
     </div>
   </header>
 
+  <nav class="tabs" id="tabs" role="tablist">
+    <button type="button" class="tab-btn" data-tab="disks" role="tab">Dyski i macierze</button>
+    <button type="button" class="tab-btn" data-tab="users" role="tab">Użytkownicy</button>
+    <button type="button" class="tab-btn" data-tab="certs" role="tab">Certyfikaty</button>
+    <button type="button" class="tab-btn" data-tab="shares" role="tab">Udziały</button>
+  </nav>
+
   <main>
-    <section>
-      <h2>Macierze RAID</h2>
-      <div id="raid-container" class="cards"></div>
-    </section>
+    <div class="tab-panel" data-tab="disks">
+      <section>
+        <h2>Macierze RAID</h2>
+        <div id="raid-container" class="cards"></div>
+      </section>
 
-    <section>
-      <h2>Dyski</h2>
-      <div id="disks-container" class="cards"></div>
-    </section>
+      <section>
+        <h2>Dyski</h2>
+        <div id="disks-container" class="cards"></div>
+      </section>
+    </div>
 
-    <section>
-      <div class="section-head">
-        <h2>Użytkownicy</h2>
-        <button id="add-user-btn" class="btn-primary" type="button">+ Dodaj użytkownika</button>
-      </div>
-      <div id="users-container" class="user-table"></div>
-    </section>
+    <div class="tab-panel" data-tab="users">
+      <section>
+        <div class="section-head">
+          <h2>Użytkownicy</h2>
+          <button id="add-user-btn" class="btn-primary" type="button">+ Dodaj użytkownika</button>
+        </div>
+        <div id="users-container" class="user-table"></div>
+      </section>
+    </div>
 
-    <section>
-      <h2>Certyfikaty (klucze SSH)</h2>
-      <p class="subtitle">Do logowania/synchronizacji (np. rsync) na inne maszyny bez hasła - niezależne od hasła SMB.</p>
-      <div id="ssh-keys-container" class="user-table"></div>
-    </section>
+    <div class="tab-panel" data-tab="certs">
+      <section>
+        <h2>Certyfikaty (klucze SSH)</h2>
+        <p class="subtitle">Do logowania/synchronizacji (np. rsync) na inne maszyny bez hasła - niezależne od hasła SMB.</p>
+        <div id="ssh-keys-container" class="user-table"></div>
+      </section>
+    </div>
 
-    <section>
-      <div class="section-head">
-        <h2>Udziały</h2>
-        <button id="add-share-btn" class="btn-primary" type="button">+ Dodaj udział</button>
-      </div>
-      <div id="shares-container" class="user-table"></div>
-    </section>
+    <div class="tab-panel" data-tab="shares">
+      <section>
+        <div class="section-head">
+          <h2>Udziały</h2>
+          <button id="add-share-btn" class="btn-primary" type="button">+ Dodaj udział</button>
+        </div>
+        <div id="shares-container" class="user-table"></div>
+      </section>
+    </div>
   </main>
 
   <dialog id="share-dialog">
@@ -90,6 +105,24 @@
       <div class="dialog-actions">
         <button type="button" id="share-cancel">Anuluj</button>
         <button type="submit" id="share-submit" class="btn-primary">Utwórz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="remove-deployment-dialog">
+    <form id="remove-deployment-form" method="dialog">
+      <h3 id="remove-deployment-title">Usuń klucz z urządzenia</h3>
+
+      <label>
+        <span class="label-text">Hasło zdalnego konta (użyte tylko raz)</span>
+        <input type="password" id="remove-deployment-password" required autocomplete="off">
+      </label>
+
+      <p class="form-error" id="remove-deployment-error"></p>
+
+      <div class="dialog-actions">
+        <button type="button" id="remove-deployment-cancel">Anuluj</button>
+        <button type="submit" id="remove-deployment-submit" class="btn-primary">Usuń</button>
       </div>
     </form>
   </dialog>
@@ -216,7 +249,7 @@
     <tr>
       <td class="display-name"></td>
       <td class="key-cell"><span class="pill"></span></td>
-      <td class="pubkey mono"></td>
+      <td class="deployments-cell"></td>
       <td class="row-actions">
         <button type="button" class="link-btn generate-btn">Generuj</button>
         <button type="button" class="link-btn deploy-btn">Wyślij na urządzenie</button>

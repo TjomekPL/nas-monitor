@@ -165,6 +165,32 @@ h1 { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: -0.01em; }
 .theme-toggle:hover { border-color: var(--accent); }
 .theme-toggle svg { width: 16px; height: 16px; }
 
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 max(24px, calc((100% - 1080px) / 2));
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 12px 14px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
 main {
   max-width: 1080px;
   margin: 0 auto;
@@ -358,6 +384,35 @@ dialog {
 dialog::backdrop { background: rgba(10, 12, 11, 0.45); }
 dialog h3 { margin: 0 0 16px; font-size: 17px; }
 
+.deployments-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.deployment-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px 2px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.deployment-pill.current { background: var(--ok-bg); color: var(--ok); }
+.deployment-pill.stale { background: var(--crit-bg); color: var(--crit); }
+.deployment-pill button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 50%;
+  opacity: 0.7;
+}
+.deployment-pill button:hover { opacity: 1; background: rgba(0, 0, 0, 0.08); }
+
 .permissions-list {
   display: flex;
   flex-direction: column;
@@ -499,5 +554,6 @@ select:focus-visible,
     padding: 18px 16px;
   }
   main { padding: 8px 16px 40px; }
+  .tabs { padding: 0 8px; }
   .groups-checklist, #share-users-checklist { max-height: 120px; }
 }
