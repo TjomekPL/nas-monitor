@@ -329,7 +329,13 @@ h2 {
 .link-btn:hover { text-decoration: underline; }
 .link-btn.danger { color: var(--crit); }
 
-.display-name { font-weight: 600; }
+.display-name {
+  font-weight: 600;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .username.sub {
   font-size: 11.5px;
   color: var(--text-muted);
@@ -366,8 +372,20 @@ dialog h3 { margin: 0 0 16px; font-size: 17px; }
   gap: 8px;
   font-size: 13px;
 }
-.permission-user { flex: 1; }
+.permission-info {
+  flex: 1;
+  min-width: 0; /* required for text-overflow:ellipsis to work inside a flex child */
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.permission-user {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .permission-select {
+  flex-shrink: 0;
   width: auto !important;
   margin-top: 0 !important;
   font-size: 12.5px !important;
