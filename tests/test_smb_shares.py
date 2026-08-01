@@ -91,8 +91,12 @@ class TestManagedFileRoundTrip(unittest.TestCase):
         self.assertIn("read only = no", content)
         self.assertIn("read list = wieslaw", content)
         self.assertNotIn("read list = tomek", content)
-        self.assertIn("force group = @dane_access", content)
-        self.assertIn("valid users = @dane_access", content)
+        # '+group' (not '@group') to skip the NIS-netgroup-first lookup
+        # that caused a real NT_STATUS_NO_SUCH_GROUP failure in production
+        # even though the group genuinely existed. force group takes a
+        # bare name - no prefix syntax applies to it at all.
+        self.assertIn("force group = dane_access", content)
+        self.assertIn("valid users = +dane_access", content)
 
     def test_no_read_list_line_when_everyone_is_rw(self):
         content = smb_shares._render_managed_shares(

@@ -78,6 +78,18 @@ def is_installed() -> bool:
     return os.path.isfile(MAIN_SMB_CONF)
 
 
+def _is_group_ref(token: str) -> bool:
+    """Samba treats a leading '@' or '+' as marking a group reference in
+    valid users / read list / write list (see _render_managed_shares for
+    why this tool writes '+', but a hand-edited or pre-existing share
+    could use either)."""
+    return token.startswith("@") or token.startswith("+")
+
+
+def _group_ref_name(token: str) -> str:
+    return token[1:]
+
+
 def share_path(name: str) -> str:
     return os.path.join(BASE_SHARE_PATH, name)
 
@@ -101,12 +113,12 @@ def _read_managed_shares(managed_conf_path: str = MANAGED_CONF_PATH) -> list[dic
     for name in cp.sections():
         section = cp[name]
         valid_users = section.get("valid users", "").split()
-        raw_groups = [u[1:] for u in valid_users if u.startswith("@")]
+        raw_groups = [_group_ref_name(u) for u in valid_users if _is_group_ref(u)]
         resolved_users = _resolve_group_members(raw_groups)
 
         read_list_raw = section.get("read list", "").split()
-        read_only_users = set(u for u in read_list_raw if not u.startswith("@"))
-        read_only_users |= set(_resolve_group_members([g[1:] for g in read_list_raw if g.startswith("@")]))
+        read_only_users = set(u for u in read_list_raw if not _is_group_ref(u))
+        read_only_users |= set(_resolve_group_members([_group_ref_name(g) for g in read_list_raw if _is_group_ref(g)]))
 
         permissions = {u: ("ro" if u in read_only_users else "rw") for u in resolved_users}
 
@@ -154,12 +166,17 @@ def _render_managed_shares(shares: list[dict[str, Any]]) -> str:
         access_group = s.get("access_group")
         permissions = s.get("permissions") or {}
         if access_group:
-            lines.append(f"   valid users = @{access_group}")
-            # force group makes newly created files belong to this group
-            # regardless of which of the connecting user's OTHER secondary
-            # groups the client happened to negotiate - more reliable than
-            # depending on group inheritance alone.
-            lines.append(f"   force group = @{access_group}")
+            # '+group' checks the UNIX group database only, skipping the
+            # NIS-netgroup-first lookup that plain '@group' does - on
+            # systems where that NIS pre-check misbehaves (even with no
+            # NIS actually configured), '@group' can fail with
+            # NT_STATUS_NO_SUCH_GROUP even though the group genuinely
+            # exists and `getent group` finds it fine. Confirmed against
+            # a real failure, not theoretical.
+            lines.append(f"   valid users = +{access_group}")
+            # force group takes a bare group name - no @/+ prefix syntax
+            # applies here, there's no user/group ambiguity to resolve.
+            lines.append(f"   force group = {access_group}")
         read_only_users = sorted(u for u, level in permissions.items() if level == "ro")
         if read_only_users:
             lines.append(f"   read list = {' '.join(read_only_users)}")
@@ -309,17 +326,17 @@ def list_shares(
             continue
         section = cp[name]
         valid_users = section.get("valid users", "").split()
-        plain_users = [u for u in valid_users if not u.startswith("@")]
-        group_refs = [u[1:] for u in valid_users if u.startswith("@")]
+        plain_users = [u for u in valid_users if not _is_group_ref(u)]
+        group_refs = [_group_ref_name(u) for u in valid_users if _is_group_ref(u)]
         resolved = sorted(set(plain_users) | set(_resolve_group_members(group_refs)))
 
         share_read_only = section.get("read only", "yes").strip().lower() in ("yes", "true", "1")
         read_list_raw = section.get("read list", "").split()
-        explicit_ro = set(u for u in read_list_raw if not u.startswith("@"))
-        explicit_ro |= set(_resolve_group_members([g[1:] for g in read_list_raw if g.startswith("@")]))
+        explicit_ro = set(u for u in read_list_raw if not _is_group_ref(u))
+        explicit_ro |= set(_resolve_group_members([_group_ref_name(g) for g in read_list_raw if _is_group_ref(g)]))
         write_list_raw = section.get("write list", "").split()
-        explicit_rw = set(u for u in write_list_raw if not u.startswith("@"))
-        explicit_rw |= set(_resolve_group_members([g[1:] for g in write_list_raw if g.startswith("@")]))
+        explicit_rw = set(u for u in write_list_raw if not _is_group_ref(u))
+        explicit_rw |= set(_resolve_group_members([_group_ref_name(g) for g in write_list_raw if _is_group_ref(g)]))
 
         permissions = {}
         for u in resolved:
