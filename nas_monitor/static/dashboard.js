@@ -1,5 +1,35 @@
 const REFRESH_MS = 20000;
 
+// --------------------------------------------------------------------
+// Theme toggle (light/dark) - the inline script in <head> already applied
+// any saved choice before first paint; this just wires up the button and
+// falls back to the OS preference when nothing has been explicitly chosen.
+// --------------------------------------------------------------------
+
+const SUN_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>';
+const MOON_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8.5 8.5 0 1 1 9.5 4a7 7 0 0 0 10.5 10.5Z"/></svg>';
+
+const themeToggleBtn = document.getElementById("theme-toggle");
+
+function currentTheme() {
+  const explicit = document.documentElement.getAttribute("data-theme");
+  if (explicit === "light" || explicit === "dark") return explicit;
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyThemeIcon() {
+  themeToggleBtn.innerHTML = currentTheme() === "dark" ? SUN_ICON : MOON_ICON;
+}
+
+themeToggleBtn.addEventListener("click", () => {
+  const next = currentTheme() === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem("nas-monitor-theme", next);
+  applyThemeIcon();
+});
+
+applyThemeIcon();
+
 const raidContainer = document.getElementById("raid-container");
 const disksContainer = document.getElementById("disks-container");
 const lastUpdatedEl = document.getElementById("last-updated");
@@ -428,7 +458,15 @@ function populateShareUsersChecklist(selectedUsers) {
     cb.name = "share-user";
     cb.checked = selected.has(u.username);
     label.appendChild(cb);
-    label.append(` ${u.display_name || u.username}`);
+    const name = u.display_name || u.username;
+    label.append(u.has_smb ? ` ${name}` : ` ${name} `);
+    if (!u.has_smb) {
+      const warn = document.createElement("span");
+      warn.className = "field-hint";
+      warn.style.color = "var(--warn)";
+      warn.textContent = "(brak hasła SMB - nie zaloguje się)";
+      label.appendChild(warn);
+    }
     shareUsersChecklist.appendChild(label);
   }
 }
