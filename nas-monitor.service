@@ -1,0 +1,17 @@
+[Unit]
+Description=NAS monitor - read-only disk/RAID health dashboard
+After=network.target
+
+[Service]
+Type=simple
+# smartctl needs root to query raw ATA/NVMe devices directly - this service
+# is read-only (no array/share/user mutation), but it does run as root.
+User=root
+WorkingDirectory=/opt/nas-monitor
+Environment=PATH=/opt/nas-monitor/venv/bin
+ExecStart=/opt/nas-monitor/venv/bin/gunicorn -w 2 -b 0.0.0.0:8420 nas_monitor.app:app
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

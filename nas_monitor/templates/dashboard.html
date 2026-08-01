@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NAS monitor</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1>NAS monitor</h1>
+      <p class="subtitle">Tylko odczyt &mdash; stan dysków i macierzy RAID</p>
+    </div>
+    <div class="refresh-info">
+      <span id="last-updated">&ndash;</span>
+      <span class="dot" id="conn-dot" title="Status połączenia"></span>
+    </div>
+  </header>
+
+  <main>
+    <section>
+      <h2>Macierze RAID</h2>
+      <div id="raid-container" class="cards"></div>
+    </section>
+
+    <section>
+      <h2>Dyski</h2>
+      <div id="disks-container" class="cards"></div>
+    </section>
+  </main>
+
+  <template id="raid-card-template">
+    <article class="card">
+      <div class="card-head">
+        <span class="badge"></span>
+        <span class="name"></span>
+        <span class="level"></span>
+      </div>
+      <dl class="facts">
+        <div><dt>Stan</dt><dd class="state"></dd></div>
+        <div><dt>Urządzenie</dt><dd class="path mono"></dd></div>
+        <div><dt>Dyski</dt><dd class="devices mono"></dd></div>
+        <div class="progress-row"><dt>Postęp</dt><dd class="progress"></dd></div>
+      </dl>
+      <p class="error"></p>
+    </article>
+  </template>
+
+  <template id="disk-card-template">
+    <article class="card">
+      <div class="card-head">
+        <span class="badge"></span>
+        <span class="name mono"></span>
+        <span class="model"></span>
+      </div>
+      <dl class="facts">
+        <div><dt>Rozmiar</dt><dd class="size"></dd></div>
+        <div><dt>Temperatura</dt><dd class="temp"></dd></div>
+        <div><dt>Godziny pracy</dt><dd class="hours"></dd></div>
+        <div><dt>Serial</dt><dd class="serial mono"></dd></div>
+      </dl>
+      <p class="error"></p>
+    </article>
+  </template>
+
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>
