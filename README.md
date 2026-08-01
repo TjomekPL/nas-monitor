@@ -207,6 +207,16 @@ klienta), więc ta separacja jest zamierzona.
    wyczyściłby cały plik), i `grep -v` zwraca kod wyjścia 1, gdy usuwana
    linia była jedyną w pliku (to sukces, nie błąd - naiwne `grep && mv`
    by to pomijało).
+
+   Dwie dalsze poprawki: (a) `window.alert()` blokuje cały wątek JS,
+   więc trzymając otwarty komunikat sukcesu, zaległe 20-sekundowe
+   odświeżenia odpalały się hurtowo po jego zamknięciu, dając widoczny
+   "przebłysk" starych danych - zamienione na nieblokujące powiadomienia
+   (`showToast`, prawy dolny róg); (b) lista wdrożeń pokazuje teraz
+   przyjazną nazwę urządzenia (np. "vOMV") zamiast surowego adresu -
+   opcjonalne pole przy wysyłce, nie automatyczne rozpoznawanie po DNS
+   (na typowej domowej sieci zwrotne DNS zwykle i tak nie działa
+   niezawodnie dla własnoręcznie skonfigurowanych urządzeń).
 6. **Zakładki zamiast jednej długiej strony** - ✅ zrobione. Pasek zakładek
    pod nagłówkiem (Dyski i macierze / Użytkownicy / Certyfikaty / Udziały),
    wybór zapamiętywany w `localStorage`.

@@ -160,6 +160,30 @@ class TestDeploymentTracking(unittest.TestCase):
         self.assertEqual(len(deployments), 1)
         self.assertEqual(deployments[0]["host"], "192.168.0.20")
         self.assertTrue(deployments[0]["is_current"])
+        # no friendly name given - falls back to the host itself, not blank
+        self.assertEqual(deployments[0]["display_name"], "192.168.0.20")
+
+    @mock.patch("nas_monitor.ssh_keys.pwd.getpwnam")
+    @mock.patch("nas_monitor.ssh_keys.system_tools.run", return_value=(0, "", ""))
+    @mock.patch("nas_monitor.ssh_keys.system_tools.find_binary", side_effect=lambda name: f"/usr/bin/{name}")
+    @mock.patch("nas_monitor.ssh_keys.get_key_status", return_value={"has_key": True})
+    def test_deploy_uses_friendly_name_when_given(self, mock_status, mock_find, mock_run, mock_pwnam):
+        mock_pwnam.return_value = _fake_pwent("tomek", "/bin/bash", home=self.tmpdir)
+        os.makedirs(os.path.join(self.tmpdir, ".ssh"), exist_ok=True)
+        with open(os.path.join(self.tmpdir, ".ssh", "id_ed25519.pub"), "w") as fh:
+            fh.write("ssh-ed25519 AAAAtest tomek@nas-monitor\n")
+
+        ssh_keys.deploy_key_to_remote("tomek", "192.168.0.20", "wieslaw", "hunter2", display_name="vOMV")
+        deployments = ssh_keys.get_deployments("tomek")
+        self.assertEqual(deployments[0]["display_name"], "vOMV")
+        self.assertEqual(deployments[0]["host"], "192.168.0.20")  # actual connection address unchanged
+
+    @mock.patch("nas_monitor.ssh_keys.pwd.getpwnam")
+    def test_blank_friendly_name_falls_back_to_host(self, mock_pwnam):
+        mock_pwnam.return_value = _fake_pwent("tomek", "/bin/bash", home=self.tmpdir)
+        ssh_keys._record_deployment("tomek", "192.168.0.20", "wieslaw", "ssh-ed25519 AAAAx", display_name="   ")
+        deployments = ssh_keys.get_deployments("tomek")
+        self.assertEqual(deployments[0]["display_name"], "192.168.0.20")
 
     @mock.patch("nas_monitor.ssh_keys.pwd.getpwnam")
     def test_regenerating_key_marks_old_deployment_stale(self, mock_pwnam):

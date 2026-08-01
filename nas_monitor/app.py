@@ -216,8 +216,9 @@ def api_ssh_keys_deploy(username):
     remote_host = (data.get("remote_host") or "").strip()
     remote_user = (data.get("remote_user") or "").strip()
     remote_password = data.get("remote_password") or ""
+    display_name = (data.get("display_name") or "").strip() or None
 
-    result = ssh_keys.deploy_key_to_remote(username, remote_host, remote_user, remote_password)
+    result = ssh_keys.deploy_key_to_remote(username, remote_host, remote_user, remote_password, display_name)
     if not result["success"]:
         return jsonify({"success": False, "error": result["error"]}), 400
     return jsonify({"success": True})

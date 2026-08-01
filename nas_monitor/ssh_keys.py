@@ -48,7 +48,9 @@ def _save_deployments(data: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     return state_store.save(_DEPLOYMENTS_FILE, data)
 
 
-def _record_deployment(username: str, host: str, remote_user: str, public_key: str) -> None:
+def _record_deployment(
+    username: str, host: str, remote_user: str, public_key: str, display_name: str | None = None
+) -> None:
     data = _load_deployments()
     entries = data.setdefault(username, [])
     entries[:] = [e for e in entries if not (e["host"] == host and e["remote_user"] == remote_user)]
@@ -57,6 +59,7 @@ def _record_deployment(username: str, host: str, remote_user: str, public_key: s
             "host": host,
             "remote_user": remote_user,
             "public_key": public_key,
+            "display_name": (display_name or "").strip() or None,
             "deployed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         }
     )
@@ -86,6 +89,7 @@ def get_deployments(username: str) -> list[dict[str, Any]]:
             {
                 "host": e["host"],
                 "remote_user": e["remote_user"],
+                "display_name": e.get("display_name") or e["host"],
                 "deployed_at": e.get("deployed_at"),
                 "is_current": current_pub is not None and e.get("public_key") == current_pub,
             }
@@ -206,12 +210,14 @@ def delete_key(username: str) -> dict[str, Any]:
 
 
 def deploy_key_to_remote(
-    username: str, remote_host: str, remote_user: str, remote_password: str
+    username: str, remote_host: str, remote_user: str, remote_password: str, display_name: str | None = None
 ) -> dict[str, Any]:
     """Install username's PUBLIC key into remote_user@remote_host's
     authorized_keys, using remote_password exactly once (an env var, not
     an argv - never written to disk, never logged, never touches argv
-    where `ps` could see it)."""
+    where `ps` could see it). display_name is a purely cosmetic label for
+    the deployments list (e.g. "vOMV") - reverse DNS on a typical home
+    LAN is unreliable, so this is asked for explicitly instead of guessed."""
     result: dict[str, Any] = {"username": username, "success": False, "error": None}
 
     if not remote_password:
@@ -254,7 +260,7 @@ def deploy_key_to_remote(
 
     with open(pub_path, "r") as fh:
         pub_content = fh.read().strip()
-    _record_deployment(username, remote_host, remote_user, pub_content)
+    _record_deployment(username, remote_host, remote_user, pub_content, display_name=display_name)
 
     result["success"] = True
     return result

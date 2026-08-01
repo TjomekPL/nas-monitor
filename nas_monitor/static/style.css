@@ -529,6 +529,37 @@ form label.checkbox-row {
 }
 
 /* ---------------------------------------------------------------------
+   Toasts
+   ------------------------------------------------------------------- */
+
+#toast-container {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  max-width: 340px;
+}
+
+.toast {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ok);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.toast.visible { opacity: 1; transform: translateY(0); }
+.toast-error { border-left-color: var(--crit); }
+
+/* ---------------------------------------------------------------------
    Quality floor: focus visibility, reduced motion, small screens
    ------------------------------------------------------------------- */
 
@@ -544,6 +575,7 @@ select:focus-visible,
 @media (prefers-reduced-motion: reduce) {
   .dot { animation: none; }
   body, .btn-primary, .link-btn { transition: none; }
+  .toast { transition: none; }
 }
 
 @media (max-width: 640px) {

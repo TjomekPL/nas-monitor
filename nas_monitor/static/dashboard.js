@@ -1,6 +1,32 @@
 const REFRESH_MS = 20000;
 
 // --------------------------------------------------------------------
+// Toast notifications - non-blocking, unlike window.alert() which
+// freezes the whole JS event loop (including the 20s polling timers)
+// until dismissed. A held-open alert let overdue polls pile up and fire
+// in a burst on dismiss, which is exactly what caused a visible flash of
+// stale data right after closing one.
+// --------------------------------------------------------------------
+
+function showToast(message, isError) {
+  let container = document.getElementById("toast-container");
+  if (!container) {
+    container = document.createElement("div");
+    container.id = "toast-container";
+    document.body.appendChild(container);
+  }
+  const toast = document.createElement("div");
+  toast.className = "toast" + (isError ? " toast-error" : "");
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => toast.classList.add("visible"), 10);
+  setTimeout(() => {
+    toast.classList.remove("visible");
+    setTimeout(() => toast.remove(), 300);
+  }, 4500);
+}
+
+// --------------------------------------------------------------------
 // Theme toggle (light/dark) - the inline script in <head> already applied
 // any saved choice before first paint; this just wires up the button and
 // falls back to the OS preference when nothing has been explicitly chosen.
@@ -358,6 +384,7 @@ addUserForm.addEventListener("submit", async (ev) => {
     }
     addUserDialog.close();
     await loadUsers();
+    await loadSshKeys();
   } catch (err) {
     addUserError.textContent = `Błąd połączenia: ${err.message}`;
   } finally {
@@ -371,12 +398,13 @@ async function removeSmbAccess(username, displayName) {
     const res = await fetch(`/api/users/${encodeURIComponent(username)}/remove-smb`, { method: "POST" });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      window.alert(data.error || `Błąd HTTP ${res.status}`);
+      showToast(data.error || `Błąd HTTP ${res.status}`, true);
       return;
     }
     await loadUsers();
+    await loadSshKeys();
   } catch (err) {
-    window.alert(`Błąd połączenia: ${err.message}`);
+    showToast(`Błąd połączenia: ${err.message}`, true);
   }
 }
 
@@ -394,12 +422,13 @@ async function deleteUser(username, displayName) {
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      window.alert(data.error || `Błąd HTTP ${res.status}`);
+      showToast(data.error || `Błąd HTTP ${res.status}`, true);
       return;
     }
     await loadUsers();
+    await loadSshKeys();
   } catch (err) {
-    window.alert(`Błąd połączenia: ${err.message}`);
+    showToast(`Błąd połączenia: ${err.message}`, true);
   }
 }
 
@@ -612,7 +641,7 @@ shareForm.addEventListener("submit", async (ev) => {
       return;
     }
     if (data.share && data.share.warning) {
-      window.alert(data.share.warning);
+      showToast(data.share.warning, true);
     }
     shareDialog.close();
     await loadShares();
@@ -640,12 +669,12 @@ async function deleteShare(name) {
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      window.alert(data.error || `Błąd HTTP ${res.status}`);
+      showToast(data.error || `Błąd HTTP ${res.status}`, true);
       return;
     }
     await loadShares();
   } catch (err) {
-    window.alert(`Błąd połączenia: ${err.message}`);
+    showToast(`Błąd połączenia: ${err.message}`, true);
   }
 }
 
@@ -661,6 +690,7 @@ const deployKeyTitle = document.getElementById("deploy-key-title");
 const deployKeyCancel = document.getElementById("deploy-key-cancel");
 const deployKeyError = document.getElementById("deploy-key-error");
 const deployHostInput = document.getElementById("deploy-host");
+const deployDisplayNameInput = document.getElementById("deploy-display-name");
 const deployRemoteUserInput = document.getElementById("deploy-remote-user");
 const deployPasswordInput = document.getElementById("deploy-password");
 const deployKeySubmitBtn = document.getElementById("deploy-key-submit");
@@ -710,7 +740,7 @@ function renderSshKeys(keysList) {
           ? `Aktualny klucz wysłany na ${dep.remote_user}@${dep.host}`
           : `Nieaktualne - klucz wygenerowano ponownie od czasu wysłania na ${dep.remote_user}@${dep.host}`;
         const label = document.createElement("span");
-        label.textContent = dep.host;
+        label.textContent = dep.display_name;
         pillEl.appendChild(label);
         const removeBtn = document.createElement("button");
         removeBtn.type = "button";
@@ -765,12 +795,12 @@ async function generateSshKey(username) {
     const res = await fetch(`/api/ssh-keys/${encodeURIComponent(username)}/generate`, { method: "POST" });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      window.alert(data.error || `Błąd HTTP ${res.status}`);
+      showToast(data.error || `Błąd HTTP ${res.status}`, true);
       return;
     }
     await loadSshKeys();
   } catch (err) {
-    window.alert(`Błąd połączenia: ${err.message}`);
+    showToast(`Błąd połączenia: ${err.message}`, true);
   }
 }
 
@@ -780,12 +810,12 @@ async function deleteSshKey(username) {
     const res = await fetch(`/api/ssh-keys/${encodeURIComponent(username)}/delete`, { method: "POST" });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      window.alert(data.error || `Błąd HTTP ${res.status}`);
+      showToast(data.error || `Błąd HTTP ${res.status}`, true);
       return;
     }
     await loadSshKeys();
   } catch (err) {
-    window.alert(`Błąd połączenia: ${err.message}`);
+    showToast(`Błąd połączenia: ${err.message}`, true);
   }
 }
 
@@ -804,6 +834,7 @@ deployKeyForm.addEventListener("submit", async (ev) => {
   deployKeyError.textContent = "";
 
   const remoteHost = deployHostInput.value.trim();
+  const displayName = deployDisplayNameInput.value.trim();
   const remoteUser = deployRemoteUserInput.value.trim();
   const remotePassword = deployPasswordInput.value;
 
@@ -814,7 +845,12 @@ deployKeyForm.addEventListener("submit", async (ev) => {
     const res = await fetch(`/api/ssh-keys/${encodeURIComponent(deployingKeyForUsername)}/deploy`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ remote_host: remoteHost, remote_user: remoteUser, remote_password: remotePassword }),
+      body: JSON.stringify({
+        remote_host: remoteHost,
+        remote_user: remoteUser,
+        remote_password: remotePassword,
+        display_name: displayName,
+      }),
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
@@ -822,7 +858,7 @@ deployKeyForm.addEventListener("submit", async (ev) => {
       return;
     }
     deployKeyDialog.close();
-    window.alert("Klucz zainstalowany poprawnie.");
+    showToast("Klucz zainstalowany poprawnie.");
   } catch (err) {
     deployKeyError.textContent = `Błąd połączenia: ${err.message}`;
   } finally {
