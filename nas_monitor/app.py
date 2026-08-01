@@ -32,10 +32,22 @@ def api_users():
     system_users = users.list_system_users()
     for u in system_users:
         u["has_smb"] = u["username"] in samba_set
+
+    # Share-access groups (<share>_access) are auto-managed exclusively
+    # from the Udziały section - showing them in the general "edit user"
+    # checklist invites exactly the kind of accidental un-sharing that
+    # happened before this filter existed: editing something else about
+    # a user, not realizing one of the checked boxes IS their access to
+    # a share, and losing it on save.
+    share_access_groups = {
+        s["access_group"] for s in smb_shares.list_shares().get("shares", []) if s.get("access_group")
+    }
+    general_groups = [g for g in users.list_system_groups() if g["name"] not in share_access_groups]
+
     return jsonify(
         {
             "users": system_users,
-            "groups": users.list_system_groups(),
+            "groups": general_groups,
             "samba": samba,
         }
     )

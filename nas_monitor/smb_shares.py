@@ -25,6 +25,7 @@ from typing import Any
 
 from nas_monitor import system_tools
 from nas_monitor import users as users_mod
+from nas_monitor import smb as smb_mod
 
 BASE_SHARE_PATH = "/srv"
 MAIN_SMB_CONF = "/etc/samba/smb.conf"
@@ -51,6 +52,26 @@ def access_group_name(share_name: str) -> str:
     force group, folder ownership), not something the admin manages
     directly."""
     return f"{share_name}_access"
+
+
+def _missing_smb_password_warning(usernames: list[str]) -> str | None:
+    """Being in a share's access group is not enough to log in - Samba
+    also needs an actual SMB password for the account (smbpasswd). This
+    is easy to miss for a pre-existing system account (e.g. the admin's
+    own desktop login) that was never given one through this tool."""
+    if not usernames:
+        return None
+    samba_info = smb_mod.list_samba_users()
+    if not samba_info.get("available"):
+        return None
+    has_password = set(samba_info.get("usernames", []))
+    missing = [u for u in usernames if u not in has_password]
+    if not missing:
+        return None
+    return (
+        f"Uwaga: {', '.join(missing)} nie ma jeszcze ustawionego hasła SMB - "
+        f"nie będzie mógł się zalogować, dopóki nie ustawisz go w sekcji Użytkownicy."
+    )
 
 
 def is_installed() -> bool:
@@ -385,8 +406,9 @@ def create_share(
     result["success"] = True
     result["path"] = path
     result["users"] = users
-    if apply_result.get("warning"):
-        result["warning"] = apply_result["warning"]
+    warnings = [w for w in [apply_result.get("warning"), _missing_smb_password_warning(users)] if w]
+    if warnings:
+        result["warning"] = " ".join(warnings)
     return result
 
 
@@ -411,8 +433,19 @@ def update_share(
         match["read_only"] = read_only
 
     if users is not None:
-        group = match.get("access_group") or access_group_name(name)
-        current_users = set(_resolve_group_members([group]))
+        dedicated_group = access_group_name(name)
+        existing_group = match.get("access_group")
+        if existing_group and existing_group != dedicated_group:
+            # This share was created before per-user access existed (an
+            # old single-group picker let it point at ANY group, e.g.
+            # someone's own personal account group) - never diff
+            # membership against a group we don't own. Migrate forward:
+            # start counting membership as empty in our own dedicated
+            # group, without touching the old group's membership at all.
+            current_users = set()
+        else:
+            current_users = set(_resolve_group_members([dedicated_group]))
+        group = dedicated_group
         desired_users = set(users)
 
         for u in desired_users - current_users:
@@ -440,8 +473,9 @@ def update_share(
         return result
 
     result["success"] = True
-    if apply_result.get("warning"):
-        result["warning"] = apply_result["warning"]
+    warnings = [w for w in [apply_result.get("warning"), _missing_smb_password_warning(users or [])] if w]
+    if warnings:
+        result["warning"] = " ".join(warnings)
     return result
 
 
@@ -463,10 +497,16 @@ def delete_share(
         result["error"] = apply_result["error"]
         return result
 
-    if match.get("access_group"):
+    access_group = match.get("access_group")
+    if access_group and access_group == access_group_name(name):
+        # Only ever delete a group WE created with our own naming
+        # convention. A share made through the old single-group picker
+        # (before this became per-user) can point at an arbitrary
+        # existing group - e.g. someone's own personal account group -
+        # and that must never be touched here.
         groupdel_path = system_tools.find_binary("groupdel")
         if groupdel_path is not None:
-            system_tools.run([groupdel_path, match["access_group"]])  # best-effort, ignore result
+            system_tools.run([groupdel_path, access_group])  # best-effort, ignore result
 
     if delete_files:
         import shutil as _shutil
