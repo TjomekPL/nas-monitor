@@ -65,6 +65,7 @@ def list_system_users(min_uid: int = DEFAULT_MIN_UID, max_uid: int = DEFAULT_MAX
         users.append(
             {
                 "username": entry.pw_name,
+                "display_name": (entry.pw_gecos.split(",")[0].strip() or entry.pw_name) if entry.pw_gecos else entry.pw_name,
                 "uid": entry.pw_uid,
                 "gid": entry.pw_gid,
                 "home": entry.pw_dir,
@@ -132,7 +133,7 @@ def ensure_group_exists(group_name: str) -> dict[str, Any]:
 
 
 def create_user(
-    username: str,
+    raw_username: str,
     groups: list[str] | None = None,
     shell: str | None = None,
     create_home: bool = True,
@@ -140,14 +141,27 @@ def create_user(
     """Create a system account. Read-only detection functions above never
     mutate anything; this is the one function in this module that does.
 
+    Linux usernames must be lowercase, but SMB usage (Tomek, Wacek, ...)
+    doesn't follow that convention. raw_username is lowercased to become
+    the actual system/SMB account name; the original capitalization is
+    kept as the account's GECOS "full name" (display_name in the result
+    and in list_system_users()) purely for display - it has no effect on
+    login/auth, which always happens against the lowercase account.
+
     shell=None uses the nologin shell (the default for SMB-only accounts -
     see the project README for why this matters for SSH access).
     """
-    result: dict[str, Any] = {"username": username, "success": False, "error": None}
+    display_name = raw_username.strip()
+    username = display_name.lower()
+    result: dict[str, Any] = {"username": username, "display_name": display_name, "success": False, "error": None}
+
+    if ":" in display_name or "\n" in display_name:
+        result["error"] = "Nazwa nie może zawierać ':' ani znaku nowej linii"
+        return result
 
     if not is_valid_username(username):
         result["error"] = (
-            "Nieprawidłowa nazwa użytkownika (małe litery/cyfry/_/-, "
+            "Nieprawidłowa nazwa użytkownika (litery/cyfry/_/-, "
             "musi zaczynać się literą lub _, max 32 znaki)"
         )
         return result
@@ -173,7 +187,7 @@ def create_user(
 
     resolved_shell = shell or _default_nologin_shell()
 
-    cmd = [useradd_path, "-s", resolved_shell]
+    cmd = [useradd_path, "-s", resolved_shell, "-c", display_name]
     if create_home:
         cmd.append("-m")
     else:

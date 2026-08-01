@@ -1,4 +1,5 @@
 import os
+import pwd
 import sys
 import unittest
 from unittest import mock
@@ -90,6 +91,34 @@ class TestCreateUser(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertIn("some real failure", result["error"])
 
+    @mock.patch("nas_monitor.users._default_nologin_shell", return_value="/usr/sbin/nologin")
+    @mock.patch("nas_monitor.users.user_exists", return_value=False)
+    @mock.patch("nas_monitor.users.system_tools.find_binary", return_value="/usr/sbin/useradd")
+    @mock.patch("nas_monitor.users.system_tools.run", return_value=(0, "", ""))
+    def test_capitalized_input_becomes_lowercase_account_with_display_name(self, mock_run, mock_find, mock_exists, mock_shell):
+        result = users.create_user("Tomek")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["username"], "tomek")
+        self.assertEqual(result["display_name"], "Tomek")
+        called_cmd = mock_run.call_args[0][0]
+        self.assertEqual(called_cmd[-1], "tomek")  # the actual system account is lowercase
+        self.assertIn("-c", called_cmd)
+        self.assertEqual(called_cmd[called_cmd.index("-c") + 1], "Tomek")  # GECOS keeps original casing
+
+    @mock.patch("nas_monitor.users.user_exists", return_value=False)
+    def test_rejects_colon_in_display_name(self, mock_exists):
+        result = users.create_user("Tom:ek")
+        self.assertFalse(result["success"])
+        self.assertIn(":", result["error"])
+
+    @mock.patch("nas_monitor.users.user_exists", return_value=True)
+    def test_existence_check_uses_lowercased_name(self, mock_exists):
+        # "Tomek" typed again should collide with existing account "tomek",
+        # not silently create a second "Tomek"-cased duplicate
+        result = users.create_user("Tomek")
+        self.assertFalse(result["success"])
+        mock_exists.assert_called_once_with("tomek")
+
 
 class TestEnsureGroupExists(unittest.TestCase):
     @mock.patch("nas_monitor.users.grp.getgrnam", return_value=object())
@@ -114,6 +143,33 @@ class TestEnsureGroupExists(unittest.TestCase):
         result = users.ensure_group_exists("brandnew")
         self.assertFalse(result["success"])
         self.assertIn("real failure", result["error"])
+
+
+class TestListSystemUsersDisplayName(unittest.TestCase):
+    def _fake_pwent(self, name, gecos, uid=1000):
+        return pwd.struct_passwd((name, "x", uid, uid, gecos, f"/home/{name}", "/usr/sbin/nologin"))
+
+    @mock.patch("nas_monitor.users.grp.getgrall", return_value=[])
+    @mock.patch("nas_monitor.users.pwd.getpwall")
+    def test_gecos_full_name_used_as_display_name(self, mock_getpwall, mock_getgrall):
+        mock_getpwall.return_value = [self._fake_pwent("tomek", "Tomek")]
+        result = users.list_system_users()
+        self.assertEqual(result[0]["display_name"], "Tomek")
+        self.assertEqual(result[0]["username"], "tomek")
+
+    @mock.patch("nas_monitor.users.grp.getgrall", return_value=[])
+    @mock.patch("nas_monitor.users.pwd.getpwall")
+    def test_empty_gecos_falls_back_to_username(self, mock_getpwall, mock_getgrall):
+        mock_getpwall.return_value = [self._fake_pwent("share1", "")]
+        result = users.list_system_users()
+        self.assertEqual(result[0]["display_name"], "share1")
+
+    @mock.patch("nas_monitor.users.grp.getgrall", return_value=[])
+    @mock.patch("nas_monitor.users.pwd.getpwall")
+    def test_gecos_takes_only_first_comma_field(self, mock_getpwall, mock_getgrall):
+        mock_getpwall.return_value = [self._fake_pwent("tomek", "Tomek,,,")]
+        result = users.list_system_users()
+        self.assertEqual(result[0]["display_name"], "Tomek")
 
 
 class TestListSystemUsersAndGroups(unittest.TestCase):

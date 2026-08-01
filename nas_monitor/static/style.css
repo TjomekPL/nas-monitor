@@ -184,6 +184,22 @@ h2 {
 .btn-primary:hover { filter: brightness(1.08); }
 .btn-primary:disabled { opacity: 0.6; cursor: default; }
 
+.field-hint {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-weight: normal;
+  margin-top: 3px;
+  min-height: 14px;
+}
+
+.display-name { font-weight: 600; }
+.username.sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
 .user-table table {
   width: 100%;
   border-collapse: collapse;

@@ -58,7 +58,7 @@ def api_users_create():
         return jsonify({"success": False, "step": "user", "error": user_result["error"]}), 400
 
     if password:
-        smb_result = smb.set_password(username, password)
+        smb_result = smb.set_password(user_result["username"], password)
         if not smb_result["success"]:
             return jsonify(
                 {

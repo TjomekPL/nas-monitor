@@ -44,8 +44,9 @@
 
       <label>
         Nazwa użytkownika
-        <input type="text" id="new-username" pattern="[a-z_][a-z0-9_-]{0,31}" required
-               placeholder="np. share1" autocomplete="off">
+        <input type="text" id="new-username" pattern="[A-Za-z_][A-Za-z0-9_-]{0,31}" required
+               placeholder="np. Tomek" autocomplete="off">
+        <span class="field-hint" id="username-preview"></span>
       </label>
 
       <label>
@@ -112,7 +113,10 @@
 
   <template id="user-row-template">
     <tr>
-      <td class="mono username"></td>
+      <td>
+        <div class="display-name"></div>
+        <div class="mono username sub"></div>
+      </td>
       <td class="login-cell"><span class="pill"></span></td>
       <td class="smb-cell"><span class="pill"></span></td>
       <td class="groups mono"></td>

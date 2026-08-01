@@ -83,6 +83,7 @@ function renderDisks(disks) {
 }
 
 async function refresh() {
+  if (addUserDialog.open) return; // avoid DOM churn while a password field is focused
   try {
     const res = await fetch("/api/status");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -96,9 +97,6 @@ async function refresh() {
     lastUpdatedEl.textContent = `błąd połączenia (${err.message})`;
   }
 }
-
-refresh();
-setInterval(refresh, REFRESH_MS);
 
 // --------------------------------------------------------------------
 // Users
@@ -126,7 +124,14 @@ function renderUsers(usersList) {
   const tbody = document.createElement("tbody");
   for (const u of usersList) {
     const row = userRowTemplate.content.cloneNode(true);
-    row.querySelector(".username").textContent = u.username;
+    const displayName = u.display_name || u.username;
+    row.querySelector(".display-name").textContent = displayName;
+    const subEl = row.querySelector(".username.sub");
+    if (displayName !== u.username) {
+      subEl.textContent = `konto: ${u.username}`;
+    } else {
+      subEl.remove();
+    }
 
     const loginPill = row.querySelector(".login-cell .pill");
     loginPill.textContent = u.can_login ? "tak" : "nie";
@@ -167,6 +172,7 @@ function renderGroupsChecklist(groups) {
 }
 
 async function loadUsers() {
+  if (addUserDialog.open) return; // don't rebuild the table under an open form
   try {
     const res = await fetch("/api/users");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -178,9 +184,26 @@ async function loadUsers() {
   }
 }
 
+const usernameInput = document.getElementById("new-username");
+const usernamePreview = document.getElementById("username-preview");
+
+function updateUsernamePreview() {
+  const raw = usernameInput.value.trim();
+  if (!raw) {
+    usernamePreview.textContent = "";
+    return;
+  }
+  const resolved = raw.toLowerCase();
+  usernamePreview.textContent = resolved === raw
+    ? ""
+    : `zostanie utworzone jako konto systemowe: ${resolved} (nazwa "${raw}" zostaje jako etykieta)`;
+}
+usernameInput.addEventListener("input", updateUsernamePreview);
+
 addUserBtn.addEventListener("click", () => {
   addUserForm.reset();
   addUserError.textContent = "";
+  usernamePreview.textContent = "";
   addUserDialog.showModal();
 });
 
@@ -190,7 +213,7 @@ addUserForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   addUserError.textContent = "";
 
-  const username = document.getElementById("new-username").value.trim();
+  const username = usernameInput.value.trim();
   const password = document.getElementById("new-password").value;
   const allowLogin = document.getElementById("new-allow-login").checked;
   const newGroupName = document.getElementById("new-group-name").value.trim();
@@ -198,9 +221,11 @@ addUserForm.addEventListener("submit", async (ev) => {
   const groups = Array.from(groupsChecklist.querySelectorAll("input[name='group']:checked")).map((cb) => cb.value);
   if (newGroupName) groups.push(newGroupName);
 
+  const resolvedAccount = username.toLowerCase();
+  const accountNote = resolvedAccount !== username ? ` (konto systemowe: ${resolvedAccount})` : "";
   const confirmMsg = allowLogin
-    ? `Utworzyć użytkownika "${username}" z możliwością logowania/SSH?`
-    : `Utworzyć użytkownika "${username}" bez możliwości logowania (tylko SMB)?`;
+    ? `Utworzyć użytkownika "${username}"${accountNote} z możliwością logowania/SSH?`
+    : `Utworzyć użytkownika "${username}"${accountNote} bez możliwości logowania (tylko SMB)?`;
   if (!window.confirm(confirmMsg)) return;
 
   const submitBtn = document.getElementById("add-user-submit");
@@ -227,3 +252,7 @@ addUserForm.addEventListener("submit", async (ev) => {
 
 loadUsers();
 setInterval(loadUsers, REFRESH_MS);
+
+// Kick off polling now that everything above is declared.
+refresh();
+setInterval(refresh, REFRESH_MS);
