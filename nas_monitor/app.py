@@ -139,10 +139,10 @@ def api_shares_create():
     data = request.get_json(force=True, silent=True) or {}
     name = (data.get("name") or "").strip().lower()
     comment = (data.get("comment") or "").strip()
-    group = (data.get("group") or "").strip() or None
+    users_list = [u.strip() for u in (data.get("users") or []) if u.strip()]
     read_only = bool(data.get("read_only", False))
 
-    result = smb_shares.create_share(name, comment=comment, group=group, read_only=read_only)
+    result = smb_shares.create_share(name, comment=comment, users=users_list, read_only=read_only)
     if not result["success"]:
         return jsonify({"success": False, "error": result["error"]}), 400
     return jsonify({"success": True, "share": result})
@@ -152,13 +152,15 @@ def api_shares_create():
 def api_shares_update(name):
     data = request.get_json(force=True, silent=True) or {}
     comment = data.get("comment")
-    group = data.get("group")
+    users_list = data.get("users")
+    if users_list is not None:
+        users_list = [u.strip() for u in users_list if u.strip()]
     read_only = data.get("read_only")
 
     result = smb_shares.update_share(
         name,
         comment=comment,
-        group=group,
+        users=users_list,
         read_only=bool(read_only) if read_only is not None else None,
     )
     if not result["success"]:

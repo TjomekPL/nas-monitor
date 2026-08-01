@@ -128,10 +128,13 @@ klienta), więc ta separacja jest zamierzona.
    rollback do poprzedniej treści, nic nie zostaje zepsute. Wykrywanie
    pokazuje też udziały zdefiniowane ręcznie wprost w głównym `smb.conf`
    (oznaczone jako spoza tego narzędzia, tylko do podglądu - edycja/usuwanie
-   działa wyłącznie na udziałach zarządzanych tutaj). Tworzenie folderu:
-   właściciel = grupa udziału + bit setgid, żeby nowe pliki dziedziczyły
-   grupę; `force group` w smb.conf dla spójności zapisu niezależnie od
-   drugorzędnych grup łączącego się użytkownika.
+   działa wyłącznie na udziałach zarządzanych tutaj). Dostęp do udziału
+   przypisuje się **per użytkownik** (nie przez ręczne wybieranie grupy) -
+   pod spodem narzędzie samo zarządza dedykowaną grupą `<udział>_access`
+   (tworzy ją, dopisuje/wypisuje wybranych userów przy edycji, kasuje przy
+   usunięciu udziału) i ustawia ją jako właściciela folderu (setgid) oraz
+   `force group` w smb.conf, więc zapis działa spójnie niezależnie od
+   pozostałych grup łączącego się użytkownika.
 4. **Zarządzanie RAID** - tworzenie/rozbudowa/usuwanie macierzy. Ustalono:
    operacje mają wykonywać się automatycznie po potwierdzeniu w UI (nie
    tylko generować komendę do ręcznego wklejenia). Wymaga dodatkowych

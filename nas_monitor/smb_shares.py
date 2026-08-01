@@ -24,6 +24,7 @@ import re
 from typing import Any
 
 from nas_monitor import system_tools
+from nas_monitor import users as users_mod
 
 BASE_SHARE_PATH = "/srv"
 MAIN_SMB_CONF = "/etc/samba/smb.conf"
@@ -41,6 +42,15 @@ _VALID_SHARE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 def is_valid_share_name(name: str) -> bool:
     return bool(_VALID_SHARE_NAME_RE.match(name)) and name not in _RESERVED_NAMES
+
+
+def access_group_name(share_name: str) -> str:
+    """Name of the group this module auto-manages for one share's access.
+    Access is granted per-user in the UI/API - this group is the plumbing
+    that makes that work at the Samba/filesystem level (valid users,
+    force group, folder ownership), not something the admin manages
+    directly."""
+    return f"{share_name}_access"
 
 
 def is_installed() -> bool:
@@ -70,18 +80,30 @@ def _read_managed_shares(managed_conf_path: str = MANAGED_CONF_PATH) -> list[dic
     for name in cp.sections():
         section = cp[name]
         valid_users = section.get("valid users", "").split()
-        groups = [u[1:] for u in valid_users if u.startswith("@")]
+        raw_groups = [u[1:] for u in valid_users if u.startswith("@")]
+        resolved_users = _resolve_group_members(raw_groups)
         shares.append(
             {
                 "name": name,
                 "path": section.get("path", ""),
                 "comment": section.get("comment", ""),
                 "read_only": section.get("read only", "no").strip().lower() in ("yes", "true", "1"),
-                "groups": groups,
+                "users": resolved_users,
+                "access_group": raw_groups[0] if raw_groups else None,
                 "managed": True,
             }
         )
     return sorted(shares, key=lambda s: s["name"])
+
+
+def _resolve_group_members(group_names: list[str]) -> list[str]:
+    members: set[str] = set()
+    for g in group_names:
+        try:
+            members.update(grp.getgrnam(g).gr_mem)
+        except KeyError:
+            continue
+    return sorted(members)
 
 
 def _render_managed_shares(shares: list[dict[str, Any]]) -> str:
@@ -99,15 +121,14 @@ def _render_managed_shares(shares: list[dict[str, Any]]) -> str:
             lines.append(f"   comment = {s['comment']}")
         lines.append(f"   read only = {'yes' if s.get('read_only') else 'no'}")
         lines.append("   browseable = yes")
-        groups = s.get("groups") or []
-        if groups:
-            valid_users = " ".join(f"@{g}" for g in groups)
-            lines.append(f"   valid users = {valid_users}")
+        access_group = s.get("access_group")
+        if access_group:
+            lines.append(f"   valid users = @{access_group}")
             # force group makes newly created files belong to this group
-            # regardless of which of the connecting user's secondary
-            # groups the client happened to negotiate - more reliable
-            # than depending on group inheritance alone.
-            lines.append(f"   force group = @{groups[0]}")
+            # regardless of which of the connecting user's OTHER secondary
+            # groups the client happened to negotiate - more reliable than
+            # depending on group inheritance alone.
+            lines.append(f"   force group = @{access_group}")
         lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -254,14 +275,17 @@ def list_shares(
             continue
         section = cp[name]
         valid_users = section.get("valid users", "").split()
-        groups = [u[1:] for u in valid_users if u.startswith("@")]
+        plain_users = [u for u in valid_users if not u.startswith("@")]
+        group_refs = [u[1:] for u in valid_users if u.startswith("@")]
+        resolved = sorted(set(plain_users) | set(_resolve_group_members(group_refs)))
         others.append(
             {
                 "name": name,
                 "path": section.get("path", ""),
                 "comment": section.get("comment", ""),
                 "read_only": section.get("read only", "yes").strip().lower() in ("yes", "true", "1"),
-                "groups": groups,
+                "users": resolved,
+                "access_group": None,
                 "managed": False,
             }
         )
@@ -311,7 +335,7 @@ def _prepare_share_directory(path: str, group: str | None) -> dict[str, Any]:
 def create_share(
     name: str,
     comment: str = "",
-    group: str | None = None,
+    users: list[str] | None = None,
     read_only: bool = False,
     managed_conf_path: str = MANAGED_CONF_PATH,
 ) -> dict[str, Any]:
@@ -329,6 +353,16 @@ def create_share(
         result["error"] = f"Udział '{name}' już istnieje"
         return result
 
+    users = users or []
+    group = access_group_name(name) if users else None
+
+    if group:
+        for u in users:
+            add_result = users_mod.add_user_to_group(u, group)
+            if not add_result["success"]:
+                result["error"] = f"Nie udało się dodać '{u}' do grupy dostępu: {add_result['error']}"
+                return result
+
     path = share_path(name)
     dir_result = _prepare_share_directory(path, group)
     if not dir_result["success"]:
@@ -340,7 +374,7 @@ def create_share(
         "path": path,
         "comment": comment,
         "read_only": read_only,
-        "groups": [group] if group else [],
+        "access_group": group,
     }
     new_content = _render_managed_shares(existing + [new_share])
     apply_result = _validate_and_apply(new_content, managed_conf_path)
@@ -350,6 +384,7 @@ def create_share(
 
     result["success"] = True
     result["path"] = path
+    result["users"] = users
     if apply_result.get("warning"):
         result["warning"] = apply_result["warning"]
     return result
@@ -358,7 +393,7 @@ def create_share(
 def update_share(
     name: str,
     comment: str | None = None,
-    group: str | None = None,
+    users: list[str] | None = None,
     read_only: bool | None = None,
     managed_conf_path: str = MANAGED_CONF_PATH,
 ) -> dict[str, Any]:
@@ -374,12 +409,29 @@ def update_share(
         match["comment"] = comment
     if read_only is not None:
         match["read_only"] = read_only
-    if group is not None:
-        dir_result = _prepare_share_directory(match["path"], group)
-        if not dir_result["success"]:
-            result["error"] = dir_result["error"]
-            return result
-        match["groups"] = [group] if group else []
+
+    if users is not None:
+        group = match.get("access_group") or access_group_name(name)
+        current_users = set(_resolve_group_members([group]))
+        desired_users = set(users)
+
+        for u in desired_users - current_users:
+            add_result = users_mod.add_user_to_group(u, group)
+            if not add_result["success"]:
+                result["error"] = f"Nie udało się dodać '{u}' do grupy dostępu: {add_result['error']}"
+                return result
+        for u in current_users - desired_users:
+            remove_result = users_mod.remove_user_from_group(u, group)
+            if not remove_result["success"]:
+                result["error"] = f"Nie udało się usunąć '{u}' z grupy dostępu: {remove_result['error']}"
+                return result
+
+        match["access_group"] = group if desired_users else None
+        if desired_users:
+            dir_result = _prepare_share_directory(match["path"], group)
+            if not dir_result["success"]:
+                result["error"] = dir_result["error"]
+                return result
 
     new_content = _render_managed_shares(existing)
     apply_result = _validate_and_apply(new_content, managed_conf_path)
@@ -410,6 +462,11 @@ def delete_share(
     if not apply_result["success"]:
         result["error"] = apply_result["error"]
         return result
+
+    if match.get("access_group"):
+        groupdel_path = system_tools.find_binary("groupdel")
+        if groupdel_path is not None:
+            system_tools.run([groupdel_path, match["access_group"]])  # best-effort, ignore result
 
     if delete_files:
         import shutil as _shutil

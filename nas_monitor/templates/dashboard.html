@@ -60,10 +60,10 @@
         <input type="text" id="share-comment" autocomplete="off">
       </label>
 
-      <label>
-        <span class="label-text">Grupa z dostępem</span>
-        <select id="share-group"></select>
-      </label>
+      <fieldset>
+        <legend>Kto ma dostęp</legend>
+        <div id="share-users-checklist" class="groups-checklist"></div>
+      </fieldset>
 
       <label class="checkbox-row">
         <input type="checkbox" id="share-read-only">
@@ -177,7 +177,7 @@
       </td>
       <td class="comment"></td>
       <td class="mode-cell"><span class="pill"></span></td>
-      <td class="group mono"></td>
+      <td class="share-users mono"></td>
       <td class="row-actions">
         <button type="button" class="link-btn edit-btn">Edytuj</button>
         <button type="button" class="link-btn danger delete-btn">Usuń</button>

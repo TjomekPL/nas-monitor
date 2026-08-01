@@ -299,3 +299,46 @@ def delete_user(username: str, remove_home: bool = False) -> dict[str, Any]:
 
     result["success"] = True
     return result
+
+
+def add_user_to_group(username: str, group: str) -> dict[str, Any]:
+    """Add username to group WITHOUT touching their other secondary group
+    memberships (usermod -aG appends; update_user's groups= replaces the
+    whole list, which is right for the edit-user form but wrong here)."""
+    result: dict[str, Any] = {"username": username, "success": False, "error": None}
+
+    if not user_exists(username):
+        result["error"] = f"Użytkownik '{username}' nie istnieje"
+        return result
+
+    group_result = ensure_group_exists(group)
+    if not group_result["success"]:
+        result["error"] = group_result["error"]
+        return result
+
+    usermod_path = system_tools.find_binary("usermod")
+    if usermod_path is None:
+        result["error"] = "usermod not installed"
+        return result
+
+    code, out, err = system_tools.run([usermod_path, "-aG", group, username])
+    if code != 0:
+        result["error"] = err.strip() or f"usermod exited {code}"
+        return result
+
+    result["success"] = True
+    return result
+
+
+def remove_user_from_group(username: str, group: str) -> dict[str, Any]:
+    """Remove username from exactly one group, leaving other memberships
+    untouched. usermod has no single-group-removal flag, so this
+    recomputes the full desired list and replaces it via update_user."""
+    if not user_exists(username):
+        return {"username": username, "success": False, "error": f"Użytkownik '{username}' nie istnieje"}
+
+    current = _groups_for_user(username)
+    if group not in current:
+        return {"username": username, "success": True, "error": None}  # already not a member
+
+    return update_user(username, groups=[g for g in current if g != group])
