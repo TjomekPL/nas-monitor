@@ -35,6 +35,7 @@
     <button type="button" class="tab-btn" data-tab="users" role="tab">Użytkownicy</button>
     <button type="button" class="tab-btn" data-tab="certs" role="tab">Certyfikaty</button>
     <button type="button" class="tab-btn" data-tab="shares" role="tab">Udziały</button>
+    <button type="button" class="tab-btn" data-tab="network" role="tab">Sieć</button>
   </nav>
 
   <main>
@@ -75,6 +76,17 @@
           <button id="add-share-btn" class="btn-primary" type="button">+ Dodaj udział</button>
         </div>
         <div id="shares-container" class="user-table"></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-tab="network">
+      <section>
+        <h2>Sieć</h2>
+        <p class="subtitle">
+          Na razie tylko podgląd rzeczywistego stanu - zmiana ustawień (z automatycznym
+          powrotem do poprzednich, jeśli coś pójdzie źle) jeszcze nie jest tu dostępna.
+        </p>
+        <div id="network-container"></div>
       </section>
     </div>
   </main>

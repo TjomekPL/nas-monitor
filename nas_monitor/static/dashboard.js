@@ -910,6 +910,88 @@ removeDeploymentForm.addEventListener("submit", async (ev) => {
 loadShares();
 setInterval(loadShares, REFRESH_MS);
 
+// --------------------------------------------------------------------
+// Network ("Sieć") - read-only detection for now
+// --------------------------------------------------------------------
+
+const networkContainer = document.getElementById("network-container");
+
+const BACKEND_LABELS = {
+  networkmanager: "NetworkManager",
+  "systemd-networkd": "systemd-networkd",
+  ifupdown: "ifupdown (/etc/network/interfaces)",
+  unknown: "nie rozpoznano",
+};
+
+function renderNetwork(data) {
+  networkContainer.innerHTML = "";
+
+  const summary = document.createElement("div");
+  summary.className = "cards";
+
+  const overview = document.createElement("div");
+  overview.className = "card";
+  overview.innerHTML = `
+    <div class="card-head"><span class="name">Ogólne</span></div>
+    <dl class="facts">
+      <div><dt>Nazwa hosta</dt><dd class="mono">${data.hostname || "\u2013"}</dd></div>
+      <div><dt>Zarządzane przez</dt><dd>${BACKEND_LABELS[data.backend] || data.backend}</dd></div>
+      <div><dt>Serwery DNS</dt><dd class="mono">${(data.dns_servers || []).join(", ") || "\u2013"}</dd></div>
+    </dl>
+  `;
+  summary.appendChild(overview);
+  networkContainer.appendChild(summary);
+
+  if (data.error) {
+    const err = document.createElement("p");
+    err.className = "error visible";
+    err.textContent = data.error;
+    networkContainer.appendChild(err);
+  }
+
+  if (!data.interfaces || !data.interfaces.length) {
+    emptyState(networkContainer, "Brak wykrytych interfejsów sieciowych.");
+    return;
+  }
+
+  const ifaceCards = document.createElement("div");
+  ifaceCards.className = "cards";
+  for (const iface of data.interfaces) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const addr = iface.addresses[0];
+    card.innerHTML = `
+      <div class="card-head">
+        <span class="badge ${iface.state === 'up' ? 'ok' : 'unknown'}"></span>
+        <span class="name mono">${iface.name}</span>
+        <span class="level">${iface.state}</span>
+      </div>
+      <dl class="facts">
+        <div><dt>Adres IP</dt><dd class="mono">${addr ? addr.address + "/" + addr.prefixlen : "\u2013"}</dd></div>
+        <div><dt>Maska</dt><dd class="mono">${addr ? addr.netmask : "\u2013"}</dd></div>
+        <div><dt>Brama</dt><dd class="mono">${iface.gateway || "\u2013"}</dd></div>
+        <div><dt>MAC</dt><dd class="mono">${iface.mac || "\u2013"}</dd></div>
+      </dl>
+    `;
+    ifaceCards.appendChild(card);
+  }
+  networkContainer.appendChild(ifaceCards);
+}
+
+async function loadNetwork() {
+  try {
+    const res = await fetch("/api/network");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderNetwork(data);
+  } catch (err) {
+    emptyState(networkContainer, `Błąd wczytywania sieci (${err.message})`);
+  }
+}
+
+loadNetwork();
+setInterval(loadNetwork, REFRESH_MS);
+
 // Kick off polling now that everything above is declared.
 loadUsers();
 setInterval(loadUsers, REFRESH_MS);

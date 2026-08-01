@@ -98,6 +98,7 @@ nas_monitor/
   smb_shares.py       - backend SMB: udziały (tworzenie/edycja/usuwanie pod /srv, testparm+rollback)
   ssh_keys.py          - klucze SSH per użytkownik: generowanie + wysyłanie na zdalne urządzenie
   state_store.py        - mały lokalny magazyn JSON na stan, którego nie da się wyczytać z systemu (śledzenie wdrożeń kluczy, docelowo log)
+  network.py             - wykrywanie sieci: hostname, backend (NM/networkd/ifupdown), interfejsy, DNS - na razie tylko odczyt
   app.py              - Flask app, wszystkie trasy
   templates/
     dashboard.html
@@ -110,6 +111,7 @@ tests/
   test_smb.py           - testy warstwy SMB (użytkownicy)
   test_smb_shares.py     - testy warstwy SMB (udziały) - w tym prawdziwe testy na tmpdir dla configparser
   test_ssh_keys.py        - testy kluczy SSH
+  test_network.py         - testy wykrywania sieci
 nas-monitor.service      - jednostka systemd (uruchamia przez gunicorn)
 ```
 
@@ -218,12 +220,37 @@ klienta), więc ta separacja jest zamierzona.
    (na typowej domowej sieci zwrotne DNS zwykle i tak nie działa
    niezawodnie dla własnoręcznie skonfigurowanych urządzeń).
 6. **Zakładki zamiast jednej długiej strony** - ✅ zrobione. Pasek zakładek
-   pod nagłówkiem (Dyski i macierze / Użytkownicy / Certyfikaty / Udziały),
-   wybór zapamiętywany w `localStorage`.
-7. **Zdalne montowanie** - jeszcze nie omówione w szczegółach.
-8. **Backupy przez rsync (lub inne metody)** - jeszcze nie omówione w
+   pod nagłówkiem (Dyski i macierze / Użytkownicy / Certyfikaty / Udziały /
+   Sieć), wybór zapamiętywany w `localStorage`.
+7. **Sieć** - ✅ **wykrywanie** zrobione (`nas_monitor/network.py`):
+   nazwa hosta, który system zarządza siecią (NetworkManager /
+   systemd-networkd / ifupdown / nierozpoznany - wykrywane naprawdę, nie
+   zakładane, bo różne maszyny w tym projekcie różnią się pod tym
+   względem), serwery DNS, oraz każdy interfejs z prawdziwym stanem
+   (adres, maska, brama, MAC, up/down) czytanym na żywo przez `ip -j`,
+   niezależnie od tego, który z powyższych systemów nim zarządza.
+
+   **Zmiana ustawień jeszcze NIE jest zrobiona** - celowo, to jedyne
+   miejsce w całym narzędziu, gdzie błąd może odciąć dostęp do samego
+   dashboardu. Ustalony plan zabezpieczenia: nowe ustawienia stosowane
+   od razu, ale z zaplanowanym automatycznym powrotem do poprzednich po
+   **30 sekundach**, chyba że administrator potwierdzi w interfejsie, że
+   nowe ustawienia działają - dokładnie taki wzorzec jak w pfSense/OPNsense.
+   Do zaprojektowania: mechanizm powrotu musi przeżyć nawet, gdyby sama
+   aplikacja/worker padły w międzyczasie (prawdopodobnie `systemd-run
+   --on-active=30s` jako niezależny, zaplanowany timer, nie wątek w
+   samym procesie Flask).
+
+   **Tailscale** - w dwóch oddzielnych krokach na wyraźną prośbę: (1)
+   instalacja + `tailscale up` (bezpieczne, tylko dodaje dostęp, link do
+   zalogowania pokazany w interfejsie) - jeszcze nie zrobione; (2)
+   "ukrycie" z sieci lokalnej (blokada dostępu po zwykłym IP) - osobny,
+   świadomy krok dopiero po potwierdzeniu że Tailscale faktycznie działa,
+   żeby nie łączyć dwóch ryzyk zablokowania się naraz.
+8. **Zdalne montowanie** - jeszcze nie omówione w szczegółach.
+9. **Backupy przez rsync (lub inne metody)** - jeszcze nie omówione w
    szczegółach.
-9. **Log operacji** - osobna sekcja z jasnym podziałem: co się wykonało
+10. **Log operacji** - osobna sekcja z jasnym podziałem: co się wykonało
    poprawnie, co się nie udało i dlaczego. Zaplanowane jako następny krok,
    żeby objąć od razu wszystkie istniejące operacje (użytkownicy, udziały,
    klucze) zamiast dorabiać to osobno do każdej. Magazyn stanu

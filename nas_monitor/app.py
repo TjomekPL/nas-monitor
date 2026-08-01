@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from flask import Flask, jsonify, render_template, request
 
-from nas_monitor import monitor, users, smb, smb_shares, ssh_keys
+from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network
 
 app = Flask(__name__)
 
@@ -243,6 +243,11 @@ def api_ssh_keys_remove_deployment(username):
     if not result["success"]:
         return jsonify({"success": False, "error": result["error"]}), 400
     return jsonify({"success": True})
+
+
+@app.route("/api/network")
+def api_network():
+    return jsonify(network.get_status())
 
 
 def main():
