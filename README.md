@@ -96,6 +96,7 @@ nas_monitor/
   users.py           - rdzeń: użytkownicy i grupy systemowe (wykrywanie + tworzenie)
   smb.py             - backend SMB: hasła Samby, dowiązanie do kont systemowych
   smb_shares.py       - backend SMB: udziały (tworzenie/edycja/usuwanie pod /srv, testparm+rollback)
+  ssh_keys.py          - klucze SSH per użytkownik: generowanie + wysyłanie na zdalne urządzenie
   app.py              - Flask app, wszystkie trasy
   templates/
     dashboard.html
@@ -107,6 +108,7 @@ tests/
   test_users.py        - testy kont/grup systemowych
   test_smb.py           - testy warstwy SMB (użytkownicy)
   test_smb_shares.py     - testy warstwy SMB (udziały) - w tym prawdziwe testy na tmpdir dla configparser
+  test_ssh_keys.py        - testy kluczy SSH
 nas-monitor.service      - jednostka systemd (uruchamia przez gunicorn)
 ```
 
@@ -175,4 +177,22 @@ klienta), więc ta separacja jest zamierzona.
    tylko generować komendę do ręcznego wklejenia). Wymaga dodatkowych
    zabezpieczeń przed budową: weryfikacja że dysk jest pusty/niezamontowany,
    wykrywanie istniejącego superbloku, wyraźne ostrzeżenie o nieodwracalności
-   przed każdym potwierdzeniem.
+   przed każdym potwierdzeniem. **Odłożone na razie** - do czasu, aż będzie
+   dostępna maszyna z wolnymi dyskami do testowania na żywo.
+5. **Certyfikaty (klucze SSH) dla użytkowników** - ✅ zrobione. Chodziło o
+   klucze SSH (nie certyfikaty X.509) - do logowania/rsync na inne maszyny
+   bez hasła, niezależnie od hasła SMB (to jest dokładnie ten problem
+   "dane Samby ≠ dane SSH" z sekcji architektury wyżej). Generowanie pary
+   ed25519 w `~/.ssh` konta (tylko dla kont z włączonym logowaniem/SSH),
+   i "wysyłanie" klucza publicznego na zdalne urządzenie przez
+   `sshpass`+`ssh-copy-id` - hasło do zdalnej maszyny używane raz, przez
+   zmienną środowiskową (nie argv, gdzie `ps` by je widział), nigdzie nie
+   zapisywane. Sprawdzone naprawdę: cały łańcuch (generuj → wyślij →
+   prawdziwe bezhasłowe SSH) na żywym `sshd`.
+6. **Zdalne montowanie** - jeszcze nie omówione w szczegółach.
+7. **Backupy przez rsync (lub inne metody)** - jeszcze nie omówione w
+   szczegółach.
+8. **Log operacji** - osobna sekcja z jasnym podziałem: co się wykonało
+   poprawnie, co się nie udało i dlaczego. Zaplanowane jako następny krok,
+   żeby objąć od razu wszystkie istniejące operacje (użytkownicy, udziały,
+   klucze) zamiast dorabiać to osobno do każdej.

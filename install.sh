@@ -10,9 +10,9 @@ fi
 
 APP_DIR="/opt/nas-monitor"
 
-echo "==> Instalowanie pakietów systemowych (smartmontools, mdadm, samba, python3-venv)..."
+echo "==> Instalowanie pakietów systemowych (smartmontools, mdadm, samba, sshpass, python3-venv)..."
 apt-get update -qq
-apt-get install -y smartmontools mdadm samba python3-venv
+apt-get install -y smartmontools mdadm samba sshpass openssh-client python3-venv
 
 echo "==> Kopiowanie plików do ${APP_DIR}..."
 mkdir -p "${APP_DIR}"
@@ -25,7 +25,12 @@ python3 -m venv "${APP_DIR}/venv"
 echo "==> Instalacja usługi systemd..."
 cp nas-monitor.service /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now nas-monitor
+systemctl enable nas-monitor
+# restart (not "enable --now") so re-running this script on an already
+# running service actually picks up new code - "--now" is a no-op start
+# if the unit is already active, which silently left old code loaded
+# after copying new files in place.
+systemctl restart nas-monitor
 
 IP=$(hostname -I | awk '{print $1}')
 echo "==> Gotowe. Dashboard: http://${IP}:8420"

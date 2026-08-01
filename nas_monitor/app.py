@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from flask import Flask, jsonify, render_template, request
 
-from nas_monitor import monitor, users, smb, smb_shares
+from nas_monitor import monitor, users, smb, smb_shares, ssh_keys
 
 app = Flask(__name__)
 
@@ -193,6 +193,42 @@ def api_shares_delete(name):
     if not result["success"]:
         return jsonify({"success": False, "error": result["error"]}), 400
     return jsonify({"success": True, "share": result})
+
+
+@app.route("/api/ssh-keys")
+def api_ssh_keys():
+    system_users = users.list_system_users()
+    statuses = [ssh_keys.get_key_status(u["username"]) for u in system_users]
+    return jsonify({"keys": statuses})
+
+
+@app.route("/api/ssh-keys/<username>/generate", methods=["POST"])
+def api_ssh_keys_generate(username):
+    result = ssh_keys.generate_key(username)
+    if not result["success"]:
+        return jsonify({"success": False, "error": result["error"]}), 400
+    return jsonify({"success": True, "public_key": result["public_key"]})
+
+
+@app.route("/api/ssh-keys/<username>/deploy", methods=["POST"])
+def api_ssh_keys_deploy(username):
+    data = request.get_json(force=True, silent=True) or {}
+    remote_host = (data.get("remote_host") or "").strip()
+    remote_user = (data.get("remote_user") or "").strip()
+    remote_password = data.get("remote_password") or ""
+
+    result = ssh_keys.deploy_key_to_remote(username, remote_host, remote_user, remote_password)
+    if not result["success"]:
+        return jsonify({"success": False, "error": result["error"]}), 400
+    return jsonify({"success": True})
+
+
+@app.route("/api/ssh-keys/<username>/delete", methods=["POST"])
+def api_ssh_keys_delete(username):
+    result = ssh_keys.delete_key(username)
+    if not result["success"]:
+        return jsonify({"success": False, "error": result["error"]}), 400
+    return jsonify({"success": True})
 
 
 def main():

@@ -36,12 +36,25 @@ def find_binary(name: str) -> str | None:
     return None
 
 
-def run(cmd: list[str], timeout: int = DEFAULT_TIMEOUT, input_text: str | None = None) -> tuple[int, str, str]:
+def run(
+    cmd: list[str],
+    timeout: int = DEFAULT_TIMEOUT,
+    input_text: str | None = None,
+    extra_env: dict[str, str] | None = None,
+) -> tuple[int, str, str]:
     """Run a command, never raise. Returns (returncode, stdout, stderr).
 
     input_text is piped to stdin when given (e.g. feeding a password to
     smbpasswd -s without it ever appearing in a process listing / argv).
+
+    extra_env adds/overrides environment variables for just this call
+    (e.g. SSHPASS for sshpass -e) - safer than passing a secret as a CLI
+    argument, which is visible to anyone on the box via `ps`.
     """
+    env = None
+    if extra_env:
+        env = os.environ.copy()
+        env.update(extra_env)
     try:
         proc = subprocess.run(
             cmd,
@@ -49,6 +62,7 @@ def run(cmd: list[str], timeout: int = DEFAULT_TIMEOUT, input_text: str | None =
             text=True,
             timeout=timeout,
             input=input_text,
+            env=env,
         )
         return proc.returncode, proc.stdout, proc.stderr
     except FileNotFoundError:

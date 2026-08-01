@@ -164,6 +164,7 @@ function renderUsers(usersList) {
     const row = userRowTemplate.content.cloneNode(true);
     const displayName = u.display_name || u.username;
     row.querySelector(".display-name").textContent = displayName;
+    row.querySelector(".display-name").title = displayName;
     const subEl = row.querySelector(".username.sub");
     if (displayName !== u.username) {
       subEl.textContent = `konto: ${u.username}`;
@@ -423,7 +424,10 @@ function renderShares(sharesList) {
   const tbody = document.createElement("tbody");
   for (const sh of sharesList) {
     const row = shareRowTemplate.content.cloneNode(true);
-    row.querySelector(".display-name").textContent = sh.name + (sh.managed ? "" : " (spoza tego narzędzia)");
+    const shareLabel = sh.name + (sh.managed ? "" : " (spoza tego narzędzia)");
+    const shareNameEl = row.querySelector(".display-name");
+    shareNameEl.textContent = shareLabel;
+    shareNameEl.title = shareLabel;
     row.querySelector(".path").textContent = sh.path;
     row.querySelector(".comment").textContent = sh.comment || "\u2013";
     row.querySelector(".share-users").textContent = formatPermissionsSummary(sh.permissions);
@@ -460,18 +464,24 @@ function populateSharePermissionsList(existingPermissions) {
     const row = document.createElement("div");
     row.className = "permission-row";
 
+    const info = document.createElement("div");
+    info.className = "permission-info";
+
     const name = document.createElement("span");
     name.className = "permission-user";
-    name.textContent = u.display_name || u.username;
-    row.appendChild(name);
+    const displayName = u.display_name || u.username;
+    name.textContent = displayName;
+    name.title = displayName;
+    info.appendChild(name);
 
     if (!u.has_smb) {
       const warn = document.createElement("span");
       warn.className = "field-hint";
       warn.style.color = "var(--warn)";
       warn.textContent = "(brak hasła SMB)";
-      row.appendChild(warn);
+      info.appendChild(warn);
     }
+    row.appendChild(info);
 
     const select = document.createElement("select");
     select.dataset.username = u.username;
@@ -615,11 +625,163 @@ async function deleteShare(name) {
   }
 }
 
+// --------------------------------------------------------------------
+// SSH keys ("Certyfikaty")
+// --------------------------------------------------------------------
+
+const sshKeysContainer = document.getElementById("ssh-keys-container");
+const sshKeyRowTemplate = document.getElementById("ssh-key-row-template");
+const deployKeyDialog = document.getElementById("deploy-key-dialog");
+const deployKeyForm = document.getElementById("deploy-key-form");
+const deployKeyTitle = document.getElementById("deploy-key-title");
+const deployKeyCancel = document.getElementById("deploy-key-cancel");
+const deployKeyError = document.getElementById("deploy-key-error");
+const deployHostInput = document.getElementById("deploy-host");
+const deployRemoteUserInput = document.getElementById("deploy-remote-user");
+const deployPasswordInput = document.getElementById("deploy-password");
+const deployKeySubmitBtn = document.getElementById("deploy-key-submit");
+
+let deployingKeyForUsername = null;
+
+function renderSshKeys(keysList) {
+  sshKeysContainer.innerHTML = "";
+  if (!keysList.length) {
+    emptyState(sshKeysContainer, "Nie wykryto żadnych kont użytkowników.");
+    return;
+  }
+  const table = document.createElement("table");
+  table.innerHTML = "<thead><tr><th>Użytkownik</th><th>Klucz</th><th>Klucz publiczny</th><th></th></tr></thead>";
+  const tbody = document.createElement("tbody");
+  for (const k of keysList) {
+    if (k.error) continue; // user lookup failed - skip silently, shouldn't normally happen
+    const row = sshKeyRowTemplate.content.cloneNode(true);
+    const u = lastKnownUsersData.find((x) => x.username === k.username);
+    const keyLabel = (u && (u.display_name || u.username)) || k.username;
+    const keyNameEl = row.querySelector(".display-name");
+    keyNameEl.textContent = keyLabel;
+    keyNameEl.title = keyLabel;
+
+    const pill = row.querySelector(".key-cell .pill");
+    pill.textContent = k.has_key ? "jest" : "brak";
+    pill.classList.add(k.has_key ? "pill-ok" : "pill-neutral");
+
+    row.querySelector(".pubkey").textContent = k.public_key ? k.public_key.slice(0, 40) + "..." : "\u2013";
+
+    const generateBtn = row.querySelector(".generate-btn");
+    const deployBtn = row.querySelector(".deploy-btn");
+    const deleteBtn = row.querySelector(".delete-key-btn");
+
+    if (k.has_key) {
+      generateBtn.remove();
+      deployBtn.addEventListener("click", () => openDeployDialog(k.username));
+      deleteBtn.addEventListener("click", () => deleteSshKey(k.username));
+    } else {
+      deployBtn.remove();
+      deleteBtn.remove();
+      if (!k.can_login) {
+        generateBtn.disabled = true;
+        generateBtn.title = "To konto ma wyłączone logowanie/SSH - włącz je najpierw w edycji użytkownika";
+      } else {
+        generateBtn.addEventListener("click", () => generateSshKey(k.username));
+      }
+    }
+
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+  sshKeysContainer.appendChild(table);
+}
+
+async function loadSshKeys() {
+  if (deployKeyDialog.open) return;
+  try {
+    const res = await fetch("/api/ssh-keys");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderSshKeys(data.keys || []);
+  } catch (err) {
+    emptyState(sshKeysContainer, `Błąd wczytywania kluczy (${err.message})`);
+  }
+}
+
+async function generateSshKey(username) {
+  if (!window.confirm(`Wygenerować nową parę kluczy SSH dla "${username}"?`)) return;
+  try {
+    const res = await fetch(`/api/ssh-keys/${encodeURIComponent(username)}/generate`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      window.alert(data.error || `Błąd HTTP ${res.status}`);
+      return;
+    }
+    await loadSshKeys();
+  } catch (err) {
+    window.alert(`Błąd połączenia: ${err.message}`);
+  }
+}
+
+async function deleteSshKey(username) {
+  if (!window.confirm(`Usunąć klucz SSH dla "${username}"? Będzie trzeba go ponownie wysłać wszędzie, gdzie był zainstalowany.`)) return;
+  try {
+    const res = await fetch(`/api/ssh-keys/${encodeURIComponent(username)}/delete`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      window.alert(data.error || `Błąd HTTP ${res.status}`);
+      return;
+    }
+    await loadSshKeys();
+  } catch (err) {
+    window.alert(`Błąd połączenia: ${err.message}`);
+  }
+}
+
+function openDeployDialog(username) {
+  deployKeyForm.reset();
+  deployKeyError.textContent = "";
+  deployingKeyForUsername = username;
+  deployKeyTitle.textContent = `Wyślij klucz "${username}" na zdalne urządzenie`;
+  deployKeyDialog.showModal();
+}
+
+deployKeyCancel.addEventListener("click", () => deployKeyDialog.close());
+
+deployKeyForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  deployKeyError.textContent = "";
+
+  const remoteHost = deployHostInput.value.trim();
+  const remoteUser = deployRemoteUserInput.value.trim();
+  const remotePassword = deployPasswordInput.value;
+
+  if (!window.confirm(`Zainstalować klucz na ${remoteUser}@${remoteHost}?`)) return;
+
+  deployKeySubmitBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/ssh-keys/${encodeURIComponent(deployingKeyForUsername)}/deploy`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ remote_host: remoteHost, remote_user: remoteUser, remote_password: remotePassword }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      deployKeyError.textContent = data.error || `Błąd HTTP ${res.status}`;
+      return;
+    }
+    deployKeyDialog.close();
+    window.alert("Klucz zainstalowany poprawnie.");
+  } catch (err) {
+    deployKeyError.textContent = `Błąd połączenia: ${err.message}`;
+  } finally {
+    deployKeySubmitBtn.disabled = false;
+  }
+});
+
 loadShares();
 setInterval(loadShares, REFRESH_MS);
 
 // Kick off polling now that everything above is declared.
 loadUsers();
 setInterval(loadUsers, REFRESH_MS);
+loadSshKeys();
+setInterval(loadSshKeys, REFRESH_MS);
 refresh();
 setInterval(refresh, REFRESH_MS);

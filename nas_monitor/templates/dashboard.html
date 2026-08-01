@@ -47,6 +47,14 @@
         <button id="add-user-btn" class="btn-primary" type="button">+ Dodaj użytkownika</button>
       </div>
       <div id="users-container" class="user-table"></div>
+    </section>
+
+    <section>
+      <h2>Certyfikaty (klucze SSH)</h2>
+      <p class="subtitle">Do logowania/synchronizacji (np. rsync) na inne maszyny bez hasła - niezależne od hasła SMB.</p>
+      <div id="ssh-keys-container" class="user-table"></div>
+    </section>
+
     <section>
       <div class="section-head">
         <h2>Udziały</h2>
@@ -82,6 +90,34 @@
       <div class="dialog-actions">
         <button type="button" id="share-cancel">Anuluj</button>
         <button type="submit" id="share-submit" class="btn-primary">Utwórz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="deploy-key-dialog">
+    <form id="deploy-key-form" method="dialog">
+      <h3 id="deploy-key-title">Wyślij klucz na zdalne urządzenie</h3>
+
+      <label>
+        <span class="label-text">Adres/nazwa zdalnego hosta</span>
+        <input type="text" id="deploy-host" required placeholder="np. 192.168.0.20" autocomplete="off">
+      </label>
+
+      <label>
+        <span class="label-text">Użytkownik na zdalnym urządzeniu</span>
+        <input type="text" id="deploy-remote-user" required placeholder="np. wieslaw" autocomplete="off">
+      </label>
+
+      <label>
+        <span class="label-text">Hasło zdalnego konta (użyte tylko raz, nigdzie niezapisywane)</span>
+        <input type="password" id="deploy-password" required autocomplete="off">
+      </label>
+
+      <p class="form-error" id="deploy-key-error"></p>
+
+      <div class="dialog-actions">
+        <button type="button" id="deploy-key-cancel">Anuluj</button>
+        <button type="submit" id="deploy-key-submit" class="btn-primary">Wyślij</button>
       </div>
     </form>
   </dialog>
@@ -172,6 +208,19 @@
         <button type="button" class="link-btn edit-btn">Edytuj</button>
         <button type="button" class="link-btn smb-remove-btn">tylko SMB</button>
         <button type="button" class="link-btn danger delete-btn">Usuń</button>
+      </td>
+    </tr>
+  </template>
+
+  <template id="ssh-key-row-template">
+    <tr>
+      <td class="display-name"></td>
+      <td class="key-cell"><span class="pill"></span></td>
+      <td class="pubkey mono"></td>
+      <td class="row-actions">
+        <button type="button" class="link-btn generate-btn">Generuj</button>
+        <button type="button" class="link-btn deploy-btn">Wyślij na urządzenie</button>
+        <button type="button" class="link-btn danger delete-key-btn">Usuń</button>
       </td>
     </tr>
   </template>
