@@ -21,7 +21,7 @@ macierzy, ta sekcja po prostu pokaże "brak wykrytych macierzy".)
 ## Instalacja (jedna komenda)
 
 ```bash
-git clone https://github.com/<konto>/nas-monitor.git
+git clone https://github.com/TjomekPL/nas-monitor.git
 cd nas-monitor
 sudo ./install.sh
 ```
