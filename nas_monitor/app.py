@@ -72,6 +72,63 @@ def api_users_create():
     return jsonify({"success": True, "user": user_result})
 
 
+@app.route("/api/users/<username>/update", methods=["POST"])
+def api_users_update(username):
+    data = request.get_json(force=True, silent=True) or {}
+    groups = [g.strip() for g in (data.get("groups") or []) if g.strip()]
+    allow_login = bool(data.get("allow_login", False))
+    display_name = (data.get("display_name") or "").strip() or None
+    password = data.get("password") or ""  # empty = leave SMB password unchanged
+
+    user_result = users.update_user(
+        username,
+        groups=groups,
+        shell="/bin/bash" if allow_login else users.default_nologin_shell(),
+        display_name=display_name,
+    )
+    if not user_result["success"]:
+        return jsonify({"success": False, "step": "user", "error": user_result["error"]}), 400
+
+    if password:
+        smb_result = smb.set_password(username, password)
+        if not smb_result["success"]:
+            return jsonify(
+                {
+                    "success": False,
+                    "step": "smb",
+                    "error": smb_result["error"],
+                    "note": "Dane konta zostały zaktualizowane, ale nie udało się zmienić hasła SMB.",
+                }
+            ), 400
+
+    return jsonify({"success": True, "user": user_result})
+
+
+@app.route("/api/users/<username>/remove-smb", methods=["POST"])
+def api_users_remove_smb(username):
+    result = smb.remove_user(username)
+    if not result["success"]:
+        return jsonify({"success": False, "error": result["error"]}), 400
+    return jsonify({"success": True})
+
+
+@app.route("/api/users/<username>/delete", methods=["POST"])
+def api_users_delete(username):
+    data = request.get_json(force=True, silent=True) or {}
+    remove_home = bool(data.get("remove_home", False))
+
+    # Best-effort: remove any SMB access first (less destructive than
+    # deleting the account). A missing/already-gone SMB entry isn't a
+    # failure - the point is the account being gone, not this side effect.
+    smb.remove_user(username)
+
+    user_result = users.delete_user(username, remove_home=remove_home)
+    if not user_result["success"]:
+        return jsonify({"success": False, "step": "user", "error": user_result["error"]}), 400
+
+    return jsonify({"success": True})
+
+
 def main():
     # Binds to all interfaces so it's reachable on the LAN - this is a
     # read-only dashboard with no authentication yet, so only run it on

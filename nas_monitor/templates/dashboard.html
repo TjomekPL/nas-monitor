@@ -40,17 +40,17 @@
 
   <dialog id="add-user-dialog">
     <form id="add-user-form" method="dialog">
-      <h3>Nowy użytkownik</h3>
+      <h3 id="user-dialog-title">Nowy użytkownik</h3>
 
-      <label>
-        Nazwa użytkownika
+      <label id="username-label">
+        <span class="label-text">Nazwa użytkownika</span>
         <input type="text" id="new-username" pattern="[A-Za-z_][A-Za-z0-9_-]{0,31}" required
                placeholder="np. Tomek" autocomplete="off">
         <span class="field-hint" id="username-preview"></span>
       </label>
 
-      <label>
-        Hasło SMB
+      <label id="password-label">
+        <span class="label-text">Hasło SMB</span>
         <input type="password" id="new-password" required autocomplete="new-password">
       </label>
 
@@ -120,6 +120,11 @@
       <td class="login-cell"><span class="pill"></span></td>
       <td class="smb-cell"><span class="pill"></span></td>
       <td class="groups mono"></td>
+      <td class="row-actions">
+        <button type="button" class="link-btn edit-btn">Edytuj</button>
+        <button type="button" class="link-btn smb-remove-btn">tylko SMB</button>
+        <button type="button" class="link-btn danger delete-btn">Usuń</button>
+      </td>
     </tr>
   </template>
 

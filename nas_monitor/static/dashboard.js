@@ -110,8 +110,16 @@ const addUserBtn = document.getElementById("add-user-btn");
 const addUserCancel = document.getElementById("add-user-cancel");
 const addUserError = document.getElementById("add-user-error");
 const groupsChecklist = document.getElementById("groups-checklist");
+const dialogTitle = document.getElementById("user-dialog-title");
+const usernameLabel = document.getElementById("username-label");
+const passwordLabel = document.getElementById("password-label");
+const usernameInput = document.getElementById("new-username");
+const usernamePreview = document.getElementById("username-preview");
+const passwordInput = document.getElementById("new-password");
+const submitBtn = document.getElementById("add-user-submit");
 
 let knownGroups = [];
+let editingUsername = null; // null = create mode, otherwise the account being edited
 
 function renderUsers(usersList) {
   usersContainer.innerHTML = "";
@@ -120,7 +128,7 @@ function renderUsers(usersList) {
     return;
   }
   const table = document.createElement("table");
-  table.innerHTML = "<thead><tr><th>Użytkownik</th><th>Logowanie/SSH</th><th>Dostęp SMB</th><th>Grupy</th></tr></thead>";
+  table.innerHTML = "<thead><tr><th>Użytkownik</th><th>Logowanie/SSH</th><th>Dostęp SMB</th><th>Grupy</th><th></th></tr></thead>";
   const tbody = document.createElement("tbody");
   for (const u of usersList) {
     const row = userRowTemplate.content.cloneNode(true);
@@ -142,14 +150,27 @@ function renderUsers(usersList) {
     smbPill.classList.add(u.has_smb ? "pill-ok" : "pill-neutral");
 
     row.querySelector(".groups").textContent = u.groups && u.groups.length ? u.groups.join(", ") : "\u2013";
+
+    row.querySelector(".edit-btn").addEventListener("click", () => openUserDialog("edit", u));
+
+    const smbRemoveBtn = row.querySelector(".smb-remove-btn");
+    if (u.has_smb) {
+      smbRemoveBtn.addEventListener("click", () => removeSmbAccess(u.username, displayName));
+    } else {
+      smbRemoveBtn.remove();
+    }
+
+    row.querySelector(".delete-btn").addEventListener("click", () => deleteUser(u.username, displayName));
+
     tbody.appendChild(row);
   }
   table.appendChild(tbody);
   usersContainer.appendChild(table);
 }
 
-function renderGroupsChecklist(groups) {
+function renderGroupsChecklist(groups, checkedNames) {
   knownGroups = groups;
+  const checked = new Set(checkedNames || []);
   groupsChecklist.innerHTML = "";
   if (!groups.length) {
     const p = document.createElement("p");
@@ -165,11 +186,14 @@ function renderGroupsChecklist(groups) {
     cb.type = "checkbox";
     cb.value = g.name;
     cb.name = "group";
+    cb.checked = checked.has(g.name);
     label.appendChild(cb);
     label.append(` ${g.name}`);
     groupsChecklist.appendChild(label);
   }
 }
+
+let lastKnownGroupsData = [];
 
 async function loadUsers() {
   if (addUserDialog.open) return; // don't rebuild the table under an open form
@@ -178,16 +202,15 @@ async function loadUsers() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     renderUsers(data.users || []);
-    renderGroupsChecklist(data.groups || []);
+    lastKnownGroupsData = data.groups || [];
+    renderGroupsChecklist(lastKnownGroupsData);
   } catch (err) {
     emptyState(usersContainer, `Błąd wczytywania użytkowników (${err.message})`);
   }
 }
 
-const usernameInput = document.getElementById("new-username");
-const usernamePreview = document.getElementById("username-preview");
-
 function updateUsernamePreview() {
+  if (editingUsername) return; // preview only makes sense while naming a new account
   const raw = usernameInput.value.trim();
   if (!raw) {
     usernamePreview.textContent = "";
@@ -200,41 +223,76 @@ function updateUsernamePreview() {
 }
 usernameInput.addEventListener("input", updateUsernamePreview);
 
-addUserBtn.addEventListener("click", () => {
+function openUserDialog(mode, user) {
   addUserForm.reset();
   addUserError.textContent = "";
   usernamePreview.textContent = "";
-  addUserDialog.showModal();
-});
 
+  if (mode === "edit") {
+    editingUsername = user.username;
+    dialogTitle.textContent = `Edytuj: ${user.display_name || user.username}`;
+    usernameLabel.querySelector(".label-text").textContent = "Nazwa (etykieta)";
+    usernameInput.value = user.display_name || user.username;
+    usernameInput.disabled = false; // still editable - it's just the display name now
+    usernamePreview.textContent = `konto systemowe: ${user.username} (nie do zmiany tutaj)`;
+    passwordLabel.querySelector(".label-text").textContent = "Nowe hasło SMB";
+    passwordInput.required = false;
+    passwordInput.placeholder = "zostaw puste, aby nie zmieniać";
+    document.getElementById("new-allow-login").checked = user.can_login;
+    renderGroupsChecklist(lastKnownGroupsData, user.groups);
+    submitBtn.textContent = "Zapisz zmiany";
+  } else {
+    editingUsername = null;
+    dialogTitle.textContent = "Nowy użytkownik";
+    usernameLabel.querySelector(".label-text").textContent = "Nazwa użytkownika";
+    usernameInput.disabled = false;
+    passwordLabel.querySelector(".label-text").textContent = "Hasło SMB";
+    passwordInput.required = true;
+    passwordInput.placeholder = "";
+    renderGroupsChecklist(lastKnownGroupsData);
+    submitBtn.textContent = "Utwórz";
+  }
+
+  addUserDialog.showModal();
+}
+
+addUserBtn.addEventListener("click", () => openUserDialog("create"));
 addUserCancel.addEventListener("click", () => addUserDialog.close());
 
 addUserForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   addUserError.textContent = "";
 
-  const username = usernameInput.value.trim();
-  const password = document.getElementById("new-password").value;
+  const nameField = usernameInput.value.trim();
+  const password = passwordInput.value;
   const allowLogin = document.getElementById("new-allow-login").checked;
   const newGroupName = document.getElementById("new-group-name").value.trim();
 
   const groups = Array.from(groupsChecklist.querySelectorAll("input[name='group']:checked")).map((cb) => cb.value);
   if (newGroupName) groups.push(newGroupName);
 
-  const resolvedAccount = username.toLowerCase();
-  const accountNote = resolvedAccount !== username ? ` (konto systemowe: ${resolvedAccount})` : "";
-  const confirmMsg = allowLogin
-    ? `Utworzyć użytkownika "${username}"${accountNote} z możliwością logowania/SSH?`
-    : `Utworzyć użytkownika "${username}"${accountNote} bez możliwości logowania (tylko SMB)?`;
+  let confirmMsg, url, body;
+  if (editingUsername) {
+    confirmMsg = `Zapisać zmiany dla "${editingUsername}"?`;
+    url = `/api/users/${encodeURIComponent(editingUsername)}/update`;
+    body = { display_name: nameField, groups, allow_login: allowLogin, password };
+  } else {
+    const resolvedAccount = nameField.toLowerCase();
+    const accountNote = resolvedAccount !== nameField ? ` (konto systemowe: ${resolvedAccount})` : "";
+    confirmMsg = allowLogin
+      ? `Utworzyć użytkownika "${nameField}"${accountNote} z możliwością logowania/SSH?`
+      : `Utworzyć użytkownika "${nameField}"${accountNote} bez możliwości logowania (tylko SMB)?`;
+    url = "/api/users/create";
+    body = { username: nameField, password, groups, allow_login: allowLogin };
+  }
   if (!window.confirm(confirmMsg)) return;
 
-  const submitBtn = document.getElementById("add-user-submit");
   submitBtn.disabled = true;
   try {
-    const res = await fetch("/api/users/create", {
+    const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, groups, allow_login: allowLogin }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
@@ -249,6 +307,44 @@ addUserForm.addEventListener("submit", async (ev) => {
     submitBtn.disabled = false;
   }
 });
+
+async function removeSmbAccess(username, displayName) {
+  if (!window.confirm(`Usunąć dostęp SMB dla "${displayName}"? Konto systemowe zostanie zachowane.`)) return;
+  try {
+    const res = await fetch(`/api/users/${encodeURIComponent(username)}/remove-smb`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      window.alert(data.error || `Błąd HTTP ${res.status}`);
+      return;
+    }
+    await loadUsers();
+  } catch (err) {
+    window.alert(`Błąd połączenia: ${err.message}`);
+  }
+}
+
+async function deleteUser(username, displayName) {
+  const removeHome = window.confirm(
+    `Usunąć użytkownika "${displayName}" (konto: ${username})? To usuwa konto systemowe i dostęp SMB.\n\n` +
+    `Kliknij OK, aby usunąć BEZ katalogu domowego (bezpieczniej), Anuluj aby przerwać.`
+  );
+  if (!removeHome) return;
+  try {
+    const res = await fetch(`/api/users/${encodeURIComponent(username)}/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ remove_home: false }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      window.alert(data.error || `Błąd HTTP ${res.status}`);
+      return;
+    }
+    await loadUsers();
+  } catch (err) {
+    window.alert(`Błąd połączenia: ${err.message}`);
+  }
+}
 
 loadUsers();
 setInterval(loadUsers, REFRESH_MS);

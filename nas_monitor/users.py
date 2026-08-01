@@ -42,7 +42,7 @@ _NOLOGIN_SHELLS = {"/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "/usr/bin
 _VALID_USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
 
-def _default_nologin_shell() -> str:
+def default_nologin_shell() -> str:
     for candidate in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "/usr/bin/false"):
         if os.path.isfile(candidate):
             return candidate
@@ -185,7 +185,7 @@ def create_user(
             result["error"] = f"Nie udało się przygotować grupy '{g}': {group_result['error']}"
             return result
 
-    resolved_shell = shell or _default_nologin_shell()
+    resolved_shell = shell or default_nologin_shell()
 
     cmd = [useradd_path, "-s", resolved_shell, "-c", display_name]
     if create_home:
@@ -204,4 +204,98 @@ def create_user(
     result["success"] = True
     result["shell"] = resolved_shell
     result["groups"] = groups or []
+    return result
+
+
+def update_user(
+    username: str,
+    groups: list[str] | None = None,
+    shell: str | None = None,
+    display_name: str | None = None,
+) -> dict[str, Any]:
+    """Update an existing account. Every parameter is optional - pass None
+    for anything you don't want to touch. groups=[] explicitly clears all
+    secondary group memberships (usermod -G replaces the whole list, so
+    this always sends the FULL desired membership, not a delta).
+
+    Renaming the account itself is intentionally not supported here - it
+    touches the home directory path and can strand running processes; for
+    these disposable SMB-only accounts, delete + recreate is the safer
+    equivalent.
+    """
+    result: dict[str, Any] = {"username": username, "success": False, "error": None}
+
+    if not user_exists(username):
+        result["error"] = f"Użytkownik '{username}' nie istnieje"
+        return result
+
+    usermod_path = system_tools.find_binary("usermod")
+    if usermod_path is None:
+        result["error"] = "usermod not installed"
+        return result
+
+    cmd = [usermod_path]
+
+    if groups is not None:
+        for g in groups:
+            if not is_valid_username(g):
+                result["error"] = f"Nieprawidłowa nazwa grupy: {g}"
+                return result
+        for g in groups:
+            group_result = ensure_group_exists(g)
+            if not group_result["success"]:
+                result["error"] = f"Nie udało się przygotować grupy '{g}': {group_result['error']}"
+                return result
+        cmd += ["-G", ",".join(groups)]
+
+    if shell is not None:
+        cmd += ["-s", shell]
+
+    if display_name is not None:
+        if ":" in display_name or "\n" in display_name:
+            result["error"] = "Nazwa nie może zawierać ':' ani znaku nowej linii"
+            return result
+        cmd += ["-c", display_name]
+
+    if len(cmd) == 1:
+        result["success"] = True  # nothing requested to change
+        return result
+
+    cmd.append(username)
+    code, out, err = system_tools.run(cmd)
+    if code != 0:
+        result["error"] = err.strip() or f"usermod exited {code}"
+        return result
+
+    result["success"] = True
+    return result
+
+
+def delete_user(username: str, remove_home: bool = False) -> dict[str, Any]:
+    """Remove a system account. remove_home defaults to False - these are
+    typically SMB-only accounts whose actual files live in a share
+    directory, not the account's own home dir, so there's rarely a reason
+    to force this and no reason to risk it by default."""
+    result: dict[str, Any] = {"username": username, "success": False, "error": None}
+
+    if not user_exists(username):
+        result["error"] = f"Użytkownik '{username}' nie istnieje"
+        return result
+
+    userdel_path = system_tools.find_binary("userdel")
+    if userdel_path is None:
+        result["error"] = "userdel not installed"
+        return result
+
+    cmd = [userdel_path]
+    if remove_home:
+        cmd.append("-r")
+    cmd.append(username)
+
+    code, out, err = system_tools.run(cmd)
+    if code != 0:
+        result["error"] = err.strip() or f"userdel exited {code}"
+        return result
+
+    result["success"] = True
     return result

@@ -107,11 +107,15 @@ klienta), więc ta separacja jest zamierzona.
 ## Plan / kolejne fazy
 
 1. **Monitoring dysków i RAID (odczyt)** - ✅ zrobione.
-2. **Użytkownicy i grupy (wykrywanie + tworzenie)** - ✅ zrobione. Wykrywanie
-   czyta rzeczywisty stan systemu (`pwd`/`grp`/`pdbedit -L`), nie osobną
-   bazę. Tworzenie: jeden formularz zakłada konto systemowe (domyślnie
-   `nologin`) + hasło SMB + przypisanie do grup (nowe grupy tworzone
-   automatycznie, jeśli nie istnieją).
+2. **Użytkownicy i grupy (pełny cykl: wykrywanie, tworzenie, edycja, usuwanie)** - ✅
+   zrobione. Wykrywanie czyta rzeczywisty stan systemu (`pwd`/`grp`/`pdbedit -L`),
+   nie osobną bazę. Tworzenie: jeden formularz zakłada konto systemowe (domyślnie
+   `nologin`) + hasło SMB + grupy (nowe grupy tworzone automatycznie). Duże litery
+   w nazwie (np. "Tomek") stają się kontem `tomek` + etykietą GECOS "Tomek".
+   Edycja: grupy (pełna podmiana listy), hasło SMB, prawo logowania, etykieta -
+   bez zmiany samej nazwy konta systemowego (zbyt ryzykowne; usuń+załóż od nowa
+   zamiast tego). Usuwanie: pełne (konto + SMB, katalog domowy NIE usuwany
+   domyślnie) albo tylko dostęp SMB (konto zostaje).
 3. **Udziały Samby** - jeszcze nie zaimplementowane: tworzenie/edycja
    `smb.conf`, przypisywanie użytkowników/grup do konkretnych udziałów.
 4. **Zarządzanie RAID** - tworzenie/rozbudowa/usuwanie macierzy. Ustalono:
