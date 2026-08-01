@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -22,6 +23,25 @@ from typing import Any
 
 
 SUBPROCESS_TIMEOUT = 8  # seconds - smartctl can be slow to wake spun-down disks
+
+# Fallback search dirs used when a binary isn't on PATH - this matters a lot
+# under systemd, where a unit's PATH= directive is easy to accidentally set
+# to something that doesn't include /usr/sbin etc. (see nas-monitor.service).
+_COMMON_BIN_DIRS = ("/usr/sbin", "/sbin", "/usr/bin", "/bin", "/usr/local/sbin", "/usr/local/bin")
+
+
+def _find_binary(name: str) -> str | None:
+    """Resolve a binary to an absolute path, independent of the current
+    process's PATH. Tries shutil.which() first (respects PATH when it's
+    sane), then falls back to the common system directories."""
+    found = shutil.which(name)
+    if found:
+        return found
+    for directory in _COMMON_BIN_DIRS:
+        candidate = os.path.join(directory, name)
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
 
 
 def _run(cmd: list[str], timeout: int = SUBPROCESS_TIMEOUT) -> tuple[int, str, str]:
@@ -57,11 +77,12 @@ def _human_size(num_bytes: int) -> str:
 
 def list_disks() -> list[dict[str, Any]]:
     """Enumerate physical disks via lsblk (whole disks only, no partitions)."""
-    if shutil.which("lsblk") is None:
+    lsblk_path = _find_binary("lsblk")
+    if lsblk_path is None:
         return []
 
     code, out, err = _run(
-        ["lsblk", "-d", "-b", "-J", "-o", "NAME,SIZE,MODEL,SERIAL,ROTA,TYPE,TRAN"]
+        [lsblk_path, "-d", "-b", "-J", "-o", "NAME,SIZE,MODEL,SERIAL,ROTA,TYPE,TRAN"]
     )
     if code != 0 or not out.strip():
         return []
@@ -122,11 +143,12 @@ def get_smart_health(device_path: str) -> dict[str, Any]:
         "error": None,
     }
 
-    if shutil.which("smartctl") is None:
+    smartctl_path = _find_binary("smartctl")
+    if smartctl_path is None:
         result["error"] = "smartctl not installed"
         return result
 
-    code, out, err = _run(["smartctl", "-a", "-j", device_path])
+    code, out, err = _run([smartctl_path, "-a", "-j", device_path])
     # smartctl uses bit-flags in its exit code; bit 0/1 are usage errors,
     # higher bits can still be set on a device that's perfectly readable
     # (e.g. bit 6 = "SMART status not ok"), so don't treat code != 0 as fatal
@@ -244,7 +266,7 @@ def get_raid_arrays() -> list[dict[str, Any]]:
         return []
 
     arrays = []
-    have_mdadm = shutil.which("mdadm") is not None
+    mdadm_path = _find_binary("mdadm")
 
     for name, info in mdstat.items():
         entry: dict[str, Any] = {
@@ -263,12 +285,12 @@ def get_raid_arrays() -> list[dict[str, Any]]:
             "error": None,
         }
 
-        if not have_mdadm:
+        if mdadm_path is None:
             entry["error"] = "mdadm not installed"
             arrays.append(entry)
             continue
 
-        code, out, err = _run(["mdadm", "--detail", "--export", f"/dev/{name}"])
+        code, out, err = _run([mdadm_path, "--detail", "--export", f"/dev/{name}"])
         if code != 0 or not out.strip():
             entry["error"] = err.strip() or f"mdadm exited {code}"
             arrays.append(entry)
