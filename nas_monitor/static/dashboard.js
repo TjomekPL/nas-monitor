@@ -346,9 +346,204 @@ async function deleteUser(username, displayName) {
   }
 }
 
-loadUsers();
-setInterval(loadUsers, REFRESH_MS);
+// --------------------------------------------------------------------
+// Shares
+// --------------------------------------------------------------------
+
+const sharesContainer = document.getElementById("shares-container");
+const shareRowTemplate = document.getElementById("share-row-template");
+const shareDialog = document.getElementById("share-dialog");
+const shareForm = document.getElementById("share-form");
+const addShareBtn = document.getElementById("add-share-btn");
+const shareCancel = document.getElementById("share-cancel");
+const shareError = document.getElementById("share-error");
+const shareDialogTitle = document.getElementById("share-dialog-title");
+const shareNameLabel = document.getElementById("share-name-label");
+const shareNameInput = document.getElementById("share-name");
+const sharePathPreview = document.getElementById("share-path-preview");
+const shareCommentInput = document.getElementById("share-comment");
+const shareGroupSelect = document.getElementById("share-group");
+const shareReadOnlyInput = document.getElementById("share-read-only");
+const shareSubmitBtn = document.getElementById("share-submit");
+
+let editingShareName = null;
+
+function renderShares(sharesList) {
+  sharesContainer.innerHTML = "";
+  if (!sharesList.length) {
+    emptyState(sharesContainer, "Brak udziałów - dodaj pierwszy przyciskiem powyżej.");
+    return;
+  }
+  const table = document.createElement("table");
+  table.innerHTML = "<thead><tr><th>Udział</th><th>Komentarz</th><th>Tryb</th><th>Grupa</th><th></th></tr></thead>";
+  const tbody = document.createElement("tbody");
+  for (const sh of sharesList) {
+    const row = shareRowTemplate.content.cloneNode(true);
+    row.querySelector(".display-name").textContent = sh.name + (sh.managed ? "" : " (spoza tego narzędzia)");
+    row.querySelector(".path").textContent = sh.path;
+    row.querySelector(".comment").textContent = sh.comment || "\u2013";
+
+    const pill = row.querySelector(".mode-cell .pill");
+    pill.textContent = sh.read_only ? "odczyt" : "odczyt/zapis";
+    pill.classList.add(sh.read_only ? "pill-neutral" : "pill-ok");
+
+    row.querySelector(".group").textContent = sh.groups && sh.groups.length ? sh.groups.join(", ") : "\u2013";
+
+    const editBtn = row.querySelector(".edit-btn");
+    const deleteBtn = row.querySelector(".delete-btn");
+    if (sh.managed) {
+      editBtn.addEventListener("click", () => openShareDialog("edit", sh));
+      deleteBtn.addEventListener("click", () => deleteShare(sh.name));
+    } else {
+      // shares defined directly in the main smb.conf (not by this tool)
+      // aren't safe to rewrite through the managed-file mechanism
+      editBtn.remove();
+      deleteBtn.remove();
+    }
+
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+  sharesContainer.appendChild(table);
+}
+
+function populateShareGroupOptions(selectedGroup) {
+  shareGroupSelect.innerHTML = "";
+  const noneOpt = document.createElement("option");
+  noneOpt.value = "";
+  noneOpt.textContent = "(brak - bez ograniczeń dostępu)";
+  shareGroupSelect.appendChild(noneOpt);
+  for (const g of lastKnownGroupsData) {
+    const opt = document.createElement("option");
+    opt.value = g.name;
+    opt.textContent = g.name;
+    if (g.name === selectedGroup) opt.selected = true;
+    shareGroupSelect.appendChild(opt);
+  }
+}
+
+async function loadShares() {
+  if (shareDialog.open) return;
+  try {
+    const res = await fetch("/api/shares");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderShares(data.shares || []);
+  } catch (err) {
+    emptyState(sharesContainer, `Błąd wczytywania udziałów (${err.message})`);
+  }
+}
+
+function updateSharePathPreview() {
+  const raw = shareNameInput.value.trim().toLowerCase();
+  sharePathPreview.textContent = raw ? `ścieżka: /srv/${raw}` : "";
+}
+shareNameInput.addEventListener("input", updateSharePathPreview);
+
+function openShareDialog(mode, share) {
+  shareForm.reset();
+  shareError.textContent = "";
+  populateShareGroupOptions(mode === "edit" ? (share.groups || [])[0] : undefined);
+
+  if (mode === "edit") {
+    editingShareName = share.name;
+    shareDialogTitle.textContent = `Edytuj udział: ${share.name}`;
+    shareNameInput.value = share.name;
+    shareNameInput.disabled = true; // renaming not supported - delete + recreate instead
+    sharePathPreview.textContent = `ścieżka: ${share.path} (nie do zmiany tutaj)`;
+    shareCommentInput.value = share.comment || "";
+    shareReadOnlyInput.checked = !!share.read_only;
+    shareSubmitBtn.textContent = "Zapisz zmiany";
+  } else {
+    editingShareName = null;
+    shareDialogTitle.textContent = "Nowy udział";
+    shareNameInput.disabled = false;
+    sharePathPreview.textContent = "";
+    shareSubmitBtn.textContent = "Utwórz";
+  }
+
+  shareDialog.showModal();
+}
+
+addShareBtn.addEventListener("click", () => openShareDialog("create"));
+shareCancel.addEventListener("click", () => shareDialog.close());
+
+shareForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  shareError.textContent = "";
+
+  const comment = shareCommentInput.value.trim();
+  const group = shareGroupSelect.value || null;
+  const readOnly = shareReadOnlyInput.checked;
+
+  let url, body, confirmMsg;
+  if (editingShareName) {
+    confirmMsg = `Zapisać zmiany dla udziału "${editingShareName}"?`;
+    url = `/api/shares/${encodeURIComponent(editingShareName)}/update`;
+    body = { comment, group, read_only: readOnly };
+  } else {
+    const name = shareNameInput.value.trim().toLowerCase();
+    confirmMsg = `Utworzyć udział "${name}" pod /srv/${name}?`;
+    url = "/api/shares/create";
+    body = { name, comment, group, read_only: readOnly };
+  }
+  if (!window.confirm(confirmMsg)) return;
+
+  shareSubmitBtn.disabled = true;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      shareError.textContent = data.error || `Błąd HTTP ${res.status}`;
+      return;
+    }
+    if (data.share && data.share.warning) {
+      window.alert(data.share.warning);
+    }
+    shareDialog.close();
+    await loadShares();
+  } catch (err) {
+    shareError.textContent = `Błąd połączenia: ${err.message}`;
+  } finally {
+    shareSubmitBtn.disabled = false;
+  }
+});
+
+async function deleteShare(name) {
+  const deleteFiles = window.confirm(
+    `Usunąć udział "${name}"?\n\n` +
+    `OK = usuń tylko z Samby, ZOSTAW pliki na dysku (bezpieczne).\n` +
+    `Anuluj = przerwij.\n\n` +
+    `(Skasowanie też plików nie jest tu jeszcze dostępne z tego dialogu - ` +
+    `celowo, żeby nie skasować czyichś danych jednym kliknięciem.)`
+  );
+  if (!deleteFiles) return;
+  try {
+    const res = await fetch(`/api/shares/${encodeURIComponent(name)}/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ delete_files: false }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      window.alert(data.error || `Błąd HTTP ${res.status}`);
+      return;
+    }
+    await loadShares();
+  } catch (err) {
+    window.alert(`Błąd połączenia: ${err.message}`);
+  }
+}
+
+loadShares();
+setInterval(loadShares, REFRESH_MS);
 
 // Kick off polling now that everything above is declared.
+loadUsers();
+setInterval(loadUsers, REFRESH_MS);
 refresh();
 setInterval(refresh, REFRESH_MS);

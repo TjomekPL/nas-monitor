@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from flask import Flask, jsonify, render_template, request
 
-from nas_monitor import monitor, users, smb
+from nas_monitor import monitor, users, smb, smb_shares
 
 app = Flask(__name__)
 
@@ -127,6 +127,54 @@ def api_users_delete(username):
         return jsonify({"success": False, "step": "user", "error": user_result["error"]}), 400
 
     return jsonify({"success": True})
+
+
+@app.route("/api/shares")
+def api_shares():
+    return jsonify(smb_shares.list_shares())
+
+
+@app.route("/api/shares/create", methods=["POST"])
+def api_shares_create():
+    data = request.get_json(force=True, silent=True) or {}
+    name = (data.get("name") or "").strip().lower()
+    comment = (data.get("comment") or "").strip()
+    group = (data.get("group") or "").strip() or None
+    read_only = bool(data.get("read_only", False))
+
+    result = smb_shares.create_share(name, comment=comment, group=group, read_only=read_only)
+    if not result["success"]:
+        return jsonify({"success": False, "error": result["error"]}), 400
+    return jsonify({"success": True, "share": result})
+
+
+@app.route("/api/shares/<name>/update", methods=["POST"])
+def api_shares_update(name):
+    data = request.get_json(force=True, silent=True) or {}
+    comment = data.get("comment")
+    group = data.get("group")
+    read_only = data.get("read_only")
+
+    result = smb_shares.update_share(
+        name,
+        comment=comment,
+        group=group,
+        read_only=bool(read_only) if read_only is not None else None,
+    )
+    if not result["success"]:
+        return jsonify({"success": False, "error": result["error"]}), 400
+    return jsonify({"success": True, "share": result})
+
+
+@app.route("/api/shares/<name>/delete", methods=["POST"])
+def api_shares_delete(name):
+    data = request.get_json(force=True, silent=True) or {}
+    delete_files = bool(data.get("delete_files", False))
+
+    result = smb_shares.delete_share(name, delete_files=delete_files)
+    if not result["success"]:
+        return jsonify({"success": False, "error": result["error"]}), 400
+    return jsonify({"success": True, "share": result})
 
 
 def main():

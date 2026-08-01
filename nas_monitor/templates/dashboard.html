@@ -35,8 +35,49 @@
         <button id="add-user-btn" class="btn-primary" type="button">+ Dodaj użytkownika</button>
       </div>
       <div id="users-container" class="user-table"></div>
+    <section>
+      <div class="section-head">
+        <h2>Udziały</h2>
+        <button id="add-share-btn" class="btn-primary" type="button">+ Dodaj udział</button>
+      </div>
+      <div id="shares-container" class="user-table"></div>
     </section>
   </main>
+
+  <dialog id="share-dialog">
+    <form id="share-form" method="dialog">
+      <h3 id="share-dialog-title">Nowy udział</h3>
+
+      <label id="share-name-label">
+        <span class="label-text">Nazwa udziału</span>
+        <input type="text" id="share-name" pattern="[a-z][a-z0-9_-]{0,31}" required
+               placeholder="np. dane" autocomplete="off">
+        <span class="field-hint" id="share-path-preview"></span>
+      </label>
+
+      <label>
+        <span class="label-text">Komentarz (opcjonalnie)</span>
+        <input type="text" id="share-comment" autocomplete="off">
+      </label>
+
+      <label>
+        <span class="label-text">Grupa z dostępem</span>
+        <select id="share-group"></select>
+      </label>
+
+      <label class="checkbox-row">
+        <input type="checkbox" id="share-read-only">
+        Tylko do odczytu
+      </label>
+
+      <p class="form-error" id="share-error"></p>
+
+      <div class="dialog-actions">
+        <button type="button" id="share-cancel">Anuluj</button>
+        <button type="submit" id="share-submit" class="btn-primary">Utwórz</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="add-user-dialog">
     <form id="add-user-form" method="dialog">
@@ -123,6 +164,22 @@
       <td class="row-actions">
         <button type="button" class="link-btn edit-btn">Edytuj</button>
         <button type="button" class="link-btn smb-remove-btn">tylko SMB</button>
+        <button type="button" class="link-btn danger delete-btn">Usuń</button>
+      </td>
+    </tr>
+  </template>
+
+  <template id="share-row-template">
+    <tr>
+      <td>
+        <div class="display-name"></div>
+        <div class="mono username sub path"></div>
+      </td>
+      <td class="comment"></td>
+      <td class="mode-cell"><span class="pill"></span></td>
+      <td class="group mono"></td>
+      <td class="row-actions">
+        <button type="button" class="link-btn edit-btn">Edytuj</button>
         <button type="button" class="link-btn danger delete-btn">Usuń</button>
       </td>
     </tr>

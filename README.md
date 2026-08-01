@@ -83,16 +83,18 @@ nas_monitor/
   monitor.py         - rdzeń: dyski, SMART, RAID (czysty odczyt)
   users.py           - rdzeń: użytkownicy i grupy systemowe (wykrywanie + tworzenie)
   smb.py             - backend SMB: hasła Samby, dowiązanie do kont systemowych
+  smb_shares.py       - backend SMB: udziały (tworzenie/edycja/usuwanie pod /srv, testparm+rollback)
   app.py              - Flask app, wszystkie trasy
   templates/
     dashboard.html
   static/
     style.css
-    dashboard.js      - odpytuje /api/status i /api/users co 20s, bez frameworków
+    dashboard.js      - odpytuje /api/status, /api/users, /api/shares co 20s, bez frameworków
 tests/
   test_monitor.py     - testy dysków/SMART/RAID na przykładowych danych
   test_users.py        - testy kont/grup systemowych
-  test_smb.py           - testy warstwy SMB
+  test_smb.py           - testy warstwy SMB (użytkownicy)
+  test_smb_shares.py     - testy warstwy SMB (udziały) - w tym prawdziwe testy na tmpdir dla configparser
 nas-monitor.service      - jednostka systemd (uruchamia przez gunicorn)
 ```
 
@@ -116,8 +118,20 @@ klienta), więc ta separacja jest zamierzona.
    bez zmiany samej nazwy konta systemowego (zbyt ryzykowne; usuń+załóż od nowa
    zamiast tego). Usuwanie: pełne (konto + SMB, katalog domowy NIE usuwany
    domyślnie) albo tylko dostęp SMB (konto zostaje).
-3. **Udziały Samby** - jeszcze nie zaimplementowane: tworzenie/edycja
-   `smb.conf`, przypisywanie użytkowników/grup do konkretnych udziałów.
+3. **Udziały Samby (pełny cykl)** - ✅ zrobione. Udziały tworzone przez to
+   narzędzie zawsze lądują pod `/srv/<nazwa>` (jak w OMV) i są zapisywane w
+   osobnym, w pełni zarządzanym pliku `/etc/samba/smb.conf.d/nas-monitor-shares.conf`,
+   dołączanym do głównego `smb.conf` przez `include =` (dopisywane raz, przy
+   pierwszym użyciu) - główny plik z Twoimi komentarzami nigdy nie jest
+   nadpisywany w całości. Każdy zapis jest walidowany `testparm` na
+   rzeczywistym, złączonym pliku przed zastosowaniem; błąd = automatyczny
+   rollback do poprzedniej treści, nic nie zostaje zepsute. Wykrywanie
+   pokazuje też udziały zdefiniowane ręcznie wprost w głównym `smb.conf`
+   (oznaczone jako spoza tego narzędzia, tylko do podglądu - edycja/usuwanie
+   działa wyłącznie na udziałach zarządzanych tutaj). Tworzenie folderu:
+   właściciel = grupa udziału + bit setgid, żeby nowe pliki dziedziczyły
+   grupę; `force group` w smb.conf dla spójności zapisu niezależnie od
+   drugorzędnych grup łączącego się użytkownika.
 4. **Zarządzanie RAID** - tworzenie/rozbudowa/usuwanie macierzy. Ustalono:
    operacje mają wykonywać się automatycznie po potwierdzeniu w UI (nie
    tylko generować komendę do ręcznego wklejenia). Wymaga dodatkowych
