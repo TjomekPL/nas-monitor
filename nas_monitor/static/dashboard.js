@@ -859,6 +859,7 @@ deployKeyForm.addEventListener("submit", async (ev) => {
     }
     deployKeyDialog.close();
     showToast("Klucz zainstalowany poprawnie.");
+    await loadSshKeys();
   } catch (err) {
     deployKeyError.textContent = `Błąd połączenia: ${err.message}`;
   } finally {
