@@ -153,8 +153,8 @@ class TestGetSmartHealth(unittest.TestCase):
         self.assertEqual(result["attributes"]["percentage_used"], 4)
         self.assertEqual(monitor.classify_health(result), "ok")
 
-    @mock.patch("nas_monitor.monitor.shutil.which", return_value=None)
-    def test_missing_smartctl_binary(self, mock_which):
+    @mock.patch("nas_monitor.monitor._find_binary", return_value=None)
+    def test_missing_smartctl_binary(self, mock_find_binary):
         result = monitor.get_smart_health("/dev/sda")
         self.assertFalse(result["available"])
         self.assertIn("not installed", result["error"])
@@ -218,9 +218,9 @@ class TestGetRaidArrays(unittest.TestCase):
         self.assertEqual(len(arrays[0]["devices"]), 2)
         self.assertEqual(arrays[0]["health"], "ok")
 
-    @mock.patch("nas_monitor.monitor.shutil.which", return_value=None)
+    @mock.patch("nas_monitor.monitor._find_binary", return_value=None)
     @mock.patch("nas_monitor.monitor._parse_mdstat")
-    def test_missing_mdadm_binary_still_lists_array(self, mock_mdstat, mock_which):
+    def test_missing_mdadm_binary_still_lists_array(self, mock_mdstat, mock_find_binary):
         mock_mdstat.return_value = {
             "md0": {
                 "active": True,
