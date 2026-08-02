@@ -496,7 +496,7 @@ function renderUsers(usersList) {
     return;
   }
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr><th>${t("ui.users.colUser")}</th><th>${t("ui.users.colLogin")}</th><th>${t("ui.users.colSmb")}</th><th>${t("ui.users.colGroups")}</th><th></th></tr></thead>`;
+  table.innerHTML = `<thead><tr><th>${t("ui.users.colUser")}</th><th>${t("ui.users.colSmb")}</th><th>${t("ui.users.colGroups")}</th><th></th></tr></thead>`;
   const tbody = document.createElement("tbody");
   for (const u of usersList) {
     const row = userRowTemplate.content.cloneNode(true);
@@ -510,10 +510,6 @@ function renderUsers(usersList) {
     } else {
       subEl.remove();
     }
-
-    const loginPill = row.querySelector(".login-cell .pill");
-    loginPill.textContent = u.can_login ? t("msg.yes") : t("msg.no");
-    loginPill.classList.add(u.can_login ? "pill-warn" : "pill-ok");
 
     const smbPill = row.querySelector(".smb-cell .pill");
     smbPill.textContent = u.has_smb ? t("msg.yes") : t("msg.no");
@@ -610,7 +606,6 @@ function openUserDialog(mode, user) {
     passwordLabel.querySelector(".label-text").textContent = t("ui.addUserDialog.passwordLabelEdit");
     passwordInput.required = false;
     passwordInput.placeholder = t("ui.addUserDialog.passwordPlaceholderEdit");
-    document.getElementById("new-allow-login").checked = user.can_login;
     renderGroupsChecklist(lastKnownGroupsData, user.groups);
     submitBtn.textContent = t("ui.addUserDialog.saveBtn");
   } else {
@@ -637,7 +632,6 @@ addUserForm.addEventListener("submit", async (ev) => {
 
   const nameField = usernameInput.value.trim();
   const password = passwordInput.value;
-  const allowLogin = document.getElementById("new-allow-login").checked;
   const newGroupName = document.getElementById("new-group-name").value.trim();
 
   const groups = Array.from(groupsChecklist.querySelectorAll("input[name='group']:checked")).map((cb) => cb.value);
@@ -647,15 +641,13 @@ addUserForm.addEventListener("submit", async (ev) => {
   if (editingUsername) {
     confirmMsg = t("msg.confirmSaveUser", { name: editingUsername });
     url = `/api/users/${encodeURIComponent(editingUsername)}/update`;
-    body = { display_name: nameField, groups, allow_login: allowLogin, password };
+    body = { display_name: nameField, groups, password };
   } else {
     const resolvedAccount = nameField.toLowerCase();
     const accountNote = resolvedAccount !== nameField ? t("msg.accountNote", { account: resolvedAccount }) : "";
-    confirmMsg = allowLogin
-      ? t("msg.confirmCreateUserWithLogin", { name: nameField, note: accountNote })
-      : t("msg.confirmCreateUserNoLogin", { name: nameField, note: accountNote });
+    confirmMsg = t("msg.confirmCreateUser", { name: nameField, note: accountNote });
     url = "/api/users/create";
-    body = { username: nameField, password, groups, allow_login: allowLogin };
+    body = { username: nameField, password, groups };
   }
   if (!(await confirmDialog(confirmMsg))) return;
 
@@ -1000,13 +992,10 @@ let lastSshKeysData = [];
 
 function renderSshKeys(keysList) {
   sshKeysContainer.innerHTML = "";
-  // Regular SMB-only accounts (nologin, no key ever generated) have
-  // nothing to do here and never will - showing them with a permanently
-  // disabled button just clutters the list. An account that once had
-  // login enabled long enough to get a key or a deployment still shows
-  // up (has_key/deployments), even if login was switched off since, so
-  // there's somewhere to manage/remove that leftover key.
-  const visibleKeys = keysList.filter((k) => !k.error_code && (k.has_key || k.can_login));
+  // The backend always returns exactly one entry here now (the
+  // dedicated sync account, auto-created on first load) - no filtering
+  // needed, unlike the old per-user model this replaced.
+  const visibleKeys = keysList.filter((k) => !k.error_code);
   if (!visibleKeys.length) {
     emptyState(sshKeysContainer, t("msg.empty.sshKeys"));
     return;

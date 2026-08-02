@@ -196,16 +196,36 @@ klienta), więc ta separacja jest zamierzona.
    wykrywanie istniejącego superbloku, wyraźne ostrzeżenie o nieodwracalności
    przed każdym potwierdzeniem. **Odłożone na razie** - do czasu, aż będzie
    dostępna maszyna z wolnymi dyskami do testowania na żywo.
-5. **Certyfikaty (klucze SSH) dla użytkowników** - ✅ zrobione. Chodziło o
-   klucze SSH (nie certyfikaty X.509) - do logowania/rsync na inne maszyny
-   bez hasła, niezależnie od hasła SMB (to jest dokładnie ten problem
-   "dane Samby ≠ dane SSH" z sekcji architektury wyżej). Generowanie pary
-   ed25519 w `~/.ssh` konta (tylko dla kont z włączonym logowaniem/SSH),
-   i "wysyłanie" klucza publicznego na zdalne urządzenie przez
-   `sshpass`+`ssh-copy-id` - hasło do zdalnej maszyny używane raz, przez
-   zmienną środowiskową (nie argv, gdzie `ps` by je widział), nigdzie nie
-   zapisywane. Sprawdzone naprawdę: cały łańcuch (generuj → wyślij →
-   prawdziwe bezhasłowe SSH) na żywym `sshd`.
+5. **Certyfikaty (klucze SSH)** - ✅ zrobione, ✅ przeprojektowane na jedno
+   dedykowane konto. Chodziło o klucze SSH (nie certyfikaty X.509) - do
+   rsync/synchronizacji na inne maszyny bez hasła, niezależnie od hasła SMB
+   (to jest dokładnie ten problem "dane Samby ≠ dane SSH" z sekcji
+   architektury wyżej). Pierwsza wersja wiązała to z dowolnym kontem z
+   włączonym "logowanie/SSH" - po realnym użyciu okazało się to niepotrzebnie
+   szerokie: zwykli użytkownicy SMB nigdy tego nie potrzebują, a certyfikat
+   koncepcyjnie nie powinien być przypisany do konkretnej osoby, tylko do
+   *zadania synchronizacji*. Przeprojektowane na **jedno dedykowane, ukryte
+   konto serwisowe** (`nas-sync`, `ssh_keys.SYNC_ACCOUNT_USERNAME`) -
+   tworzone automatycznie przy pierwszym wejściu w zakładkę, nigdy nie
+   pokazywane w Użytkownikach (jak grupy `<udział>_access`), niepowiązane z
+   żadnym loginem człowieka. Celowo nologin - nikt nie loguje się nim
+   interaktywnie, ale zaplanowane zadanie (`cron`/`sudo -u nas-sync`)
+   działające jako to konto swobodnie używa jego klucza do połączeń
+   wychodzących; usunięty stary, błędny warunek blokujący generowanie
+   klucza dla kont nologin (myląca dwa różne kierunki: "czy można się TU
+   zalogować jako to konto" nie ma nic wspólnego z "czy to konto może
+   łączyć się NA ZEWNĄTRZ swoim kluczem"). API tras `/api/ssh-keys/...`
+   ma dodatkową blokadę odrzucającą każdą nazwę konta poza `nas-sync` -
+   obrona w głąb, na wypadek bezpośredniego wywołania API z pominięciem UI.
+   Checkbox "zezwól na logowanie/SSH" usunięty z formularza użytkownika -
+   nie było już niczego, co by go potrzebowało.
+
+   Generowanie pary ed25519 w `~/.ssh` konta `nas-sync`, i "wysyłanie"
+   klucza publicznego na zdalne urządzenie przez `sshpass`+`ssh-copy-id` -
+   hasło do zdalnej maszyny używane raz, przez zmienną środowiskową (nie
+   argv, gdzie `ps` by je widział), nigdzie nie zapisywane. Sprawdzone
+   naprawdę: cały łańcuch (generuj → wyślij → prawdziwe bezhasłowe SSH) na
+   żywym `sshd`.
 
    **Śledzenie wdrożeń** - lista urządzeń, na które klucz wysłano, przy
    każdym pigułka: zielona = klucz na urządzeniu wciąż zgadza się z

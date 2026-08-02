@@ -129,7 +129,11 @@ def api_status():
 def api_users():
     samba = smb.list_samba_users()
     samba_set = set(samba.get("usernames", []))
-    system_users = users.list_system_users()
+    # The dedicated sync account (see ssh_keys.SYNC_ACCOUNT_USERNAME) is
+    # not a person and has no SMB access - showing it in the general
+    # Users list would invite exactly the kind of accidental edit/delete
+    # that share-access groups are already filtered out to avoid below.
+    system_users = [u for u in users.list_system_users() if u["username"] != ssh_keys.SYNC_ACCOUNT_USERNAME]
     for u in system_users:
         u["has_smb"] = u["username"] in samba_set
 
@@ -159,13 +163,8 @@ def api_users_create():
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
     groups = [g.strip() for g in (data.get("groups") or []) if g.strip()]
-    allow_login = bool(data.get("allow_login", False))
 
-    user_result = users.create_user(
-        username,
-        groups=groups,
-        shell="/bin/bash" if allow_login else None,
-    )
+    user_result = users.create_user(username, groups=groups, shell=None)
     if not user_result["success"]:
         oplog.log_event("users", "create", "failure", params={"username": username})
         return jsonify(
@@ -194,14 +193,12 @@ def api_users_create():
 def api_users_update(username):
     data = request.get_json(force=True, silent=True) or {}
     groups = [g.strip() for g in (data.get("groups") or []) if g.strip()]
-    allow_login = bool(data.get("allow_login", False))
     display_name = (data.get("display_name") or "").strip() or None
     password = data.get("password") or ""  # empty = leave SMB password unchanged
 
     user_result = users.update_user(
         username,
         groups=groups,
-        shell="/bin/bash" if allow_login else users.default_nologin_shell(),
         display_name=display_name,
     )
     if not user_result["success"]:
@@ -240,6 +237,8 @@ def api_users_remove_smb(username):
 
 @app.route("/api/users/<username>/delete", methods=["POST"])
 def api_users_delete(username):
+    if username == ssh_keys.SYNC_ACCOUNT_USERNAME:
+        return jsonify({"success": False, "error_code": "users.not_found", "error_context": {"username": username}}), 400
     data = request.get_json(force=True, silent=True) or {}
     remove_home = bool(data.get("remove_home", False))
 
@@ -332,13 +331,27 @@ def api_shares_delete(name):
 
 @app.route("/api/ssh-keys")
 def api_ssh_keys():
-    system_users = users.list_system_users()
-    statuses = [ssh_keys.get_key_status(u["username"]) for u in system_users]
-    return jsonify({"keys": statuses})
+    ensure_result = ssh_keys.ensure_sync_account_exists()
+    if not ensure_result["success"]:
+        return jsonify({"keys": [], "error_code": ensure_result["error_code"], "error_context": ensure_result["error_context"]})
+    return jsonify({"keys": [ssh_keys.get_key_status(ssh_keys.SYNC_ACCOUNT_USERNAME)]})
+
+
+def _reject_non_sync_account(username):
+    """Defense in depth: the frontend only ever calls these routes with
+    the dedicated sync account, but nothing stops a direct API call from
+    naming any other account - reject that outright rather than quietly
+    generating/deploying a key for whatever username was passed."""
+    if username != ssh_keys.SYNC_ACCOUNT_USERNAME:
+        return jsonify({"success": False, "error_code": "ssh_keys.not_sync_account", "error_context": {}}), 400
+    return None
 
 
 @app.route("/api/ssh-keys/<username>/generate", methods=["POST"])
 def api_ssh_keys_generate(username):
+    rejected = _reject_non_sync_account(username)
+    if rejected:
+        return rejected
     result = ssh_keys.generate_key(username)
     if not result["success"]:
         oplog.log_event("certs", "generate", "failure", params={"username": username})
@@ -349,6 +362,9 @@ def api_ssh_keys_generate(username):
 
 @app.route("/api/ssh-keys/<username>/deploy", methods=["POST"])
 def api_ssh_keys_deploy(username):
+    rejected = _reject_non_sync_account(username)
+    if rejected:
+        return rejected
     data = request.get_json(force=True, silent=True) or {}
     remote_host = (data.get("remote_host") or "").strip()
     remote_user = (data.get("remote_user") or "").strip()
@@ -366,6 +382,9 @@ def api_ssh_keys_deploy(username):
 
 @app.route("/api/ssh-keys/<username>/delete", methods=["POST"])
 def api_ssh_keys_delete(username):
+    rejected = _reject_non_sync_account(username)
+    if rejected:
+        return rejected
     result = ssh_keys.delete_key(username)
     if not result["success"]:
         oplog.log_event("certs", "delete", "failure", params={"username": username})
@@ -376,6 +395,9 @@ def api_ssh_keys_delete(username):
 
 @app.route("/api/ssh-keys/<username>/deployments/remove", methods=["POST"])
 def api_ssh_keys_remove_deployment(username):
+    rejected = _reject_non_sync_account(username)
+    if rejected:
+        return rejected
     data = request.get_json(force=True, silent=True) or {}
     remote_host = (data.get("remote_host") or "").strip()
     remote_user = (data.get("remote_user") or "").strip()

@@ -47,12 +47,23 @@ class TestGenerateKey(unittest.TestCase):
         result = ssh_keys.generate_key("ghost")
         self.assertFalse(result["success"])
 
+    @mock.patch("nas_monitor.ssh_keys.os.path.isfile", return_value=False)
+    @mock.patch("nas_monitor.ssh_keys.os.chmod")
+    @mock.patch("nas_monitor.ssh_keys.os.chown")
+    @mock.patch("nas_monitor.ssh_keys.os.makedirs")
+    @mock.patch("nas_monitor.ssh_keys.system_tools.find_binary", return_value="/usr/bin/ssh-keygen")
+    @mock.patch("nas_monitor.ssh_keys.system_tools.run", return_value=(0, "", ""))
     @mock.patch("nas_monitor.ssh_keys.pwd.getpwnam")
-    def test_rejects_nologin_account(self, mock_pwnam):
-        mock_pwnam.return_value = _fake_pwent("share1", "/usr/sbin/nologin")
-        result = ssh_keys.generate_key("share1")
-        self.assertFalse(result["success"])
-        self.assertEqual(result["error_code"], "ssh_keys.login_disabled")
+    @mock.patch("builtins.open", new_callable=mock.mock_open, read_data="ssh-ed25519 AAAA... nas-sync@nas-monitor\n")
+    def test_nologin_account_can_generate_a_key(self, mock_open, mock_pwnam, mock_run, mock_find, mock_makedirs, mock_chown, mock_chmod, mock_isfile):
+        # The dedicated sync account is nologin by design (see
+        # SYNC_ACCOUNT_USERNAME) - nologin blocks someone logging INTO
+        # this box as that account, which has nothing to do with whether
+        # a scheduled job running AS it can use its own key to connect
+        # OUT. Generating a key for it must succeed.
+        mock_pwnam.return_value = _fake_pwent("nas-sync", "/usr/sbin/nologin")
+        result = ssh_keys.generate_key("nas-sync")
+        self.assertTrue(result["success"])
 
     @mock.patch("nas_monitor.ssh_keys.os.path.isfile", return_value=True)
     @mock.patch("nas_monitor.ssh_keys.pwd.getpwnam")
@@ -275,6 +286,34 @@ class TestDeploymentTracking(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         with open(auth_keys_path) as fh:
             self.assertEqual(fh.read(), "")
+
+
+class TestEnsureSyncAccountExists(unittest.TestCase):
+    @mock.patch("nas_monitor.ssh_keys.users_mod.user_exists", return_value=True)
+    @mock.patch("nas_monitor.ssh_keys.users_mod.create_user")
+    def test_noop_when_already_exists(self, mock_create, mock_exists):
+        result = ssh_keys.ensure_sync_account_exists()
+        self.assertTrue(result["success"])
+        self.assertEqual(result["username"], ssh_keys.SYNC_ACCOUNT_USERNAME)
+        mock_create.assert_not_called()
+
+    @mock.patch("nas_monitor.ssh_keys.users_mod.user_exists", return_value=False)
+    @mock.patch("nas_monitor.ssh_keys.users_mod.create_user")
+    def test_creates_when_missing(self, mock_create, mock_exists):
+        mock_create.return_value = {"success": True, "username": ssh_keys.SYNC_ACCOUNT_USERNAME}
+        result = ssh_keys.ensure_sync_account_exists()
+        self.assertTrue(result["success"])
+        mock_create.assert_called_once()
+        _, kwargs = mock_create.call_args
+        self.assertIsNone(kwargs.get("shell"))  # nologin - intentional, see module docstring
+
+    @mock.patch("nas_monitor.ssh_keys.users_mod.user_exists", return_value=False)
+    @mock.patch("nas_monitor.ssh_keys.users_mod.create_user")
+    def test_propagates_creation_failure(self, mock_create, mock_exists):
+        mock_create.return_value = {"success": False, "error_code": "system.tool_missing", "error_context": {"tool": "useradd"}}
+        result = ssh_keys.ensure_sync_account_exists()
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.tool_missing")
 
 
 if __name__ == "__main__":

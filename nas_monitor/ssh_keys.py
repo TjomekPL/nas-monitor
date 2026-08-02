@@ -1,14 +1,19 @@
 """
 nas_monitor.ssh_keys
 ----------------------
-SSH keypair management for system accounts - the piece that was missing
-for the "sync files with another NAS via rsync" workflow: an SMB password
-(see smb.py) does nothing for SSH auth, and a system account needs both a
-login-capable shell (see users.py's allow_login) AND its own SSH key.
+SSH keypair management for the dedicated sync service account (see
+SYNC_ACCOUNT_USERNAME below) - the piece that was missing for the "sync
+files with another NAS via rsync" workflow: an SMB password (see smb.py)
+does nothing for SSH auth. Deliberately NOT tied to any particular human
+user account - a personal login account (his own desktop user, say) can
+already have its own real SSH keys for entirely separate purposes, and
+generating one here used to risk colliding with those. One dedicated,
+hidden account sidesteps that class of problem entirely, and matches how
+automation credentials are normally kept separate from personal ones.
 
-This module only ever touches ~/.ssh for the account in question. The
-private key never leaves this machine; "deploying" a key means installing
-the PUBLIC half into a remote host's authorized_keys, using a one-time
+This module only ever touches ~/.ssh for that one account. The private
+key never leaves this machine; "deploying" a key means installing the
+PUBLIC half into a remote host's authorized_keys, using a one-time
 password that is never written to disk or logged (passed via an env var
 to sshpass, not argv - argv is visible to anyone on the box via `ps`).
 """
@@ -29,6 +34,30 @@ from nas_monitor import state_store
 KEY_COMMENT_SUFFIX = "@nas-monitor"
 _HOST_RE = re.compile(r"^[a-zA-Z0-9_.-]{1,255}$")
 _DEPLOYMENTS_FILE = "ssh-deployments.json"
+
+# The dedicated, hidden service account certificates belong to. Not a
+# stand-in for any particular person - a single, always-present identity
+# for outbound automation (rsync/SSH to another NAS), decoupled entirely
+# from whichever human accounts happen to exist for SMB access. nologin
+# on purpose: nobody should be able to log INTO this box as this account
+# interactively (SSH password, console, su without -c) - that has nothing
+# to do with whether a scheduled job running AS this account can use its
+# key to connect OUT to somewhere else, which needs no shell at all.
+SYNC_ACCOUNT_USERNAME = "nas-sync"
+
+
+def ensure_sync_account_exists() -> dict[str, Any]:
+    """Idempotent - creates the dedicated sync account if it doesn't
+    exist yet, does nothing if it already does. Called before any
+    Certyfikaty-tab read or action, so the account is always there
+    without needing its own separate setup step."""
+    result: dict[str, Any] = {"success": True, "username": SYNC_ACCOUNT_USERNAME}
+    if users_mod.user_exists(SYNC_ACCOUNT_USERNAME):
+        return result
+    create_result = users_mod.create_user(SYNC_ACCOUNT_USERNAME, groups=[], shell=None, create_home=True)
+    if not create_result["success"]:
+        return errors.propagate(result, create_result)
+    return result
 
 
 def _ssh_dir(username: str) -> str:
@@ -151,9 +180,6 @@ def generate_key(username: str) -> dict[str, Any]:
         pw = pwd.getpwnam(username)
     except KeyError:
         return errors.fail(result, "users.not_found", username=username)
-
-    if pw.pw_shell in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "/usr/bin/false", ""):
-        return errors.fail(result, "ssh_keys.login_disabled", username=username)
 
     priv_path, pub_path = _key_paths(username)
     if os.path.isfile(priv_path):

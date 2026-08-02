@@ -712,6 +712,7 @@ form label.checkbox-row {
   box-sizing: border-box;
 }
 .login-card {
+  position: relative;
   width: 100%;
   max-width: 340px;
   background: var(--surface);
@@ -726,6 +727,22 @@ form label.checkbox-row {
   text-align: center;
 }
 .login-card .btn-primary { width: 100%; margin-top: 6px; }
+
+#login-blade {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 56px;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, #fff6ea 20%, #fff6ea 80%, transparent);
+  box-shadow: 0 0 8px #fff6ea, 0 0 20px #ffa030, 0 0 40px #ff8c1a, 0 0 65px #ff6a00, 0 0 95px #ff5500;
+  offset-anchor: 50% 50%;
+  offset-rotate: auto;
+  offset-distance: 0%;
+  opacity: 0;
+  pointer-events: none;
+}
 
 /* ---------------------------------------------------------------------
    Quality floor: focus visibility, reduced motion, small screens
