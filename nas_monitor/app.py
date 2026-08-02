@@ -11,13 +11,108 @@ dashboard is showing.
 
 from __future__ import annotations
 
-from flask import Flask, jsonify, render_template, request
+from datetime import timedelta
+
+from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
 
-from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog
+from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth
 
 app = Flask(__name__)
+app.secret_key = auth.get_or_create_secret_key()
 network_mutate.check_and_recover_on_startup()
+
+
+@app.before_request
+def require_login():
+    if not auth.auth_enabled():
+        return None
+    if not auth.is_configured():
+        # Setup never ran (e.g. install.sh's prompt was skipped) - don't
+        # lock the admin out of a tool that has no configured way to log
+        # into yet. Once credentials exist, this branch stops applying.
+        return None
+    if request.endpoint in ("login", "static"):
+        return None
+    if session.get("authenticated"):
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify({"success": False, "error_code": "auth.login_required", "error_context": {}}), 401
+    return redirect(url_for("login"))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "GET":
+        return render_template("login.html")
+
+    data = request.get_json(force=True, silent=True) or {}
+    username = (data.get("username") or "").strip()
+    password = data.get("password") or ""
+
+    if not auth.verify_credentials(username, password):
+        oplog.log_event("auth", "login", "failure", params={"username": username})
+        return jsonify({"success": False, "error_code": "auth.invalid_credentials", "error_context": {}}), 401
+
+    session.clear()
+    session["authenticated"] = True
+    session["username"] = username
+    duration = auth.get_session_duration_hours()
+    if duration is not None:
+        session.permanent = True
+        app.permanent_session_lifetime = timedelta(hours=duration)
+    else:
+        session.permanent = False  # a plain session cookie - gone when the browser closes
+
+    oplog.log_event("auth", "login", "success", params={"username": username})
+    return jsonify({"success": True})
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    username = session.get("username", "")
+    session.clear()
+    oplog.log_event("auth", "logout", "success", params={"username": username})
+    return jsonify({"success": True})
+
+
+@app.route("/api/auth/status")
+def api_auth_status():
+    return jsonify(
+        {
+            "enabled": auth.auth_enabled(),
+            "configured": auth.is_configured(),
+            "authenticated": bool(session.get("authenticated")),
+            "username": auth.get_username(),
+            "session_duration_hours": auth.get_session_duration_hours(),
+        }
+    )
+
+
+@app.route("/api/auth/change-password", methods=["POST"])
+def api_auth_change_password():
+    data = request.get_json(force=True, silent=True) or {}
+    current_password = data.get("current_password") or ""
+    new_password = data.get("new_password") or ""
+
+    result = auth.change_password(current_password, new_password)
+    if not result["success"]:
+        oplog.log_event("auth", "change_password", "failure", params={})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+
+    oplog.log_event("auth", "change_password", "success", params={})
+    return jsonify({"success": True})
+
+
+@app.route("/api/auth/session-duration", methods=["POST"])
+def api_auth_session_duration():
+    data = request.get_json(force=True, silent=True) or {}
+    hours = data.get("hours")  # null/None = until the browser closes
+
+    result = auth.set_session_duration_hours(hours)
+    if not result["success"]:
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    return jsonify({"success": True, "session_duration_hours": result["session_duration_hours"]})
 
 
 @app.route("/")

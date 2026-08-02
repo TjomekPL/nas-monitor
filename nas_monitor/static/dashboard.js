@@ -39,6 +39,56 @@ function showToast(message, isError) {
 }
 
 // --------------------------------------------------------------------
+// In-app confirm dialog - replaces window.confirm() everywhere. Native
+// confirm() is a browser-chrome prompt, not part of the page's own DOM;
+// firing one while another <dialog> is still open (a routine occurrence
+// here - e.g. confirming a delete from within an edit form) is exactly
+// the kind of situation that made a password manager extension flag
+// this page as possibly interfering with it. A <dialog> stacked on a
+// <dialog> is a normal, well-supported pattern and doesn't involve any
+// browser-native prompt at all.
+// --------------------------------------------------------------------
+
+const confirmDialogEl = document.getElementById("confirm-dialog");
+const confirmForm = document.getElementById("confirm-form");
+const confirmMessageEl = document.getElementById("confirm-message");
+const confirmCancelBtn = document.getElementById("confirm-cancel");
+const confirmOkBtn = document.getElementById("confirm-ok");
+
+let confirmResolve = null;
+
+function settleConfirm(value) {
+  if (confirmResolve) {
+    const resolve = confirmResolve;
+    confirmResolve = null;
+    resolve(value);
+  }
+}
+
+// danger=true gives the OK button the same red treatment as other
+// destructive actions in the app, so a delete confirm looks like one.
+function confirmDialog(message, { danger = false } = {}) {
+  return new Promise((resolve) => {
+    confirmResolve = resolve;
+    confirmMessageEl.textContent = message;
+    confirmOkBtn.classList.toggle("danger", danger);
+    confirmDialogEl.showModal();
+  });
+}
+
+confirmForm.addEventListener("submit", () => {
+  settleConfirm(true);
+  confirmDialogEl.close();
+});
+confirmCancelBtn.addEventListener("click", () => {
+  confirmDialogEl.close();
+  settleConfirm(false);
+});
+// Covers Esc and any other way the dialog closes without going through
+// the two explicit buttons above.
+confirmDialogEl.addEventListener("close", () => settleConfirm(false));
+
+// --------------------------------------------------------------------
 // Theme toggle (light/dark) - the inline script in <head> already applied
 // any saved choice before first paint; this just wires up the button and
 // falls back to the OS preference when nothing has been explicitly chosen.
@@ -146,6 +196,139 @@ window.i18n.onLanguageChange(() => {
 });
 
 applyLangLabel();
+
+// --------------------------------------------------------------------
+// Auth: redirect to the login page if a session expires mid-use (any
+// API call coming back 401), and the account settings dialog (change
+// password, session duration, logout).
+// --------------------------------------------------------------------
+
+const nativeFetch = window.fetch.bind(window);
+window.fetch = async (...args) => {
+  const res = await nativeFetch(...args);
+  if (res.status === 401 && !String(args[0]).startsWith("/login")) {
+    window.location.href = "/login";
+  }
+  return res;
+};
+
+const accountToggleBtn = document.getElementById("account-toggle");
+const accountDialog = document.getElementById("account-dialog");
+const accountLoggedInAs = document.getElementById("account-logged-in-as");
+const accountDialogClose = document.getElementById("account-dialog-close");
+const changePasswordForm = document.getElementById("change-password-form");
+const changePasswordError = document.getElementById("change-password-error");
+const sessionDurationForm = document.getElementById("session-duration-form");
+const sessionDurationSelect = document.getElementById("session-duration-select");
+const sessionDurationCustomLabel = document.getElementById("session-duration-custom-label");
+const sessionDurationCustomInput = document.getElementById("session-duration-custom");
+const sessionDurationError = document.getElementById("session-duration-error");
+const logoutBtn = document.getElementById("logout-btn");
+
+async function openAccountDialog() {
+  changePasswordForm.reset();
+  changePasswordError.textContent = "";
+  sessionDurationError.textContent = "";
+  try {
+    const res = await nativeFetch("/api/auth/status");
+    const data = await res.json();
+    accountLoggedInAs.textContent = data.username ? t("ui.accountDialog.loggedInAs", { username: data.username }) : "";
+    const hours = data.session_duration_hours;
+    if (hours === null || hours === undefined) {
+      sessionDurationSelect.value = "";
+    } else if (["12", "24", "168"].includes(String(hours))) {
+      sessionDurationSelect.value = String(hours);
+    } else {
+      sessionDurationSelect.value = "custom";
+      sessionDurationCustomInput.value = hours;
+    }
+    sessionDurationCustomLabel.style.display = sessionDurationSelect.value === "custom" ? "block" : "none";
+  } catch (err) {
+    // status fetch failing shouldn't block opening the dialog - the
+    // forms below will just surface their own errors on submit
+  }
+  accountDialog.showModal();
+}
+
+accountToggleBtn.addEventListener("click", openAccountDialog);
+accountDialogClose.addEventListener("click", () => accountDialog.close());
+
+sessionDurationSelect.addEventListener("change", () => {
+  sessionDurationCustomLabel.style.display = sessionDurationSelect.value === "custom" ? "block" : "none";
+});
+
+changePasswordForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  changePasswordError.textContent = "";
+
+  const currentPassword = document.getElementById("current-password").value;
+  const newPassword = document.getElementById("new-password").value;
+  const confirmPassword = document.getElementById("new-password-confirm").value;
+
+  if (newPassword !== confirmPassword) {
+    changePasswordError.textContent = t("ui.accountDialog.passwordMismatch");
+    return;
+  }
+
+  try {
+    const res = await fetch("/api/auth/change-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      changePasswordError.textContent = apiErrorMessage(data, res);
+      return;
+    }
+    changePasswordForm.reset();
+    showToast(t("ui.accountDialog.passwordChanged"));
+  } catch (err) {
+    changePasswordError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
+  }
+});
+
+sessionDurationForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  sessionDurationError.textContent = "";
+
+  let hours = null;
+  if (sessionDurationSelect.value === "custom") {
+    hours = parseInt(sessionDurationCustomInput.value, 10);
+    if (!hours || hours <= 0) {
+      sessionDurationError.textContent = window.i18n.errorText("auth.invalid_session_duration");
+      return;
+    }
+  } else if (sessionDurationSelect.value !== "") {
+    hours = parseInt(sessionDurationSelect.value, 10);
+  }
+
+  try {
+    const res = await fetch("/api/auth/session-duration", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hours }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      sessionDurationError.textContent = apiErrorMessage(data, res);
+      return;
+    }
+    showToast(t("ui.accountDialog.sessionDurationSaved"));
+  } catch (err) {
+    sessionDurationError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
+  }
+});
+
+logoutBtn.addEventListener("click", async () => {
+  try {
+    await fetch("/logout", { method: "POST" });
+  } catch (err) {
+    // fall through to redirect regardless - worst case the session
+    // just expires naturally server-side
+  }
+  window.location.href = "/login";
+});
 
 // --------------------------------------------------------------------
 // Tabs
@@ -467,7 +650,7 @@ addUserForm.addEventListener("submit", async (ev) => {
     url = "/api/users/create";
     body = { username: nameField, password, groups, allow_login: allowLogin };
   }
-  if (!window.confirm(confirmMsg)) return;
+  if (!(await confirmDialog(confirmMsg))) return;
 
   submitBtn.disabled = true;
   try {
@@ -494,7 +677,7 @@ addUserForm.addEventListener("submit", async (ev) => {
 });
 
 async function removeSmbAccess(username, displayName) {
-  if (!window.confirm(t("msg.confirmRemoveSmb", { name: displayName }))) return;
+  if (!(await confirmDialog(t("msg.confirmRemoveSmb", { name: displayName })))) return;
   try {
     const res = await fetch(`/api/users/${encodeURIComponent(username)}/remove-smb`, { method: "POST" });
     const data = await res.json();
@@ -510,8 +693,8 @@ async function removeSmbAccess(username, displayName) {
 }
 
 async function deleteUser(username, displayName) {
-  const removeHome = window.confirm(t("msg.confirmDeleteUser", { name: displayName, username }));
-  if (!removeHome) return;
+  const confirmed = await confirmDialog(t("msg.confirmDeleteUser", { name: displayName, username }), { danger: true });
+  if (!confirmed) return;
   try {
     const res = await fetch(`/api/users/${encodeURIComponent(username)}/delete`, {
       method: "POST",
@@ -730,7 +913,7 @@ shareForm.addEventListener("submit", async (ev) => {
     url = "/api/shares/create";
     body = { name, comment, permissions };
   }
-  if (!window.confirm(confirmMsg)) return;
+  if (!(await confirmDialog(confirmMsg))) return;
 
   shareSubmitBtn.disabled = true;
   try {
@@ -757,8 +940,8 @@ shareForm.addEventListener("submit", async (ev) => {
 });
 
 async function deleteShare(name) {
-  const deleteFiles = window.confirm(t("msg.confirmDeleteShare", { name }));
-  if (!deleteFiles) return;
+  const confirmed = await confirmDialog(t("msg.confirmDeleteShare", { name }), { danger: true });
+  if (!confirmed) return;
   try {
     const res = await fetch(`/api/shares/${encodeURIComponent(name)}/delete`, {
       method: "POST",
@@ -894,7 +1077,7 @@ async function loadSshKeys() {
 }
 
 async function generateSshKey(username) {
-  if (!window.confirm(t("msg.confirmGenerateKey", { username }))) return;
+  if (!(await confirmDialog(t("msg.confirmGenerateKey", { username })))) return;
   try {
     const res = await fetch(`/api/ssh-keys/${encodeURIComponent(username)}/generate`, { method: "POST" });
     const data = await res.json();
@@ -909,7 +1092,7 @@ async function generateSshKey(username) {
 }
 
 async function deleteSshKey(username) {
-  if (!window.confirm(t("msg.confirmDeleteKey", { username }))) return;
+  if (!(await confirmDialog(t("msg.confirmDeleteKey", { username }), { danger: true }))) return;
   try {
     const res = await fetch(`/api/ssh-keys/${encodeURIComponent(username)}/delete`, { method: "POST" });
     const data = await res.json();
@@ -942,7 +1125,7 @@ deployKeyForm.addEventListener("submit", async (ev) => {
   const remoteUser = deployRemoteUserInput.value.trim();
   const remotePassword = deployPasswordInput.value;
 
-  if (!window.confirm(t("msg.confirmDeployKey", { user: remoteUser, host: remoteHost }))) return;
+  if (!(await confirmDialog(t("msg.confirmDeployKey", { user: remoteUser, host: remoteHost })))) return;
 
   deployKeySubmitBtn.disabled = true;
   try {
@@ -988,7 +1171,7 @@ removeDeploymentForm.addEventListener("submit", async (ev) => {
   const password = removeDeploymentPasswordInput.value;
   const { username, host, remote_user } = removingDeployment;
 
-  if (!window.confirm(t("msg.confirmRemoveDeployment", { user: remote_user, host }))) return;
+  if (!(await confirmDialog(t("msg.confirmRemoveDeployment", { user: remote_user, host }), { danger: true }))) return;
 
   removeDeploymentSubmitBtn.disabled = true;
   try {
@@ -1395,7 +1578,7 @@ logFilterClearBtn.addEventListener("click", () => {
 });
 
 logClearBtn.addEventListener("click", async () => {
-  if (!confirm(t("msg.logClearConfirm"))) return;
+  if (!(await confirmDialog(t("msg.logClearConfirm"), { danger: true }))) return;
   try {
     const res = await fetch("/api/log/clear", { method: "POST" });
     const data = await res.json();

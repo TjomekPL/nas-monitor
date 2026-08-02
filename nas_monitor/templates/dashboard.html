@@ -27,6 +27,9 @@
         <span class="dot" id="conn-dot" data-i18n-title="ui.header.connStatus" title="Status połączenia"></span>
       </div>
       <button type="button" class="lang-toggle" id="lang-toggle" data-i18n-title="ui.header.langToggle" title="Zmień język / Change language">PL</button>
+      <button type="button" class="theme-toggle" id="account-toggle" data-i18n-title="ui.header.accountToggle" title="Konto administratora" aria-label="Konto administratora">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+      </button>
       <button type="button" class="theme-toggle" id="theme-toggle" data-i18n-title="ui.header.themeToggle" title="Przełącz jasny/ciemny" aria-label="Przełącz motyw"></button>
     </div>
   </header>
@@ -279,6 +282,66 @@
         <button type="submit" id="network-edit-submit" class="btn-primary" data-i18n="ui.networkEditDialog.applyBtn">Zastosuj</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="confirm-dialog">
+    <form id="confirm-form" method="dialog">
+      <p id="confirm-message" class="confirm-message"></p>
+      <div class="dialog-actions">
+        <button type="button" id="confirm-cancel" data-i18n="ui.confirmDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="confirm-ok" class="btn-primary" data-i18n="ui.confirmDialog.okBtn">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="account-dialog">
+    <h3 data-i18n="ui.accountDialog.title">Konto administratora</h3>
+    <p class="field-hint" id="account-logged-in-as"></p>
+
+    <form id="change-password-form">
+      <label>
+        <span class="label-text" data-i18n="ui.accountDialog.currentPasswordLabel">Obecne hasło</span>
+        <input type="password" id="current-password" required autocomplete="current-password">
+      </label>
+      <label>
+        <span class="label-text" data-i18n="ui.accountDialog.newPasswordLabel">Nowe hasło</span>
+        <input type="password" id="new-password" required autocomplete="new-password">
+      </label>
+      <label>
+        <span class="label-text" data-i18n="ui.accountDialog.confirmPasswordLabel">Powtórz nowe hasło</span>
+        <input type="password" id="new-password-confirm" required autocomplete="new-password">
+      </label>
+      <p class="field-hint" data-i18n="ui.accountDialog.passwordHint">Min. 10 znaków, przynajmniej jedna litera i jedna cyfra. Wielkie litery i znaki specjalne dozwolone, ale nieobowiązkowe.</p>
+      <p class="form-error" id="change-password-error"></p>
+      <div class="dialog-actions">
+        <button type="submit" class="btn-primary" data-i18n="ui.accountDialog.changePasswordBtn">Zmień hasło</button>
+      </div>
+    </form>
+
+    <form id="session-duration-form">
+      <label>
+        <span class="label-text" data-i18n="ui.accountDialog.sessionDurationLabel">Czas trwania sesji</span>
+        <select id="session-duration-select">
+          <option value="" data-i18n="ui.accountDialog.sessionDurationUntilClose">Do zamknięcia przeglądarki</option>
+          <option value="12">12</option>
+          <option value="24">24</option>
+          <option value="168">168</option>
+          <option value="custom" data-i18n="ui.accountDialog.sessionDurationCustomLabel">Inny (godziny)</option>
+        </select>
+      </label>
+      <label id="session-duration-custom-label" style="display:none;">
+        <input type="number" id="session-duration-custom" min="1" max="720">
+      </label>
+      <p class="form-error" id="session-duration-error"></p>
+      <div class="dialog-actions">
+        <button type="submit" class="btn-primary" data-i18n="ui.accountDialog.saveSessionDurationBtn">Zapisz</button>
+      </div>
+    </form>
+
+    <div class="dialog-actions">
+      <button type="button" id="logout-btn" class="link-btn danger" data-i18n="ui.header.logoutBtn">Wyloguj</button>
+      <button type="button" id="account-dialog-close" data-i18n="ui.accountDialog.closeBtn">Zamknij</button>
+    </div>
   </dialog>
 
   <template id="raid-card-template">

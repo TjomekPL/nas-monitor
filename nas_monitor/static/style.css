@@ -319,6 +319,7 @@ h2 {
 }
 .btn-primary:hover { filter: brightness(1.08); }
 .btn-primary:disabled { opacity: 0.6; cursor: default; }
+.btn-primary.danger { background: var(--crit); }
 
 /* ---------------------------------------------------------------------
    Tables (users, shares)
@@ -690,6 +691,41 @@ form label.checkbox-row {
   font-size: 13.5px;
 }
 .pending-change-banner button { margin-left: auto; }
+
+.confirm-message {
+  white-space: pre-line;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0 0 4px;
+}
+
+/* ---------------------------------------------------------------------
+   Login page
+   ------------------------------------------------------------------- */
+
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  box-sizing: border-box;
+}
+.login-card {
+  width: 100%;
+  max-width: 340px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 28px 26px;
+  box-shadow: var(--shadow);
+}
+.login-card h1 {
+  margin: 0 0 22px;
+  font-size: 22px;
+  text-align: center;
+}
+.login-card .btn-primary { width: 100%; margin-top: 6px; }
 
 /* ---------------------------------------------------------------------
    Quality floor: focus visibility, reduced motion, small screens

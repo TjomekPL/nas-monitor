@@ -102,12 +102,16 @@ nas_monitor/
   network.py             - wykrywanie sieci: hostname, backend (NM/networkd/ifupdown), interfejsy, DNS - tylko odczyt
   network_mutate.py        - mutacja sieci (IP/brama/DNS): walidacja, nmcli, snapshot+auto-cofnięcie 30s
   oplog.py                - log operacji: co się wykonało, sukces/błąd, pełny szczegół na żądanie
+  auth.py                   - konto administratora (poziom aplikacji, nie system/PAM): hashowanie hasła, sesje
+  setup_admin.py              - skrypt CLI wywoływany przez install.sh, ustawia konto admina (hasło przez stdin)
   app.py              - Flask app, wszystkie trasy
   templates/
     dashboard.html
+    login.html                - osobna, minimalna strona logowania
   static/
     style.css
     dashboard.js      - odpytuje /api/status, /api/users, /api/shares co 20s, bez frameworków
+    login.js                  - obsługa formularza logowania
     i18n/
       index.js           - funkcja t(), wykrywanie/przełączanie języka, aplikowanie tłumaczeń do DOM
       pl.js, en.js         - słowniki tłumaczeń (UI, komunikaty, kody błędów/ostrzeżeń, log)
@@ -120,6 +124,8 @@ tests/
   test_network.py         - testy wykrywania sieci
   test_network_mutate.py    - testy mutacji sieci (walidacja, snapshot/apply/revert, potwierdzenie, samonaprawa po restarcie)
   test_oplog.py             - testy logu operacji (persystencja, limit, filtr czasowy)
+  test_auth.py                - testy logowania (walidacja hasła, hashowanie, sesje, wyłącznik awaryjny)
+  test_setup_admin.py           - testy skryptu CLI ustawiającego konto admina
 nas-monitor.service      - jednostka systemd (uruchamia przez gunicorn)
 ```
 
@@ -361,3 +367,35 @@ klienta), więc ta separacja jest zamierzona.
      przełączanie w locie, zero brakujących kluczy tłumaczeń. 176 testów
      jednostkowych backendu zaktualizowanych pod kody błędów zamiast
      dopasowywania fragmentów polskiego tekstu.
+12. **Logowanie / konto administratora** - ✅ zrobione
+    (`nas_monitor/auth.py`). Kluczowa decyzja: konto **wyłącznie na
+    poziomie aplikacji**, nigdy konto systemowe/PAM - tak jak
+    OMV/Portainer/Proxmox, żeby "dostęp do dashboardu" nigdy nie
+    mieszał się z "dostępem SSH do maszyny".
+    - Hasło hashowane przez `werkzeug.security` (PBKDF2) - biblioteka
+      już jest zależnością Flaska, zero nowych pakietów
+    - Wymogi hasła: min. 10 znaków, przynajmniej jedna litera i jedna
+      cyfra; wielkie litery/znaki specjalne dozwolone, nie wymagane
+    - Sesje: podpisane ciasteczka Flaska, domyślnie do zamknięcia
+      przeglądarki (konfigurowalne w panelu konta na godziny). Klucz
+      podpisujący generowany raz i trwale zapisany - gunicorn ma 2
+      procesy robocze, więc każdy musi czytać ten sam klucz, inaczej
+      sesja podpisana przez proces A nie zwalidowałaby się w procesie B
+    - `install.sh` pyta o nazwę konta (Enter = `admin`) i hasło
+      (dwukrotnie, walidacja w bashu przed przekazaniem dalej) przy
+      pierwszej instalacji - pomija pytanie przy ponownym uruchomieniu,
+      jeśli konto już istnieje. Hasło nigdy jako argument linii poleceń
+      (widoczne przez `ps`) - przekazywane do `nas_monitor/setup_admin.py`
+      przez stdin
+    - Wyłącznik awaryjny: `AUTH_ENABLED=0` w `nas-monitor.service`
+      (zakomentowana linia z instrukcją) - wymaga dostępu SSH/roota,
+      celowo, żeby web UI nie mógł sam siebie ominąć
+    - Panel konta (ikonka w nagłówku obok motywu): zmiana hasła, czas
+      trwania sesji, wylogowanie
+    - Jeśli sesja wygaśnie w trakcie pracy, dowolne zapytanie API
+      zwracające 401 automatycznie przekierowuje na `/login`
+    - 40 nowych testów (auth.py + setup_admin.py), plus pełny test na
+      żywo przez klienta Flask: niezalogowany dostęp, złe hasło,
+      poprawne logowanie, wylogowanie, wyłącznik awaryjny, stan "jeszcze
+      nieskonfigurowane" (nigdy nie blokuje, dopóki `install.sh` nie
+      uruchomi setupu)

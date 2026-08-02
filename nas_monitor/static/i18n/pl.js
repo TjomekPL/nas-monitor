@@ -8,6 +8,31 @@ window.NAS_I18N.pl = {
       connStatus: "Status połączenia",
       themeToggle: "Przełącz jasny/ciemny",
       langToggle: "Zmień język / Change language",
+      accountToggle: "Konto administratora",
+      logoutBtn: "Wyloguj",
+    },
+    login: {
+      usernameLabel: "Nazwa użytkownika",
+      passwordLabel: "Hasło",
+      submitBtn: "Zaloguj",
+    },
+    accountDialog: {
+      title: "Konto administratora",
+      loggedInAs: "Zalogowano jako {username}",
+      currentPasswordLabel: "Obecne hasło",
+      newPasswordLabel: "Nowe hasło",
+      confirmPasswordLabel: "Powtórz nowe hasło",
+      passwordHint: "Min. 10 znaków, przynajmniej jedna litera i jedna cyfra. Wielkie litery i znaki specjalne dozwolone, ale nieobowiązkowe.",
+      changePasswordBtn: "Zmień hasło",
+      sessionDurationLabel: "Czas trwania sesji",
+      sessionDurationUntilClose: "Do zamknięcia przeglądarki",
+      sessionDurationHours: "{hours} godz.",
+      sessionDurationCustomLabel: "Inny (godziny)",
+      saveSessionDurationBtn: "Zapisz",
+      closeBtn: "Zamknij",
+      passwordMismatch: "Nowe hasła nie są takie same",
+      passwordChanged: "Hasło zmienione.",
+      sessionDurationSaved: "Zapisano czas trwania sesji.",
     },
     tabs: {
       disks: "Dyski i macierze",
@@ -138,6 +163,10 @@ window.NAS_I18N.pl = {
       cancelBtn: "Anuluj",
       sendBtn: "Wyślij",
     },
+    confirmDialog: {
+      cancelBtn: "Anuluj",
+      okBtn: "OK",
+    },
     networkEditDialog: {
       title: "Edytuj ustawienia sieci: {interface}",
       prefixLabel: "Prefiks (0-32)",
@@ -219,6 +248,17 @@ window.NAS_I18N.pl = {
 
   err: {
     _unknown: "Wystąpił nieoczekiwany błąd.",
+    auth: {
+      invalid_credentials: "Nieprawidłowa nazwa użytkownika lub hasło",
+      login_required: "Wymagane zalogowanie",
+      password_too_short: "Hasło musi mieć co najmniej {min_length} znaków",
+      password_needs_letter: "Hasło musi zawierać przynajmniej jedną literę",
+      password_needs_digit: "Hasło musi zawierać przynajmniej jedną cyfrę",
+      invalid_username: "Nieprawidłowa nazwa użytkownika",
+      not_configured: "Konto administratora nie zostało jeszcze skonfigurowane",
+      wrong_current_password: "Obecne hasło jest nieprawidłowe",
+      invalid_session_duration: "Nieprawidłowy czas trwania sesji",
+    },
     system: {
       tool_missing: "Brak wymaganego narzędzia: {tool}",
       command_failed: "Polecenie systemowe nie powiodło się: {detail}",

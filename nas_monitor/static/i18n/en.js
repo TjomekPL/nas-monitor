@@ -8,6 +8,31 @@ window.NAS_I18N.en = {
       connStatus: "Connection status",
       themeToggle: "Toggle light/dark",
       langToggle: "Zmień język / Change language",
+      accountToggle: "Admin account",
+      logoutBtn: "Log out",
+    },
+    login: {
+      usernameLabel: "Username",
+      passwordLabel: "Password",
+      submitBtn: "Log in",
+    },
+    accountDialog: {
+      title: "Admin account",
+      loggedInAs: "Logged in as {username}",
+      currentPasswordLabel: "Current password",
+      newPasswordLabel: "New password",
+      confirmPasswordLabel: "Confirm new password",
+      passwordHint: "At least 10 characters, at least one letter and one digit. Uppercase and special characters are allowed but not required.",
+      changePasswordBtn: "Change password",
+      sessionDurationLabel: "Session duration",
+      sessionDurationUntilClose: "Until the browser closes",
+      sessionDurationHours: "{hours} h",
+      sessionDurationCustomLabel: "Custom (hours)",
+      saveSessionDurationBtn: "Save",
+      closeBtn: "Close",
+      passwordMismatch: "The new passwords don't match",
+      passwordChanged: "Password changed.",
+      sessionDurationSaved: "Session duration saved.",
     },
     tabs: {
       disks: "Disks & arrays",
@@ -138,6 +163,10 @@ window.NAS_I18N.en = {
       cancelBtn: "Cancel",
       sendBtn: "Deploy",
     },
+    confirmDialog: {
+      cancelBtn: "Cancel",
+      okBtn: "OK",
+    },
     networkEditDialog: {
       title: "Edit network settings: {interface}",
       prefixLabel: "Prefix (0-32)",
@@ -219,6 +248,17 @@ window.NAS_I18N.en = {
 
   err: {
     _unknown: "An unexpected error occurred.",
+    auth: {
+      invalid_credentials: "Invalid username or password",
+      login_required: "Login required",
+      password_too_short: "Password must be at least {min_length} characters",
+      password_needs_letter: "Password must contain at least one letter",
+      password_needs_digit: "Password must contain at least one digit",
+      invalid_username: "Invalid username",
+      not_configured: "The admin account hasn't been set up yet",
+      wrong_current_password: "The current password is incorrect",
+      invalid_session_duration: "Invalid session duration",
+    },
     system: {
       tool_missing: "Missing required tool: {tool}",
       command_failed: "System command failed: {detail}",
