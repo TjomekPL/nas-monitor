@@ -77,7 +77,7 @@ window.NAS_I18N.pl = {
     },
     certs: {
       heading: "Certyfikaty (klucze SSH)",
-      subtitle: "Do logowania/synchronizacji (np. rsync) na inne maszyny bez hasła - niezależne od hasła SMB.",
+      subtitle: "Do logowania/synchronizacji (np. rsync) na inne maszyny bez hasła - niezależne od hasła SMB. Widoczne tylko konta z włączonym logowaniem/SSH (zwykłe konta SMB tego nie potrzebują).",
       colUser: "Użytkownik",
       colKey: "Klucz",
       colSentTo: "Wysłano na",

@@ -77,7 +77,7 @@ window.NAS_I18N.en = {
     },
     certs: {
       heading: "Certificates (SSH keys)",
-      subtitle: "For passwordless login/sync (e.g. rsync) to other machines - independent of the SMB password.",
+      subtitle: "For passwordless login/sync (e.g. rsync) to other machines - independent of the SMB password. Only shows accounts with login/SSH enabled (regular SMB accounts don't need this).",
       colUser: "User",
       colKey: "Key",
       colSentTo: "Deployed to",

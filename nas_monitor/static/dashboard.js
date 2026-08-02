@@ -1000,15 +1000,21 @@ let lastSshKeysData = [];
 
 function renderSshKeys(keysList) {
   sshKeysContainer.innerHTML = "";
-  if (!keysList.length) {
+  // Regular SMB-only accounts (nologin, no key ever generated) have
+  // nothing to do here and never will - showing them with a permanently
+  // disabled button just clutters the list. An account that once had
+  // login enabled long enough to get a key or a deployment still shows
+  // up (has_key/deployments), even if login was switched off since, so
+  // there's somewhere to manage/remove that leftover key.
+  const visibleKeys = keysList.filter((k) => !k.error_code && (k.has_key || k.can_login));
+  if (!visibleKeys.length) {
     emptyState(sshKeysContainer, t("msg.empty.sshKeys"));
     return;
   }
   const table = document.createElement("table");
   table.innerHTML = `<thead><tr><th>${t("ui.certs.colUser")}</th><th>${t("ui.certs.colKey")}</th><th>${t("ui.certs.colSentTo")}</th><th></th></tr></thead>`;
   const tbody = document.createElement("tbody");
-  for (const k of keysList) {
-    if (k.error_code) continue; // user lookup failed - skip silently, shouldn't normally happen
+  for (const k of visibleKeys) {
     const row = sshKeyRowTemplate.content.cloneNode(true);
     window.i18n.applyTranslations(row);
     const u = lastKnownUsersData.find((x) => x.username === k.username);
@@ -1056,12 +1062,9 @@ function renderSshKeys(keysList) {
     } else {
       deployBtn.remove();
       deleteBtn.remove();
-      if (!k.can_login) {
-        generateBtn.disabled = true;
-        generateBtn.title = t("ui.certs.loginDisabledHint");
-      } else {
-        generateBtn.addEventListener("click", () => generateSshKey(k.username));
-      }
+      // The list is already filtered to has_key || can_login, so
+      // reaching here (no key) means can_login is guaranteed true.
+      generateBtn.addEventListener("click", () => generateSshKey(k.username));
     }
 
     tbody.appendChild(row);
