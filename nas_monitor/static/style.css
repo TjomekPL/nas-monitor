@@ -165,6 +165,25 @@ h1 { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: -0.01em; }
 .theme-toggle:hover { border-color: var(--accent); }
 .theme-toggle svg { width: 16px; height: 16px; }
 
+.lang-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.lang-toggle:hover { border-color: var(--accent); }
+
 .tabs {
   display: flex;
   gap: 4px;

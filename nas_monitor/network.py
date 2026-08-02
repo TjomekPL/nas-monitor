@@ -21,7 +21,7 @@ import json
 import os
 from typing import Any
 
-from nas_monitor import system_tools
+from nas_monitor import system_tools, errors
 
 RESOLV_CONF = "/etc/resolv.conf"
 HOSTNAME_FILE = "/etc/hostname"
@@ -80,15 +80,19 @@ def _prefixlen_to_netmask(prefixlen: int) -> str:
     return ".".join(str((mask >> shift) & 0xFF) for shift in (24, 16, 8, 0))
 
 
-def _classify_interface_type(name: str) -> str:
-    """Human-friendly hardware type for the Sieć tab, e.g. "WiFi (USB)" -
-    read from /sys/class/net, not guessed from the interface name (which
-    a udev rule could rename to anything). No /device symlink at all
-    means a purely virtual interface (Tailscale, Docker, veth, bridges)."""
+def _classify_interface_type(name: str) -> dict[str, str | None]:
+    """Hardware type for the Sieć tab, read from /sys/class/net - not
+    guessed from the interface name (which a udev rule could rename to
+    anything). Returns {"kind": "wifi"|"ethernet"|"virtual", "bus":
+    "usb"|"builtin"|None} - a structured value rather than pre-formatted
+    text, since the actual display string ("WiFi (USB)", "Wired (built-
+    in)", ...) is language-dependent and composed on the frontend. No
+    /device symlink at all means a purely virtual interface (Tailscale,
+    Docker, veth, bridges)."""
     base = f"/sys/class/net/{name}"
     device_link = os.path.join(base, "device")
     if not os.path.islink(device_link) and not os.path.isdir(device_link):
-        return "wirtualny"
+        return {"kind": "virtual", "bus": None}
 
     is_wireless = os.path.isdir(os.path.join(base, "wireless")) or os.path.isdir(os.path.join(base, "phy80211"))
 
@@ -100,35 +104,32 @@ def _classify_interface_type(name: str) -> str:
     except OSError:
         pass
 
-    kind = "WiFi" if is_wireless else "Ethernet"
+    kind = "wifi" if is_wireless else "ethernet"
     if bus == "usb":
-        return f"{kind} (USB)"
+        return {"kind": kind, "bus": "usb"}
     if bus in ("pci", "virtio"):
-        return f"{kind} (wbudowana)"
-    return kind
+        return {"kind": kind, "bus": "builtin"}
+    return {"kind": kind, "bus": None}
 
 
 def list_interfaces() -> dict[str, Any]:
     """Every network interface with its current state, straight from the
     kernel via `ip -j` - true regardless of which backend (if any) is
     managing it. Loopback is excluded, it's never something to configure."""
-    result: dict[str, Any] = {"available": False, "interfaces": [], "error": None}
+    result: dict[str, Any] = {"available": False, "interfaces": []}
 
     ip_path = system_tools.find_binary("ip")
     if ip_path is None:
-        result["error"] = "ip (iproute2) not installed"
-        return result
+        return errors.tool_missing(result, "ip (iproute2)")
 
     code, out, err = system_tools.run([ip_path, "-j", "addr", "show"])
     if code != 0 or not out.strip():
-        result["error"] = err.strip() or f"ip exited {code}"
-        return result
+        return errors.command_failed(result, err, out, code, "ip")
 
     try:
         raw_interfaces = json.loads(out)
     except json.JSONDecodeError:
-        result["error"] = "could not parse ip addr output"
-        return result
+        return errors.fail(result, "network.parse_failed")
 
     gateway_by_dev = _default_gateways()
 
@@ -219,5 +220,6 @@ def get_status() -> dict[str, Any]:
         "backend": detect_backend(),
         "dns_servers": get_dns_servers(),
         "interfaces": interfaces_result.get("interfaces", []),
-        "error": interfaces_result.get("error"),
+        "error_code": interfaces_result.get("error_code"),
+        "error_context": interfaces_result.get("error_context"),
     }

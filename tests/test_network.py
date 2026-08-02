@@ -77,10 +77,10 @@ class TestClassifyInterfaceType(unittest.TestCase):
         with mock.patch("nas_monitor.network.os.path.islink", side_effect=fake_islink), \
              mock.patch("nas_monitor.network.os.path.isdir", side_effect=fake_isdir), \
              mock.patch("nas_monitor.network.os.readlink", side_effect=fake_readlink):
-            self.assertEqual(network._classify_interface_type("eno1"), "Ethernet (wbudowana)")
-            self.assertEqual(network._classify_interface_type("enx00e04c680121"), "Ethernet (USB)")
-            self.assertEqual(network._classify_interface_type("wlp2s0"), "WiFi (wbudowana)")
-            self.assertEqual(network._classify_interface_type("tailscale0"), "wirtualny")
+            self.assertEqual(network._classify_interface_type("eno1"), {"kind": "ethernet", "bus": "builtin"})
+            self.assertEqual(network._classify_interface_type("enx00e04c680121"), {"kind": "ethernet", "bus": "usb"})
+            self.assertEqual(network._classify_interface_type("wlp2s0"), {"kind": "wifi", "bus": "builtin"})
+            self.assertEqual(network._classify_interface_type("tailscale0"), {"kind": "virtual", "bus": None})
 
     def test_usb_wifi_dongle(self):
         devices = {"wlx1234": {"wireless": True, "bus": "usb"}}
@@ -88,10 +88,10 @@ class TestClassifyInterfaceType(unittest.TestCase):
         with mock.patch("nas_monitor.network.os.path.islink", side_effect=fake_islink), \
              mock.patch("nas_monitor.network.os.path.isdir", side_effect=fake_isdir), \
              mock.patch("nas_monitor.network.os.readlink", side_effect=fake_readlink):
-            self.assertEqual(network._classify_interface_type("wlx1234"), "WiFi (USB)")
+            self.assertEqual(network._classify_interface_type("wlx1234"), {"kind": "wifi", "bus": "usb"})
 
 
-@mock.patch("nas_monitor.network._classify_interface_type", return_value="Ethernet")
+@mock.patch("nas_monitor.network._classify_interface_type", return_value={"kind": "ethernet", "bus": None})
 class TestListInterfaces(unittest.TestCase):
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
     @mock.patch("nas_monitor.network.system_tools.run")
@@ -163,14 +163,14 @@ class TestListInterfaces(unittest.TestCase):
     def test_missing_ip_binary(self, mock_find, mock_classify):
         result = network.list_interfaces()
         self.assertFalse(result["available"])
-        self.assertIn("not installed", result["error"])
+        self.assertEqual(result["error_code"], "system.tool_missing")
 
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
     @mock.patch("nas_monitor.network.system_tools.run", return_value=(0, "not json", ""))
     def test_garbage_output_does_not_crash(self, mock_run, mock_find, mock_classify):
         result = network.list_interfaces()
         self.assertFalse(result["available"])
-        self.assertIsNotNone(result["error"])
+        self.assertIsNotNone(result.get("error_code"))
 
 
 class TestDetectBackend(unittest.TestCase):

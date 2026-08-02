@@ -28,7 +28,8 @@ class TestListSambaUsers(unittest.TestCase):
     def test_missing_pdbedit(self, mock_find):
         result = smb.list_samba_users()
         self.assertFalse(result["available"])
-        self.assertIn("not installed", result["error"])
+        self.assertEqual(result["error_code"], "system.tool_missing")
+        self.assertEqual(result["error_context"]["tool"], "pdbedit")
 
     @mock.patch("nas_monitor.smb.system_tools.find_binary", return_value="/usr/bin/pdbedit")
     @mock.patch("nas_monitor.smb.system_tools.run", return_value=(0, "", ""))
@@ -55,14 +56,15 @@ class TestSetPassword(unittest.TestCase):
     def test_rejects_empty_password(self):
         result = smb.set_password("share1", "")
         self.assertFalse(result["success"])
-        self.assertIn("Puste", result["error"])
+        self.assertEqual(result["error_code"], "smb.empty_password")
 
     @mock.patch("nas_monitor.smb.system_tools.find_binary", return_value="/usr/bin/smbpasswd")
     @mock.patch("nas_monitor.smb.system_tools.run", return_value=(1, "", "Failed to find entry for user."))
     def test_propagates_failure_eg_no_system_account(self, mock_run, mock_find):
         result = smb.set_password("ghost", "hunter2")
         self.assertFalse(result["success"])
-        self.assertIn("Failed to find entry", result["error"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+        self.assertIn("Failed to find entry", result["error_context"]["detail"])
 
 
 if __name__ == "__main__":

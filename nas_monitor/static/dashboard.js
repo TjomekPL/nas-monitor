@@ -1,4 +1,16 @@
 const REFRESH_MS = 20000;
+const t = (key, params) => window.i18n.t(key, params);
+const localeForLang = () => (window.i18n.currentLanguage() === "pl" ? "pl-PL" : "en-US");
+
+function apiErrorMessage(data, res) {
+  if (data && data.error_code) return window.i18n.errorText(data.error_code, data.error_context);
+  return t("msg.httpError", { status: res.status });
+}
+
+function warningsText(warnings) {
+  if (!warnings || !warnings.length) return "";
+  return warnings.map((w) => window.i18n.warningText(w.code, w.context)).join(" ");
+}
 
 // --------------------------------------------------------------------
 // Toast notifications - non-blocking, unlike window.alert() which
@@ -57,6 +69,32 @@ themeToggleBtn.addEventListener("click", () => {
 applyThemeIcon();
 
 // --------------------------------------------------------------------
+// Language toggle - cycles through every language that has a loaded
+// dictionary (currently PL/EN; adding a language automatically makes it
+// part of the cycle, see nas_monitor/static/i18n/).
+// --------------------------------------------------------------------
+
+const langToggleBtn = document.getElementById("lang-toggle");
+
+function applyLangLabel() {
+  langToggleBtn.textContent = window.i18n.currentLanguage().toUpperCase();
+}
+
+langToggleBtn.addEventListener("click", () => {
+  const langs = window.i18n.availableLanguages();
+  const idx = langs.indexOf(window.i18n.currentLanguage());
+  const next = langs[(idx + 1) % langs.length];
+  window.i18n.setLanguage(next);
+});
+
+window.i18n.onLanguageChange(() => {
+  applyLangLabel();
+  rerenderEverything();
+});
+
+applyLangLabel();
+
+// --------------------------------------------------------------------
 // Tabs
 // --------------------------------------------------------------------
 
@@ -95,28 +133,32 @@ function fmtTemp(c) {
 function fmtHours(h) {
   if (h === null || h === undefined) return "\u2013";
   const days = Math.floor(h / 24);
-  return `${h} h (~${days} dni)`;
+  return t("msg.hoursDays", { hours: h, days });
 }
 
 function emptyState(container, text) {
   container.innerHTML = `<p class="empty-state">${text}</p>`;
 }
 
+let lastRaidData = [];
+let lastDisksData = [];
+
 function renderRaid(arrays) {
   raidContainer.innerHTML = "";
   if (!arrays.length) {
-    emptyState(raidContainer, "Brak wykrytych macierzy RAID na tym hoście.");
+    emptyState(raidContainer, t("msg.empty.raid"));
     return;
   }
   for (const arr of arrays) {
     const node = raidTemplate.content.cloneNode(true);
+    window.i18n.applyTranslations(node);
     node.querySelector(".badge").classList.add(arr.health || "unknown");
     node.querySelector(".name").textContent = arr.name;
     node.querySelector(".level").textContent = (arr.level || "").toUpperCase();
     node.querySelector(".state").textContent = arr.array_state || (arr.active ? "active" : "inactive");
     node.querySelector(".path").textContent = arr.path;
     const devices = (arr.devices || []).map((d) => d.device).filter(Boolean);
-    node.querySelector(".devices").textContent = devices.length ? devices.join(", ") : (arr.num_devices ? `${arr.num_devices} urządzeń` : "\u2013");
+    node.querySelector(".devices").textContent = devices.length ? devices.join(", ") : (arr.num_devices ? t("msg.diskCount", { count: arr.num_devices }) : "\u2013");
 
     const progressRow = node.querySelector(".progress-row");
     if (arr.progress_percent !== null && arr.progress_percent !== undefined) {
@@ -137,11 +179,12 @@ function renderRaid(arrays) {
 function renderDisks(disks) {
   disksContainer.innerHTML = "";
   if (!disks.length) {
-    emptyState(disksContainer, "Nie wykryto dysków (lsblk niedostępny lub brak uprawnień).");
+    emptyState(disksContainer, t("msg.empty.disks"));
     return;
   }
   for (const disk of disks) {
     const node = diskTemplate.content.cloneNode(true);
+    window.i18n.applyTranslations(node);
     node.querySelector(".badge").classList.add(disk.health || "unknown");
     node.querySelector(".name").textContent = disk.path;
     node.querySelector(".model").textContent = disk.model || "";
@@ -168,13 +211,15 @@ async function refresh() {
     const res = await fetch("/api/status");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    renderRaid(data.raid || []);
-    renderDisks(data.disks || []);
-    lastUpdatedEl.textContent = `zaktualizowano ${new Date().toLocaleTimeString("pl-PL")}`;
+    lastRaidData = data.raid || [];
+    lastDisksData = data.disks || [];
+    renderRaid(lastRaidData);
+    renderDisks(lastDisksData);
+    lastUpdatedEl.textContent = t("msg.lastUpdated", { time: new Date().toLocaleTimeString(localeForLang()) });
     connDot.classList.remove("stale");
   } catch (err) {
     connDot.classList.add("stale");
-    lastUpdatedEl.textContent = `błąd połączenia (${err.message})`;
+    lastUpdatedEl.textContent = t("msg.connectionError", { detail: err.message });
   }
 }
 
@@ -204,30 +249,31 @@ let editingUsername = null; // null = create mode, otherwise the account being e
 function renderUsers(usersList) {
   usersContainer.innerHTML = "";
   if (!usersList.length) {
-    emptyState(usersContainer, "Nie wykryto żadnych kont użytkowników.");
+    emptyState(usersContainer, t("msg.empty.users"));
     return;
   }
   const table = document.createElement("table");
-  table.innerHTML = "<thead><tr><th>Użytkownik</th><th>Logowanie/SSH</th><th>Dostęp SMB</th><th>Grupy</th><th></th></tr></thead>";
+  table.innerHTML = `<thead><tr><th>${t("ui.users.colUser")}</th><th>${t("ui.users.colLogin")}</th><th>${t("ui.users.colSmb")}</th><th>${t("ui.users.colGroups")}</th><th></th></tr></thead>`;
   const tbody = document.createElement("tbody");
   for (const u of usersList) {
     const row = userRowTemplate.content.cloneNode(true);
+    window.i18n.applyTranslations(row);
     const displayName = u.display_name || u.username;
     row.querySelector(".display-name").textContent = displayName;
     row.querySelector(".display-name").title = displayName;
     const subEl = row.querySelector(".username.sub");
     if (displayName !== u.username) {
-      subEl.textContent = `konto: ${u.username}`;
+      subEl.textContent = t("msg.accountLabel", { username: u.username });
     } else {
       subEl.remove();
     }
 
     const loginPill = row.querySelector(".login-cell .pill");
-    loginPill.textContent = u.can_login ? "tak" : "nie";
+    loginPill.textContent = u.can_login ? t("msg.yes") : t("msg.no");
     loginPill.classList.add(u.can_login ? "pill-warn" : "pill-ok");
 
     const smbPill = row.querySelector(".smb-cell .pill");
-    smbPill.textContent = u.has_smb ? "tak" : "nie";
+    smbPill.textContent = u.has_smb ? t("msg.yes") : t("msg.no");
     smbPill.classList.add(u.has_smb ? "pill-ok" : "pill-neutral");
 
     row.querySelector(".groups").textContent = u.groups && u.groups.length ? u.groups.join(", ") : "\u2013";
@@ -256,7 +302,7 @@ function renderGroupsChecklist(groups, checkedNames) {
   if (!groups.length) {
     const p = document.createElement("p");
     p.className = "empty-state";
-    p.textContent = "Brak wykrytych grup - możesz utworzyć nową poniżej.";
+    p.textContent = t("ui.addUserDialog.noGroupsHint");
     groupsChecklist.appendChild(p);
     return;
   }
@@ -288,7 +334,7 @@ async function loadUsers() {
     lastKnownGroupsData = data.groups || [];
     renderGroupsChecklist(lastKnownGroupsData);
   } catch (err) {
-    emptyState(usersContainer, `Błąd wczytywania użytkowników (${err.message})`);
+    emptyState(usersContainer, t("msg.loadErrorUsers", { detail: err.message }));
   }
 }
 
@@ -302,7 +348,7 @@ function updateUsernamePreview() {
   const resolved = raw.toLowerCase();
   usernamePreview.textContent = resolved === raw
     ? ""
-    : `zostanie utworzone jako konto systemowe: ${resolved} (nazwa "${raw}" zostaje jako etykieta)`;
+    : t("ui.addUserDialog.accountPreview", { account: resolved, raw });
 }
 usernameInput.addEventListener("input", updateUsernamePreview);
 
@@ -313,27 +359,27 @@ function openUserDialog(mode, user) {
 
   if (mode === "edit") {
     editingUsername = user.username;
-    dialogTitle.textContent = `Edytuj: ${user.display_name || user.username}`;
-    usernameLabel.querySelector(".label-text").textContent = "Nazwa (etykieta)";
+    dialogTitle.textContent = t("ui.addUserDialog.titleEdit", { name: user.display_name || user.username });
+    usernameLabel.querySelector(".label-text").textContent = t("ui.addUserDialog.usernameLabelEdit");
     usernameInput.value = user.display_name || user.username;
     usernameInput.disabled = false; // still editable - it's just the display name now
-    usernamePreview.textContent = `konto systemowe: ${user.username} (nie do zmiany tutaj)`;
-    passwordLabel.querySelector(".label-text").textContent = "Nowe hasło SMB";
+    usernamePreview.textContent = t("ui.addUserDialog.accountFixedPreview", { account: user.username });
+    passwordLabel.querySelector(".label-text").textContent = t("ui.addUserDialog.passwordLabelEdit");
     passwordInput.required = false;
-    passwordInput.placeholder = "zostaw puste, aby nie zmieniać";
+    passwordInput.placeholder = t("ui.addUserDialog.passwordPlaceholderEdit");
     document.getElementById("new-allow-login").checked = user.can_login;
     renderGroupsChecklist(lastKnownGroupsData, user.groups);
-    submitBtn.textContent = "Zapisz zmiany";
+    submitBtn.textContent = t("ui.addUserDialog.saveBtn");
   } else {
     editingUsername = null;
-    dialogTitle.textContent = "Nowy użytkownik";
-    usernameLabel.querySelector(".label-text").textContent = "Nazwa użytkownika";
+    dialogTitle.textContent = t("ui.addUserDialog.titleNew");
+    usernameLabel.querySelector(".label-text").textContent = t("ui.addUserDialog.usernameLabelNew");
     usernameInput.disabled = false;
-    passwordLabel.querySelector(".label-text").textContent = "Hasło SMB";
+    passwordLabel.querySelector(".label-text").textContent = t("ui.addUserDialog.passwordLabelNew");
     passwordInput.required = true;
     passwordInput.placeholder = "";
     renderGroupsChecklist(lastKnownGroupsData);
-    submitBtn.textContent = "Utwórz";
+    submitBtn.textContent = t("ui.addUserDialog.createBtn");
   }
 
   addUserDialog.showModal();
@@ -356,15 +402,15 @@ addUserForm.addEventListener("submit", async (ev) => {
 
   let confirmMsg, url, body;
   if (editingUsername) {
-    confirmMsg = `Zapisać zmiany dla "${editingUsername}"?`;
+    confirmMsg = t("msg.confirmSaveUser", { name: editingUsername });
     url = `/api/users/${encodeURIComponent(editingUsername)}/update`;
     body = { display_name: nameField, groups, allow_login: allowLogin, password };
   } else {
     const resolvedAccount = nameField.toLowerCase();
-    const accountNote = resolvedAccount !== nameField ? ` (konto systemowe: ${resolvedAccount})` : "";
+    const accountNote = resolvedAccount !== nameField ? t("msg.accountNote", { account: resolvedAccount }) : "";
     confirmMsg = allowLogin
-      ? `Utworzyć użytkownika "${nameField}"${accountNote} z możliwością logowania/SSH?`
-      : `Utworzyć użytkownika "${nameField}"${accountNote} bez możliwości logowania (tylko SMB)?`;
+      ? t("msg.confirmCreateUserWithLogin", { name: nameField, note: accountNote })
+      : t("msg.confirmCreateUserNoLogin", { name: nameField, note: accountNote });
     url = "/api/users/create";
     body = { username: nameField, password, groups, allow_login: allowLogin };
   }
@@ -379,40 +425,37 @@ addUserForm.addEventListener("submit", async (ev) => {
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      addUserError.textContent = data.error || `Błąd HTTP ${res.status}`;
+      addUserError.textContent = apiErrorMessage(data, res);
       return;
     }
     addUserDialog.close();
     await loadUsers();
     await loadSshKeys();
   } catch (err) {
-    addUserError.textContent = `Błąd połączenia: ${err.message}`;
+    addUserError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
   } finally {
     submitBtn.disabled = false;
   }
 });
 
 async function removeSmbAccess(username, displayName) {
-  if (!window.confirm(`Usunąć dostęp SMB dla "${displayName}"? Konto systemowe zostanie zachowane.`)) return;
+  if (!window.confirm(t("msg.confirmRemoveSmb", { name: displayName }))) return;
   try {
     const res = await fetch(`/api/users/${encodeURIComponent(username)}/remove-smb`, { method: "POST" });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      showToast(data.error || `Błąd HTTP ${res.status}`, true);
+      showToast(apiErrorMessage(data, res), true);
       return;
     }
     await loadUsers();
     await loadSshKeys();
   } catch (err) {
-    showToast(`Błąd połączenia: ${err.message}`, true);
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
   }
 }
 
 async function deleteUser(username, displayName) {
-  const removeHome = window.confirm(
-    `Usunąć użytkownika "${displayName}" (konto: ${username})? To usuwa konto systemowe i dostęp SMB.\n\n` +
-    `Kliknij OK, aby usunąć BEZ katalogu domowego (bezpieczniej), Anuluj aby przerwać.`
-  );
+  const removeHome = window.confirm(t("msg.confirmDeleteUser", { name: displayName, username }));
   if (!removeHome) return;
   try {
     const res = await fetch(`/api/users/${encodeURIComponent(username)}/delete`, {
@@ -422,13 +465,13 @@ async function deleteUser(username, displayName) {
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      showToast(data.error || `Błąd HTTP ${res.status}`, true);
+      showToast(apiErrorMessage(data, res), true);
       return;
     }
     await loadUsers();
     await loadSshKeys();
   } catch (err) {
-    showToast(`Błąd połączenia: ${err.message}`, true);
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
   }
 }
 
@@ -450,18 +493,21 @@ const shareCommentInput = document.getElementById("share-comment");
 const sharePermissionsList = document.getElementById("share-permissions-list");
 const shareSubmitBtn = document.getElementById("share-submit");
 
-const PERMISSION_LABELS = { none: "Brak dostępu", ro: "Tylko odczyt", rw: "Odczyt i zapis" };
+function permissionLabels() {
+  return { none: t("ui.shares.permNone"), ro: t("ui.shares.permRo"), rw: t("ui.shares.permRw") };
+}
 
 let editingShareName = null;
+let lastSharesData = [];
 
 function formatPermissionsSummary(permissions) {
   const entries = Object.entries(permissions || {});
-  if (!entries.length) return "\u2013 (nikt nie ma dostępu)";
+  if (!entries.length) return t("ui.shares.noAccess");
   return entries
     .map(([user, level]) => {
       const u = lastKnownUsersData.find((x) => x.username === user);
       const label = u ? (u.display_name || u.username) : user;
-      return `${label} (${level === "rw" ? "RW" : "R"})`;
+      return `${label} (${level === "rw" ? t("ui.shares.permSummaryRw") : t("ui.shares.permSummaryRo")})`;
     })
     .join(", ");
 }
@@ -469,15 +515,16 @@ function formatPermissionsSummary(permissions) {
 function renderShares(sharesList) {
   sharesContainer.innerHTML = "";
   if (!sharesList.length) {
-    emptyState(sharesContainer, "Brak udziałów - dodaj pierwszy przyciskiem powyżej.");
+    emptyState(sharesContainer, t("msg.empty.shares"));
     return;
   }
   const table = document.createElement("table");
-  table.innerHTML = "<thead><tr><th>Udział</th><th>Komentarz</th><th>Dostęp</th><th></th></tr></thead>";
+  table.innerHTML = `<thead><tr><th>${t("ui.shares.colShare")}</th><th>${t("ui.shares.colComment")}</th><th>${t("ui.shares.colAccess")}</th><th></th></tr></thead>`;
   const tbody = document.createElement("tbody");
   for (const sh of sharesList) {
     const row = shareRowTemplate.content.cloneNode(true);
-    const shareLabel = sh.name + (sh.managed ? "" : " (spoza tego narzędzia)");
+    window.i18n.applyTranslations(row);
+    const shareLabel = sh.name + (sh.managed ? "" : t("ui.shares.notManagedSuffix"));
     const shareNameEl = row.querySelector(".display-name");
     shareNameEl.textContent = shareLabel;
     shareNameEl.title = shareLabel;
@@ -509,7 +556,7 @@ function populateSharePermissionsList(existingPermissions) {
   if (!lastKnownUsersData.length) {
     const p = document.createElement("p");
     p.className = "empty-state";
-    p.textContent = "Brak wykrytych użytkowników - dodaj ich najpierw w sekcji Użytkownicy.";
+    p.textContent = t("ui.shareDialog.noUsersHint");
     sharePermissionsList.appendChild(p);
     return;
   }
@@ -531,7 +578,7 @@ function populateSharePermissionsList(existingPermissions) {
       const warn = document.createElement("span");
       warn.className = "field-hint";
       warn.style.color = "var(--warn)";
-      warn.textContent = "(brak hasła SMB)";
+      warn.textContent = t("ui.shares.noSmbPasswordHint");
       info.appendChild(warn);
     }
     row.appendChild(info);
@@ -539,7 +586,7 @@ function populateSharePermissionsList(existingPermissions) {
     const select = document.createElement("select");
     select.dataset.username = u.username;
     select.className = "permission-select";
-    for (const [value, label] of Object.entries(PERMISSION_LABELS)) {
+    for (const [value, label] of Object.entries(permissionLabels())) {
       const opt = document.createElement("option");
       opt.value = value;
       opt.textContent = label;
@@ -568,15 +615,16 @@ async function loadShares() {
     const res = await fetch("/api/shares");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    renderShares(data.shares || []);
+    lastSharesData = data.shares || [];
+    renderShares(lastSharesData);
   } catch (err) {
-    emptyState(sharesContainer, `Błąd wczytywania udziałów (${err.message})`);
+    emptyState(sharesContainer, t("msg.loadErrorShares", { detail: err.message }));
   }
 }
 
 function updateSharePathPreview() {
   const raw = shareNameInput.value.trim().toLowerCase();
-  sharePathPreview.textContent = raw ? `ścieżka: /srv/${raw}` : "";
+  sharePathPreview.textContent = raw ? t("ui.shareDialog.pathPreview", { name: raw }) : "";
 }
 shareNameInput.addEventListener("input", updateSharePathPreview);
 
@@ -587,18 +635,18 @@ function openShareDialog(mode, share) {
 
   if (mode === "edit") {
     editingShareName = share.name;
-    shareDialogTitle.textContent = `Edytuj udział: ${share.name}`;
+    shareDialogTitle.textContent = t("ui.shareDialog.titleEdit", { name: share.name });
     shareNameInput.value = share.name;
     shareNameInput.disabled = true; // renaming not supported - delete + recreate instead
-    sharePathPreview.textContent = `ścieżka: ${share.path} (nie do zmiany tutaj)`;
+    sharePathPreview.textContent = t("ui.shareDialog.pathPreviewFixed", { path: share.path });
     shareCommentInput.value = share.comment || "";
-    shareSubmitBtn.textContent = "Zapisz zmiany";
+    shareSubmitBtn.textContent = t("ui.shareDialog.saveBtn");
   } else {
     editingShareName = null;
-    shareDialogTitle.textContent = "Nowy udział";
+    shareDialogTitle.textContent = t("ui.shareDialog.titleNew");
     shareNameInput.disabled = false;
     sharePathPreview.textContent = "";
-    shareSubmitBtn.textContent = "Utwórz";
+    shareSubmitBtn.textContent = t("ui.shareDialog.createBtn");
   }
 
   shareDialog.showModal();
@@ -617,12 +665,12 @@ shareForm.addEventListener("submit", async (ev) => {
   let url, body, confirmMsg;
   const summary = formatPermissionsSummary(permissions);
   if (editingShareName) {
-    confirmMsg = `Zapisać zmiany dla udziału "${editingShareName}"?\n\nDostęp: ${summary}`;
+    confirmMsg = t("msg.confirmSaveShare", { name: editingShareName, summary });
     url = `/api/shares/${encodeURIComponent(editingShareName)}/update`;
     body = { comment, permissions };
   } else {
     const name = shareNameInput.value.trim().toLowerCase();
-    confirmMsg = `Utworzyć udział "${name}" pod /srv/${name}?\n\nDostęp: ${summary}`;
+    confirmMsg = t("msg.confirmCreateShare", { name, summary });
     url = "/api/shares/create";
     body = { name, comment, permissions };
   }
@@ -637,29 +685,23 @@ shareForm.addEventListener("submit", async (ev) => {
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      shareError.textContent = data.error || `Błąd HTTP ${res.status}`;
+      shareError.textContent = apiErrorMessage(data, res);
       return;
     }
-    if (data.share && data.share.warning) {
-      showToast(data.share.warning, true);
+    if (data.share && data.share.warnings && data.share.warnings.length) {
+      showToast(warningsText(data.share.warnings), true);
     }
     shareDialog.close();
     await loadShares();
   } catch (err) {
-    shareError.textContent = `Błąd połączenia: ${err.message}`;
+    shareError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
   } finally {
     shareSubmitBtn.disabled = false;
   }
 });
 
 async function deleteShare(name) {
-  const deleteFiles = window.confirm(
-    `Usunąć udział "${name}"?\n\n` +
-    `OK = usuń tylko z Samby, ZOSTAW pliki na dysku (bezpieczne).\n` +
-    `Anuluj = przerwij.\n\n` +
-    `(Skasowanie też plików nie jest tu jeszcze dostępne z tego dialogu - ` +
-    `celowo, żeby nie skasować czyichś danych jednym kliknięciem.)`
-  );
+  const deleteFiles = window.confirm(t("msg.confirmDeleteShare", { name }));
   if (!deleteFiles) return;
   try {
     const res = await fetch(`/api/shares/${encodeURIComponent(name)}/delete`, {
@@ -669,12 +711,15 @@ async function deleteShare(name) {
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      showToast(data.error || `Błąd HTTP ${res.status}`, true);
+      showToast(apiErrorMessage(data, res), true);
       return;
+    }
+    if (data.share && data.share.warnings && data.share.warnings.length) {
+      showToast(warningsText(data.share.warnings), true);
     }
     await loadShares();
   } catch (err) {
-    showToast(`Błąd połączenia: ${err.message}`, true);
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
   }
 }
 
@@ -705,19 +750,21 @@ const removeDeploymentSubmitBtn = document.getElementById("remove-deployment-sub
 
 let deployingKeyForUsername = null;
 let removingDeployment = null; // { username, host, remote_user }
+let lastSshKeysData = [];
 
 function renderSshKeys(keysList) {
   sshKeysContainer.innerHTML = "";
   if (!keysList.length) {
-    emptyState(sshKeysContainer, "Nie wykryto żadnych kont użytkowników.");
+    emptyState(sshKeysContainer, t("msg.empty.sshKeys"));
     return;
   }
   const table = document.createElement("table");
-  table.innerHTML = "<thead><tr><th>Użytkownik</th><th>Klucz</th><th>Wysłano na</th><th></th></tr></thead>";
+  table.innerHTML = `<thead><tr><th>${t("ui.certs.colUser")}</th><th>${t("ui.certs.colKey")}</th><th>${t("ui.certs.colSentTo")}</th><th></th></tr></thead>`;
   const tbody = document.createElement("tbody");
   for (const k of keysList) {
-    if (k.error) continue; // user lookup failed - skip silently, shouldn't normally happen
+    if (k.error_code) continue; // user lookup failed - skip silently, shouldn't normally happen
     const row = sshKeyRowTemplate.content.cloneNode(true);
+    window.i18n.applyTranslations(row);
     const u = lastKnownUsersData.find((x) => x.username === k.username);
     const keyLabel = (u && (u.display_name || u.username)) || k.username;
     const keyNameEl = row.querySelector(".display-name");
@@ -725,7 +772,7 @@ function renderSshKeys(keysList) {
     keyNameEl.title = keyLabel;
 
     const pill = row.querySelector(".key-cell .pill");
-    pill.textContent = k.has_key ? "jest" : "brak";
+    pill.textContent = k.has_key ? t("ui.certs.keyPresent") : t("ui.certs.keyAbsent");
     pill.classList.add(k.has_key ? "pill-ok" : "pill-neutral");
 
     const depCell = row.querySelector(".deployments-cell");
@@ -737,15 +784,15 @@ function renderSshKeys(keysList) {
         const pillEl = document.createElement("span");
         pillEl.className = "deployment-pill " + (dep.is_current ? "current" : "stale");
         pillEl.title = dep.is_current
-          ? `Aktualny klucz wysłany na ${dep.remote_user}@${dep.host}`
-          : `Nieaktualne - klucz wygenerowano ponownie od czasu wysłania na ${dep.remote_user}@${dep.host}`;
+          ? t("ui.certs.deploymentCurrentTitle", { user: dep.remote_user, host: dep.host })
+          : t("ui.certs.deploymentStaleTitle", { user: dep.remote_user, host: dep.host });
         const label = document.createElement("span");
         label.textContent = dep.display_name;
         pillEl.appendChild(label);
         const removeBtn = document.createElement("button");
         removeBtn.type = "button";
         removeBtn.textContent = "\u00d7";
-        removeBtn.title = "Usuń z tego urządzenia";
+        removeBtn.title = t("ui.certs.removeFromDeviceTitle");
         removeBtn.addEventListener("click", () => openRemoveDeploymentDialog(k.username, dep));
         pillEl.appendChild(removeBtn);
         depCell.appendChild(pillEl);
@@ -765,7 +812,7 @@ function renderSshKeys(keysList) {
       deleteBtn.remove();
       if (!k.can_login) {
         generateBtn.disabled = true;
-        generateBtn.title = "To konto ma wyłączone logowanie/SSH - włącz je najpierw w edycji użytkownika";
+        generateBtn.title = t("ui.certs.loginDisabledHint");
       } else {
         generateBtn.addEventListener("click", () => generateSshKey(k.username));
       }
@@ -783,39 +830,40 @@ async function loadSshKeys() {
     const res = await fetch("/api/ssh-keys");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    renderSshKeys(data.keys || []);
+    lastSshKeysData = data.keys || [];
+    renderSshKeys(lastSshKeysData);
   } catch (err) {
-    emptyState(sshKeysContainer, `Błąd wczytywania kluczy (${err.message})`);
+    emptyState(sshKeysContainer, t("msg.loadErrorSshKeys", { detail: err.message }));
   }
 }
 
 async function generateSshKey(username) {
-  if (!window.confirm(`Wygenerować nową parę kluczy SSH dla "${username}"?`)) return;
+  if (!window.confirm(t("msg.confirmGenerateKey", { username }))) return;
   try {
     const res = await fetch(`/api/ssh-keys/${encodeURIComponent(username)}/generate`, { method: "POST" });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      showToast(data.error || `Błąd HTTP ${res.status}`, true);
+      showToast(apiErrorMessage(data, res), true);
       return;
     }
     await loadSshKeys();
   } catch (err) {
-    showToast(`Błąd połączenia: ${err.message}`, true);
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
   }
 }
 
 async function deleteSshKey(username) {
-  if (!window.confirm(`Usunąć klucz SSH dla "${username}"? Będzie trzeba go ponownie wysłać wszędzie, gdzie był zainstalowany.`)) return;
+  if (!window.confirm(t("msg.confirmDeleteKey", { username }))) return;
   try {
     const res = await fetch(`/api/ssh-keys/${encodeURIComponent(username)}/delete`, { method: "POST" });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      showToast(data.error || `Błąd HTTP ${res.status}`, true);
+      showToast(apiErrorMessage(data, res), true);
       return;
     }
     await loadSshKeys();
   } catch (err) {
-    showToast(`Błąd połączenia: ${err.message}`, true);
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
   }
 }
 
@@ -823,7 +871,7 @@ function openDeployDialog(username) {
   deployKeyForm.reset();
   deployKeyError.textContent = "";
   deployingKeyForUsername = username;
-  deployKeyTitle.textContent = `Wyślij klucz "${username}" na zdalne urządzenie`;
+  deployKeyTitle.textContent = t("ui.deployKeyDialog.titleTarget", { username });
   deployKeyDialog.showModal();
 }
 
@@ -838,7 +886,7 @@ deployKeyForm.addEventListener("submit", async (ev) => {
   const remoteUser = deployRemoteUserInput.value.trim();
   const remotePassword = deployPasswordInput.value;
 
-  if (!window.confirm(`Zainstalować klucz na ${remoteUser}@${remoteHost}?`)) return;
+  if (!window.confirm(t("msg.confirmDeployKey", { user: remoteUser, host: remoteHost }))) return;
 
   deployKeySubmitBtn.disabled = true;
   try {
@@ -854,14 +902,14 @@ deployKeyForm.addEventListener("submit", async (ev) => {
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      deployKeyError.textContent = data.error || `Błąd HTTP ${res.status}`;
+      deployKeyError.textContent = apiErrorMessage(data, res);
       return;
     }
     deployKeyDialog.close();
-    showToast("Klucz zainstalowany poprawnie.");
+    showToast(t("msg.keyDeployed"));
     await loadSshKeys();
   } catch (err) {
-    deployKeyError.textContent = `Błąd połączenia: ${err.message}`;
+    deployKeyError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
   } finally {
     deployKeySubmitBtn.disabled = false;
   }
@@ -871,7 +919,7 @@ function openRemoveDeploymentDialog(username, deployment) {
   removeDeploymentForm.reset();
   removeDeploymentError.textContent = "";
   removingDeployment = { username, host: deployment.host, remote_user: deployment.remote_user };
-  removeDeploymentTitle.textContent = `Usuń klucz z ${deployment.remote_user}@${deployment.host}`;
+  removeDeploymentTitle.textContent = t("ui.removeDeploymentDialog.titleTarget", { user: deployment.remote_user, host: deployment.host });
   removeDeploymentDialog.showModal();
 }
 
@@ -884,7 +932,7 @@ removeDeploymentForm.addEventListener("submit", async (ev) => {
   const password = removeDeploymentPasswordInput.value;
   const { username, host, remote_user } = removingDeployment;
 
-  if (!window.confirm(`Na pewno usunąć klucz z ${remote_user}@${host}? Ten host straci dostęp bez hasła.`)) return;
+  if (!window.confirm(t("msg.confirmRemoveDeployment", { user: remote_user, host }))) return;
 
   removeDeploymentSubmitBtn.disabled = true;
   try {
@@ -895,13 +943,13 @@ removeDeploymentForm.addEventListener("submit", async (ev) => {
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      removeDeploymentError.textContent = data.error || `Błąd HTTP ${res.status}`;
+      removeDeploymentError.textContent = apiErrorMessage(data, res);
       return;
     }
     removeDeploymentDialog.close();
     await loadSshKeys();
   } catch (err) {
-    removeDeploymentError.textContent = `Błąd połączenia: ${err.message}`;
+    removeDeploymentError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
   } finally {
     removeDeploymentSubmitBtn.disabled = false;
   }
@@ -915,13 +963,14 @@ setInterval(loadShares, REFRESH_MS);
 // --------------------------------------------------------------------
 
 const networkContainer = document.getElementById("network-container");
+let lastNetworkData = null;
 
-const BACKEND_LABELS = {
-  networkmanager: "NetworkManager",
-  "systemd-networkd": "systemd-networkd",
-  ifupdown: "ifupdown (/etc/network/interfaces)",
-  unknown: "nie rozpoznano",
-};
+function formatIfaceType(type) {
+  if (!type || !type.kind) return "";
+  const kindLabel = t(`net.kind.${type.kind}`);
+  if (!type.bus) return kindLabel;
+  return `${kindLabel} (${t(`net.bus.${type.bus}`)})`;
+}
 
 function renderNetwork(data) {
   networkContainer.innerHTML = "";
@@ -932,25 +981,25 @@ function renderNetwork(data) {
   const overview = document.createElement("div");
   overview.className = "card";
   overview.innerHTML = `
-    <div class="card-head"><span class="name">Ogólne</span></div>
+    <div class="card-head"><span class="name">${t("ui.network.overviewCardTitle")}</span></div>
     <dl class="facts">
-      <div><dt>Nazwa hosta</dt><dd class="mono">${data.hostname || "\u2013"}</dd></div>
-      <div><dt>Zarządzane przez</dt><dd>${BACKEND_LABELS[data.backend] || data.backend}</dd></div>
-      <div><dt>Serwery DNS</dt><dd class="mono">${(data.dns_servers || []).join(", ") || "\u2013"}</dd></div>
+      <div><dt>${t("ui.network.hostname")}</dt><dd class="mono">${data.hostname || "\u2013"}</dd></div>
+      <div><dt>${t("ui.network.managedBy")}</dt><dd>${t(`net.backend.${data.backend}`)}</dd></div>
+      <div><dt>${t("ui.network.dnsServers")}</dt><dd class="mono">${(data.dns_servers || []).join(", ") || "\u2013"}</dd></div>
     </dl>
   `;
   summary.appendChild(overview);
   networkContainer.appendChild(summary);
 
-  if (data.error) {
+  if (data.error_code) {
     const err = document.createElement("p");
     err.className = "error visible";
-    err.textContent = data.error;
+    err.textContent = window.i18n.errorText(data.error_code, data.error_context);
     networkContainer.appendChild(err);
   }
 
   if (!data.interfaces || !data.interfaces.length) {
-    emptyState(networkContainer, "Brak wykrytych interfejsów sieciowych.");
+    emptyState(networkContainer, t("msg.empty.networkInterfaces"));
     return;
   }
 
@@ -960,17 +1009,18 @@ function renderNetwork(data) {
     const card = document.createElement("div");
     card.className = "card";
     const addr = iface.addresses[0];
+    const typeLabel = formatIfaceType(iface.type);
     card.innerHTML = `
       <div class="card-head">
         <span class="badge ${iface.effective_up ? 'ok' : 'unknown'}"></span>
         <span class="name mono">${iface.name}</span>
-        <span class="level">${iface.type ? `(${iface.type})` : ""} ${iface.state}</span>
+        <span class="level">${typeLabel ? `(${typeLabel})` : ""} ${iface.state}</span>
       </div>
       <dl class="facts">
-        <div><dt>Adres IP</dt><dd class="mono">${addr ? addr.address + "/" + addr.prefixlen : "\u2013"}</dd></div>
-        <div><dt>Maska</dt><dd class="mono">${addr ? addr.netmask : "\u2013"}</dd></div>
-        <div><dt>Brama</dt><dd class="mono">${iface.gateway || "\u2013"}</dd></div>
-        <div><dt>MAC</dt><dd class="mono">${iface.mac || "\u2013"}</dd></div>
+        <div><dt>${t("ui.network.ip")}</dt><dd class="mono">${addr ? addr.address + "/" + addr.prefixlen : "\u2013"}</dd></div>
+        <div><dt>${t("ui.network.netmask")}</dt><dd class="mono">${addr ? addr.netmask : "\u2013"}</dd></div>
+        <div><dt>${t("ui.network.gateway")}</dt><dd class="mono">${iface.gateway || "\u2013"}</dd></div>
+        <div><dt>${t("ui.network.mac")}</dt><dd class="mono">${iface.mac || "\u2013"}</dd></div>
       </dl>
     `;
     ifaceCards.appendChild(card);
@@ -983,9 +1033,10 @@ async function loadNetwork() {
     const res = await fetch("/api/network");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
+    lastNetworkData = data;
     renderNetwork(data);
   } catch (err) {
-    emptyState(networkContainer, `Błąd wczytywania sieci (${err.message})`);
+    emptyState(networkContainer, t("msg.loadErrorNetwork", { detail: err.message }));
   }
 }
 
@@ -1007,6 +1058,7 @@ const logFilterClearBtn = document.getElementById("log-filter-clear-btn");
 const logMaxEntriesInput = document.getElementById("log-max-entries");
 
 const expandedLogIds = new Set();
+let lastLogEvents = [];
 
 function localInputToIso(value) {
   // <input type="datetime-local"> gives local time with no offset
@@ -1021,7 +1073,7 @@ function localInputToIso(value) {
 
 function fmtLogTime(iso) {
   try {
-    return new Date(iso).toLocaleString("pl-PL", {
+    return new Date(iso).toLocaleString(localeForLang(), {
       day: "2-digit",
       month: "2-digit",
       year: "numeric",
@@ -1033,24 +1085,36 @@ function fmtLogTime(iso) {
   }
 }
 
+function logEntrySummary(ev) {
+  // Older, pre-i18n entries persisted a plain "summary" string directly
+  // (before the log started storing category/action/params) - shown
+  // verbatim, since there's no code to re-translate it from.
+  if (ev.category && ev.action) {
+    return window.i18n.logSummary(ev.category, ev.action, ev.status, ev.params || {});
+  }
+  return ev.summary || "";
+}
+
 function renderLog(events) {
   logContainer.innerHTML = "";
   if (!events.length) {
-    emptyState(logContainer, "Brak zdarzeń do pokazania.");
+    emptyState(logContainer, t("msg.empty.log"));
     return;
   }
   for (const ev of events) {
     const node = logEntryTemplate.content.cloneNode(true);
+    window.i18n.applyTranslations(node);
     const article = node.querySelector(".log-entry");
     const isOk = ev.status === "success";
     const pill = node.querySelector(".status-pill");
     pill.classList.add(isOk ? "pill-ok" : "pill-crit");
-    pill.textContent = isOk ? "sukces" : "błąd";
-    node.querySelector(".log-summary").textContent = ev.summary;
+    pill.textContent = isOk ? t("ui.log.statusSuccess") : t("ui.log.statusFailure");
+    const summaryText = logEntrySummary(ev);
+    node.querySelector(".log-summary").textContent = summaryText;
     node.querySelector(".log-time").textContent = fmtLogTime(ev.timestamp);
 
     const messageEl = node.querySelector(".log-message");
-    messageEl.textContent = ev.message && ev.message.trim() ? ev.message : "(brak dodatkowych szczegółów)";
+    messageEl.textContent = ev.message && ev.message.trim() ? ev.message : t("ui.log.noDetail");
 
     if (expandedLogIds.has(ev.id)) article.classList.add("expanded");
 
@@ -1063,10 +1127,10 @@ function renderLog(events) {
     node.querySelector(".log-copy-btn").addEventListener("click", async (e) => {
       e.stopPropagation();
       try {
-        await navigator.clipboard.writeText(`${ev.summary}\n${fmtLogTime(ev.timestamp)}\n\n${messageEl.textContent}`);
-        showToast("Skopiowano do schowka.");
+        await navigator.clipboard.writeText(`${summaryText}\n${fmtLogTime(ev.timestamp)}\n\n${messageEl.textContent}`);
+        showToast(t("msg.copiedToClipboard"));
       } catch {
-        showToast("Nie udało się skopiować.", true);
+        showToast(t("msg.copyFailed"), true);
       }
     });
 
@@ -1085,12 +1149,13 @@ async function loadLog() {
     const res = await fetch(`/api/log?${params.toString()}`);
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
-    renderLog(data.events || []);
+    lastLogEvents = data.events || [];
+    renderLog(lastLogEvents);
     if (document.activeElement !== logMaxEntriesInput) {
       logMaxEntriesInput.value = data.max_entries;
     }
   } catch (err) {
-    emptyState(logContainer, `Błąd wczytywania logu (${err.message})`);
+    emptyState(logContainer, t("msg.loadErrorLog", { detail: err.message }));
   }
 }
 
@@ -1104,22 +1169,22 @@ logFilterClearBtn.addEventListener("click", () => {
 });
 
 logClearBtn.addEventListener("click", async () => {
-  if (!confirm("Wyczyścić cały log operacji? Tej operacji nie można cofnąć.")) return;
+  if (!confirm(t("msg.logClearConfirm"))) return;
   try {
     const res = await fetch("/api/log/clear", { method: "POST" });
     const data = await res.json();
-    if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+    if (!res.ok || !data.success) throw new Error(apiErrorMessage(data, res));
     expandedLogIds.clear();
     await loadLog();
   } catch (err) {
-    showToast(`Nie udało się wyczyścić logu: ${err.message}`, true);
+    showToast(t("msg.logClearFailed", { detail: err.message }), true);
   }
 });
 
 logMaxEntriesInput.addEventListener("change", async () => {
   const value = parseInt(logMaxEntriesInput.value, 10);
   if (!value || value < 10 || value > 1000) {
-    showToast("Limit wpisów musi być liczbą od 10 do 1000.", true);
+    showToast(t("msg.logMaxEntriesInvalid"), true);
     await loadLog();
     return;
   }
@@ -1130,16 +1195,34 @@ logMaxEntriesInput.addEventListener("change", async () => {
       body: JSON.stringify({ max_entries: value }),
     });
     const data = await res.json();
-    if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
-    showToast("Zapisano limit wpisów.");
+    if (!res.ok || !data.success) throw new Error(apiErrorMessage(data, res));
+    showToast(t("msg.logMaxEntriesSaved"));
     await loadLog();
   } catch (err) {
-    showToast(`Nie udało się zapisać limitu: ${err.message}`, true);
+    showToast(t("msg.logMaxEntriesSaveFailed", { detail: err.message }), true);
   }
 });
 
 loadLog();
 setInterval(loadLog, REFRESH_MS);
+
+// --------------------------------------------------------------------
+// Re-render every section's cached data with the newly selected
+// language - called once by the i18n language-change listener above.
+// Static markup (data-i18n elements already in the DOM) is retranslated
+// by window.i18n.setLanguage() itself before this runs.
+// --------------------------------------------------------------------
+
+function rerenderEverything() {
+  renderRaid(lastRaidData);
+  renderDisks(lastDisksData);
+  renderUsers(lastKnownUsersData);
+  renderGroupsChecklist(lastKnownGroupsData);
+  renderShares(lastSharesData);
+  renderSshKeys(lastSshKeysData);
+  if (lastNetworkData) renderNetwork(lastNetworkData);
+  renderLog(lastLogEvents);
+}
 
 // Kick off polling now that everything above is declared.
 loadUsers();

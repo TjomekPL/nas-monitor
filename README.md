@@ -92,6 +92,7 @@ a nie przepisywanie wszystkiego:
 ```
 nas_monitor/
   system_tools.py   - wspólne: bezpieczne odpalanie poleceń, szukanie binarek
+  errors.py           - wspólne: budowanie wyników błędów jako kod+kontekst (nigdy gotowy tekst) - patrz sekcja i18n niżej
   monitor.py         - rdzeń: dyski, SMART, RAID (czysty odczyt)
   users.py           - rdzeń: użytkownicy i grupy systemowe (wykrywanie + tworzenie)
   smb.py             - backend SMB: hasła Samby, dowiązanie do kont systemowych
@@ -106,6 +107,9 @@ nas_monitor/
   static/
     style.css
     dashboard.js      - odpytuje /api/status, /api/users, /api/shares co 20s, bez frameworków
+    i18n/
+      index.js           - funkcja t(), wykrywanie/przełączanie języka, aplikowanie tłumaczeń do DOM
+      pl.js, en.js         - słowniki tłumaczeń (UI, komunikaty, kody błędów/ostrzeżeń, log)
 tests/
   test_monitor.py     - testy dysków/SMART/RAID na przykładowych danych
   test_users.py        - testy kont/grup systemowych
@@ -298,3 +302,30 @@ klienta), więc ta separacja jest zamierzona.
    limit liczby przechowywanych wpisów (domyślnie 50, zakres 10-1000,
    najstarsze wpisy usuwane automatycznie po przekroczeniu). Zapisane przez
    `state_store.py` (jak wdrożenia kluczy SSH) - przetrwa restart usługi.
+11. **Wersje językowe (i18n)** - ✅ zrobione, PL/EN na start, łatwe do
+   rozszerzenia. Architektura celowo rozdziela dwie sprawy:
+
+   - **Backend nigdy nie generuje tekstu dla użytkownika.** Każda mutująca
+     funkcja zwraca `error_code` (stały, nietłumaczony identyfikator jak
+     `"users.already_exists"`) + `error_context` (dane do interpolacji,
+     np. `{"username": "wieslaw"}`) zamiast gotowego polskiego zdania -
+     zobacz `nas_monitor/errors.py`. To samo dla ostrzeżeń
+     (`warning_code`/`warning_context`, lista `warnings` bo jeden wynik
+     może nieść więcej niż jedno). Log operacji też nie zapisuje gotowego
+     tekstu - `oplog.log_event()` przyjmuje `category`+`action`+`status`+
+     `params`, więc historia przetłumaczy się poprawnie nawet wstecz, po
+     zmianie języka.
+   - **Cały tekst mieszka po stronie frontendu**, w
+     `nas_monitor/static/i18n/{pl,en}.js` (zwykłe pliki `<script>`, bez
+     buildowania) + `index.js` (funkcja `t(klucz, dane)`, wykrywanie
+     języka z zapisanego wyboru/języka przeglądarki, przełącznik w
+     nagłówku). Dodanie kolejnego języka to jeden nowy plik na wzór
+     `pl.js`/`en.js` - backend i reszta frontendu się nie zmieniają.
+   - Statyczne etykiety w HTML oznaczone `data-i18n="klucz"` (tłumaczone
+     przy starcie i przy każdej zmianie języka); treści generowane przez
+     JS (tabele, dialogi, tosty, potwierdzenia) wywołują `t()` bezpośrednio.
+   - Zweryfikowane end-to-end w sandboxie przez jsdom (symulowany DOM +
+     zamockowane API): renderowanie wszystkich zakładek w obu językach,
+     przełączanie w locie, zero brakujących kluczy tłumaczeń. 176 testów
+     jednostkowych backendu zaktualizowanych pod kody błędów zamiast
+     dopasowywania fragmentów polskiego tekstu.

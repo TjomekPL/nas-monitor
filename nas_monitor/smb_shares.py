@@ -23,7 +23,7 @@ import os
 import re
 from typing import Any
 
-from nas_monitor import system_tools
+from nas_monitor import system_tools, errors
 from nas_monitor import users as users_mod
 from nas_monitor import smb as smb_mod
 
@@ -54,11 +54,13 @@ def access_group_name(share_name: str) -> str:
     return f"{share_name}_access"
 
 
-def _missing_smb_password_warning(usernames: list[str]) -> str | None:
+def _missing_smb_password_warning(usernames: list[str]) -> dict[str, Any] | None:
     """Being in a share's access group is not enough to log in - Samba
     also needs an actual SMB password for the account (smbpasswd). This
     is easy to miss for a pre-existing system account (e.g. the admin's
-    own desktop login) that was never given one through this tool."""
+    own desktop login) that was never given one through this tool.
+    Returns a warning {"code", "context"} dict, or None if nothing to
+    warn about."""
     if not usernames:
         return None
     samba_info = smb_mod.list_samba_users()
@@ -68,10 +70,7 @@ def _missing_smb_password_warning(usernames: list[str]) -> str | None:
     missing = [u for u in usernames if u not in has_password]
     if not missing:
         return None
-    return (
-        f"Uwaga: {', '.join(missing)} nie ma jeszcze ustawionego hasła SMB - "
-        f"nie będzie mógł się zalogować, dopóki nie ustawisz go w sekcji Użytkownicy."
-    )
+    return {"code": "shares.missing_smb_password", "context": {"usernames": ", ".join(missing)}}
 
 
 def is_installed() -> bool:
@@ -190,7 +189,7 @@ def _ensure_include_directive(
     """Make sure the main smb.conf includes our managed file. Appends a
     single line under [global] the first time only - never touches
     anything else in the (possibly hand-edited) main file."""
-    result: dict[str, Any] = {"success": False, "error": None}
+    result: dict[str, Any] = {"success": False}
 
     os.makedirs(os.path.dirname(managed_conf_path), exist_ok=True)
     if not os.path.isfile(managed_conf_path):
@@ -200,8 +199,7 @@ def _ensure_include_directive(
         with open(smb_conf_path, "r") as fh:
             content = fh.read()
     except OSError as exc:
-        result["error"] = str(exc)
-        return result
+        return errors.io_failed(result, exc, smb_conf_path)
 
     include_line = f"   include = {managed_conf_path}"
     if managed_conf_path in content:
@@ -209,16 +207,14 @@ def _ensure_include_directive(
         return result
 
     if "[global]" not in content:
-        result["error"] = f"Nie znaleziono sekcji [global] w {smb_conf_path}"
-        return result
+        return errors.fail(result, "shares.global_section_missing", path=smb_conf_path)
 
     new_content = content.replace("[global]", f"[global]\n{include_line}", 1)
     try:
         with open(smb_conf_path, "w") as fh:
             fh.write(new_content)
     except OSError as exc:
-        result["error"] = str(exc)
-        return result
+        return errors.io_failed(result, exc, smb_conf_path)
 
     result["success"] = True
     return result
@@ -230,12 +226,11 @@ def _validate_and_apply(
     """Write new_content to the managed file, validate the REAL effective
     config with testparm, and roll back to the previous content if
     validation fails. Nothing is left broken either way."""
-    result: dict[str, Any] = {"success": False, "error": None}
+    result: dict[str, Any] = {"success": False}
 
     include_result = _ensure_include_directive(managed_conf_path=managed_conf_path)
     if not include_result["success"]:
-        result["error"] = include_result["error"]
-        return result
+        return errors.propagate(result, include_result)
 
     try:
         with open(managed_conf_path, "r") as fh:
@@ -247,23 +242,20 @@ def _validate_and_apply(
         with open(managed_conf_path, "w") as fh:
             fh.write(new_content)
     except OSError as exc:
-        result["error"] = f"Nie udało się zapisać {managed_conf_path}: {exc}"
-        return result
+        return errors.io_failed(result, exc, managed_conf_path)
 
     testparm_path = system_tools.find_binary("testparm")
     if testparm_path is None:
         # restore - we can't validate, so we can't safely apply
         with open(managed_conf_path, "w") as fh:
             fh.write(previous_content)
-        result["error"] = "testparm not installed - zmiana wycofana"
-        return result
+        return errors.fail(result, "shares.validate_tool_missing", tool="testparm")
 
     code, out, err = system_tools.run([testparm_path, "-s"])
     if code != 0:
         with open(managed_conf_path, "w") as fh:
             fh.write(previous_content)
-        result["error"] = f"testparm odrzucił zmianę, cofnięto: {(err or out).strip()[:300]}"
-        return result
+        return errors.fail(result, "shares.config_rejected", detail=(err or out).strip()[:300])
 
     reload_result = reload_smbd()
     if not reload_result["success"]:
@@ -271,7 +263,12 @@ def _validate_and_apply(
         # this is a soft failure, not a rollback case (config on disk is
         # correct, a manual/next restart will pick it up regardless)
         result["success"] = True
-        result["warning"] = f"Konfiguracja zapisana, ale reload smbd nie powiódł się: {reload_result['error']}"
+        errors.warn(
+            result,
+            "shares.reload_failed",
+            reload_error_code=reload_result.get("error_code"),
+            **(reload_result.get("error_context") or {}),
+        )
         return result
 
     result["success"] = True
@@ -279,15 +276,13 @@ def _validate_and_apply(
 
 
 def reload_smbd() -> dict[str, Any]:
-    result: dict[str, Any] = {"success": False, "error": None}
+    result: dict[str, Any] = {"success": False}
     smbcontrol_path = system_tools.find_binary("smbcontrol")
     if smbcontrol_path is None:
-        result["error"] = "smbcontrol not installed"
-        return result
+        return errors.tool_missing(result, "smbcontrol")
     code, out, err = system_tools.run([smbcontrol_path, "smbd", "reload-config"])
     if code != 0:
-        result["error"] = err.strip() or f"smbcontrol exited {code}"
-        return result
+        return errors.command_failed(result, err, out, code, "smbcontrol")
     result["success"] = True
     return result
 
@@ -304,11 +299,10 @@ def list_shares(
     manual setup before this tool existed) - the latter shown read-only-
     for-management-purposes, tagged managed=False, so nothing here is
     hidden just because this tool didn't create it."""
-    result: dict[str, Any] = {"available": False, "shares": [], "error": None}
+    result: dict[str, Any] = {"available": False, "shares": []}
 
     if not os.path.isfile(main_conf_path):
-        result["error"] = f"{main_conf_path} nie istnieje"
-        return result
+        return errors.fail(result, "shares.main_conf_missing", path=main_conf_path)
 
     managed = _read_managed_shares(managed_conf_path)
     managed_names = {s["name"] for s in managed}
@@ -317,8 +311,7 @@ def list_shares(
     try:
         cp.read(main_conf_path)
     except configparser.Error as exc:
-        result["error"] = f"Nie udało się sparsować {main_conf_path}: {exc}"
-        return result
+        return errors.fail(result, "shares.main_conf_parse_failed", path=main_conf_path, detail=str(exc))
 
     others = []
     for name in cp.sections():
@@ -370,31 +363,27 @@ def list_shares(
 def _prepare_share_directory(path: str, group: str | None) -> dict[str, Any]:
     """Create the share folder if missing, and if a group is given, own it
     by that group with the setgid bit so new files inherit the group."""
-    result: dict[str, Any] = {"success": False, "error": None}
+    result: dict[str, Any] = {"success": False}
     try:
         os.makedirs(path, exist_ok=True)
     except OSError as exc:
-        result["error"] = f"Nie udało się utworzyć {path}: {exc}"
-        return result
+        return errors.io_failed(result, exc, path)
 
     if group:
         try:
             gid = grp.getgrnam(group).gr_gid
         except KeyError:
-            result["error"] = f"Grupa '{group}' nie istnieje"
-            return result
+            return errors.fail(result, "shares.group_not_found", group=group)
         try:
             os.chown(path, -1, gid)  # -1 = leave owner unchanged
             os.chmod(path, 0o2775)  # rwxrwsr-x - setgid so new files inherit the group
         except OSError as exc:
-            result["error"] = f"Nie udało się ustawić uprawnień na {path}: {exc}"
-            return result
+            return errors.io_failed(result, exc, path)
     else:
         try:
             os.chmod(path, 0o755)
         except OSError as exc:
-            result["error"] = f"Nie udało się ustawić uprawnień na {path}: {exc}"
-            return result
+            return errors.io_failed(result, exc, path)
 
     result["success"] = True
     return result
@@ -409,25 +398,19 @@ def create_share(
     """permissions maps username -> "rw" or "ro". A user not present in
     the dict has no access at all (not added to the share's access group,
     so Samba's own valid users check blocks them - not just a UI hide)."""
-    result: dict[str, Any] = {"name": name, "success": False, "error": None}
+    result: dict[str, Any] = {"name": name, "success": False}
 
     if not is_valid_share_name(name):
-        result["error"] = (
-            "Nieprawidłowa nazwa udziału (litery/cyfry/_/-, musi zaczynać się "
-            "literą, max 32 znaki, nie może być nazwą zarezerwowaną)"
-        )
-        return result
+        return errors.fail(result, "shares.invalid_name")
 
     existing = _read_managed_shares(managed_conf_path)
     if any(s["name"] == name for s in existing):
-        result["error"] = f"Udział '{name}' już istnieje"
-        return result
+        return errors.fail(result, "shares.already_exists", name=name)
 
     permissions = dict(permissions or {})
     for u, level in permissions.items():
         if level not in ("rw", "ro"):
-            result["error"] = f"Nieprawidłowy poziom dostępu dla '{u}': {level!r} (oczekiwano 'rw' lub 'ro')"
-            return result
+            return errors.fail(result, "shares.invalid_permission_level", user=u, level=str(level))
 
     group = access_group_name(name) if permissions else None
 
@@ -435,14 +418,12 @@ def create_share(
         for u in permissions:
             add_result = users_mod.add_user_to_group(u, group)
             if not add_result["success"]:
-                result["error"] = f"Nie udało się dodać '{u}' do grupy dostępu: {add_result['error']}"
-                return result
+                return errors.propagate(result, add_result, user=u, group=group)
 
     path = share_path(name)
     dir_result = _prepare_share_directory(path, group)
     if not dir_result["success"]:
-        result["error"] = dir_result["error"]
-        return result
+        return errors.propagate(result, dir_result)
 
     new_share = {
         "name": name,
@@ -454,15 +435,17 @@ def create_share(
     new_content = _render_managed_shares(existing + [new_share])
     apply_result = _validate_and_apply(new_content, managed_conf_path)
     if not apply_result["success"]:
-        result["error"] = apply_result["error"]
-        return result
+        return errors.propagate(result, apply_result)
 
     result["success"] = True
     result["path"] = path
     result["permissions"] = permissions
-    warnings = [w for w in [apply_result.get("warning"), _missing_smb_password_warning(list(permissions))] if w]
+    warnings = list(apply_result.get("warnings") or [])
+    pw_warning = _missing_smb_password_warning(list(permissions))
+    if pw_warning:
+        warnings.append(pw_warning)
     if warnings:
-        result["warning"] = " ".join(warnings)
+        result["warnings"] = warnings
     return result
 
 
@@ -472,13 +455,12 @@ def update_share(
     permissions: dict[str, str] | None = None,
     managed_conf_path: str = MANAGED_CONF_PATH,
 ) -> dict[str, Any]:
-    result: dict[str, Any] = {"name": name, "success": False, "error": None}
+    result: dict[str, Any] = {"name": name, "success": False}
 
     existing = _read_managed_shares(managed_conf_path)
     match = next((s for s in existing if s["name"] == name), None)
     if match is None:
-        result["error"] = f"Udział '{name}' nie istnieje (albo nie jest zarządzany przez to narzędzie)"
-        return result
+        return errors.fail(result, "shares.not_found", name=name)
 
     if comment is not None:
         match["comment"] = comment
@@ -486,8 +468,7 @@ def update_share(
     if permissions is not None:
         for u, level in permissions.items():
             if level not in ("rw", "ro"):
-                result["error"] = f"Nieprawidłowy poziom dostępu dla '{u}': {level!r} (oczekiwano 'rw' lub 'ro')"
-                return result
+                return errors.fail(result, "shares.invalid_permission_level", user=u, level=str(level))
 
         dedicated_group = access_group_name(name)
         existing_group = match.get("access_group")
@@ -507,52 +488,49 @@ def update_share(
         for u in desired_users - current_users:
             add_result = users_mod.add_user_to_group(u, group)
             if not add_result["success"]:
-                result["error"] = f"Nie udało się dodać '{u}' do grupy dostępu: {add_result['error']}"
-                return result
+                return errors.propagate(result, add_result, user=u, group=group)
         for u in current_users - desired_users:
             remove_result = users_mod.remove_user_from_group(u, group)
             if not remove_result["success"]:
-                result["error"] = f"Nie udało się usunąć '{u}' z grupy dostępu: {remove_result['error']}"
-                return result
+                return errors.propagate(result, remove_result, user=u, group=group)
 
         match["access_group"] = group if desired_users else None
         match["permissions"] = permissions
         if desired_users:
             dir_result = _prepare_share_directory(match["path"], group)
             if not dir_result["success"]:
-                result["error"] = dir_result["error"]
-                return result
+                return errors.propagate(result, dir_result)
 
     new_content = _render_managed_shares(existing)
     apply_result = _validate_and_apply(new_content, managed_conf_path)
     if not apply_result["success"]:
-        result["error"] = apply_result["error"]
-        return result
+        return errors.propagate(result, apply_result)
 
     result["success"] = True
-    warnings = [w for w in [apply_result.get("warning"), _missing_smb_password_warning(list(permissions or {}))] if w]
+    warnings = list(apply_result.get("warnings") or [])
+    pw_warning = _missing_smb_password_warning(list(permissions or {}))
+    if pw_warning:
+        warnings.append(pw_warning)
     if warnings:
-        result["warning"] = " ".join(warnings)
+        result["warnings"] = warnings
     return result
 
 
 def delete_share(
     name: str, delete_files: bool = False, managed_conf_path: str = MANAGED_CONF_PATH
 ) -> dict[str, Any]:
-    result: dict[str, Any] = {"name": name, "success": False, "error": None}
+    result: dict[str, Any] = {"name": name, "success": False}
 
     existing = _read_managed_shares(managed_conf_path)
     match = next((s for s in existing if s["name"] == name), None)
     if match is None:
-        result["error"] = f"Udział '{name}' nie istnieje (albo nie jest zarządzany przez to narzędzie)"
-        return result
+        return errors.fail(result, "shares.not_found", name=name)
 
     remaining = [s for s in existing if s["name"] != name]
     new_content = _render_managed_shares(remaining)
     apply_result = _validate_and_apply(new_content, managed_conf_path)
     if not apply_result["success"]:
-        result["error"] = apply_result["error"]
-        return result
+        return errors.propagate(result, apply_result)
 
     access_group = match.get("access_group")
     if access_group and access_group == access_group_name(name):
@@ -572,7 +550,7 @@ def delete_share(
             _shutil.rmtree(match["path"])
         except OSError as exc:
             result["success"] = True
-            result["warning"] = f"Udział usunięty z Samby, ale nie udało się skasować {match['path']}: {exc}"
+            errors.warn(result, "shares.file_delete_failed", path=match["path"], detail=str(exc))
             return result
 
     result["success"] = True

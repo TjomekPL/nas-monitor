@@ -4,10 +4,12 @@ nas_monitor.oplog
 Operations log: a record of what nas-monitor has *done* (user/share/key/
 account mutations), not what it has merely displayed. Deliberately NOT a
 raw console-style log - the UI shows a short human header per entry
-("Utworzono użytkownika wieslaw", success/failure), and the full raw
-detail is available on demand (expand + copy) rather than always visible,
-since a wall of terminal-style text is exactly what discourages people
-from ever looking at a log.
+(translated from category+action+status+params, e.g.
+"log.users.create.success" -> "Utworzono użytkownika wieslaw" /
+"Created user wieslaw"), and the full raw detail is available on demand
+(expand + copy) rather than always visible, since a wall of terminal-
+style text is exactly what discourages people from ever looking at a
+log.
 
 Persisted via state_store (like ssh_keys deployment state) so history
 survives a service restart. Two things are stored under one file to
@@ -46,12 +48,17 @@ def _next_id(events: list[dict[str, Any]]) -> int:
     return (max((e.get("id", 0) for e in events), default=0)) + 1
 
 
-def log_event(category: str, action: str, status: str, summary: str, message: str = "") -> dict[str, Any]:
-    """Record one operation. status is "success" or "failure".
-    summary is the short header line shown collapsed in the UI; message
-    is the full detail (error text, command output, ...) shown only when
-    the entry is expanded. Never raises - a logging failure must not
-    break the operation it's trying to record."""
+def log_event(category: str, action: str, status: str, params: dict[str, Any] | None = None, message: str = "") -> dict[str, Any]:
+    """Record one operation. status is "success" or "failure". The short
+    header line shown collapsed in the UI is resolved at render time by
+    nas_monitor/static/i18n/{pl,en}.js from the key "log.<category>.
+    <action>.<status>" (e.g. "log.users.create.success"), interpolating
+    params (e.g. {"username": "wieslaw"}). Nothing here is prose - that's
+    what lets already-logged history re-render correctly if the admin
+    switches language later. message is the full detail (raw error text,
+    command output, ...) shown only when the entry is expanded -
+    genuinely technical/raw content, not translated. Never raises - a
+    logging failure must not break the operation it's trying to record."""
     data = _load()
     entry = {
         "id": _next_id(data["events"]),
@@ -59,7 +66,7 @@ def log_event(category: str, action: str, status: str, summary: str, message: st
         "category": category,
         "action": action,
         "status": "success" if status == "success" else "failure",
-        "summary": summary,
+        "params": params or {},
         "message": message or "",
     }
     data["events"].append(entry)

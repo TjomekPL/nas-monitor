@@ -22,7 +22,7 @@ class TestGetKeyStatus(unittest.TestCase):
     def test_rejects_nonexistent_user(self, mock_pwnam):
         result = ssh_keys.get_key_status("ghost")
         self.assertFalse(result["has_key"])
-        self.assertIn("nie istnieje", result["error"])
+        self.assertEqual(result["error_code"], "users.not_found")
 
     @mock.patch("nas_monitor.ssh_keys.os.path.isfile", return_value=False)
     @mock.patch("nas_monitor.ssh_keys.pwd.getpwnam")
@@ -52,7 +52,7 @@ class TestGenerateKey(unittest.TestCase):
         mock_pwnam.return_value = _fake_pwent("share1", "/usr/sbin/nologin")
         result = ssh_keys.generate_key("share1")
         self.assertFalse(result["success"])
-        self.assertIn("nologin", result["error"])
+        self.assertEqual(result["error_code"], "ssh_keys.login_disabled")
 
     @mock.patch("nas_monitor.ssh_keys.os.path.isfile", return_value=True)
     @mock.patch("nas_monitor.ssh_keys.pwd.getpwnam")
@@ -60,7 +60,7 @@ class TestGenerateKey(unittest.TestCase):
         mock_pwnam.return_value = _fake_pwent("tomek", "/bin/bash")
         result = ssh_keys.generate_key("tomek")
         self.assertFalse(result["success"])
-        self.assertIn("już istnieje", result["error"])
+        self.assertEqual(result["error_code"], "ssh_keys.already_exists")
 
     @mock.patch("nas_monitor.ssh_keys.system_tools.find_binary", return_value=None)
     @mock.patch("nas_monitor.ssh_keys.os.chmod")
@@ -72,7 +72,8 @@ class TestGenerateKey(unittest.TestCase):
         mock_pwnam.return_value = _fake_pwent("tomek", "/bin/bash")
         result = ssh_keys.generate_key("tomek")
         self.assertFalse(result["success"])
-        self.assertIn("not installed", result["error"])
+        self.assertEqual(result["error_code"], "system.tool_missing")
+        self.assertEqual(result["error_context"]["tool"], "ssh-keygen")
 
 
 class TestDeployKeyToRemote(unittest.TestCase):
@@ -92,7 +93,7 @@ class TestDeployKeyToRemote(unittest.TestCase):
     def test_rejects_empty_password(self, mock_status):
         result = ssh_keys.deploy_key_to_remote("tomek", "192.168.0.20", "wieslaw", "")
         self.assertFalse(result["success"])
-        self.assertIn("hasło", result["error"])
+        self.assertEqual(result["error_code"], "ssh_keys.empty_remote_password")
 
     def test_rejects_bad_hostname(self):
         result = ssh_keys.deploy_key_to_remote("tomek", "not a host!", "wieslaw", "x")
@@ -106,7 +107,7 @@ class TestDeployKeyToRemote(unittest.TestCase):
     def test_rejects_when_local_user_has_no_key_yet(self, mock_status):
         result = ssh_keys.deploy_key_to_remote("tomek", "192.168.0.20", "wieslaw", "x")
         self.assertFalse(result["success"])
-        self.assertIn("nie ma jeszcze", result["error"])
+        self.assertEqual(result["error_code"], "ssh_keys.no_key_yet")
 
     @mock.patch("nas_monitor.ssh_keys.pwd.getpwnam")
     @mock.patch("nas_monitor.ssh_keys.system_tools.run", return_value=(0, "", ""))
@@ -130,7 +131,8 @@ class TestDeployKeyToRemote(unittest.TestCase):
         mock_pwnam.return_value = _fake_pwent("tomek", "/bin/bash")
         result = ssh_keys.deploy_key_to_remote("tomek", "192.168.0.20", "wieslaw", "wrongpass")
         self.assertFalse(result["success"])
-        self.assertIn("Permission denied", result["error"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+        self.assertIn("Permission denied", result["error_context"]["detail"])
 
 
 class TestDeploymentTracking(unittest.TestCase):
@@ -240,7 +242,7 @@ class TestDeploymentTracking(unittest.TestCase):
     def test_remove_deployment_rejects_unknown_entry(self):
         result = ssh_keys.remove_deployment("tomek", "1.2.3.4", "nobody", "x")
         self.assertFalse(result["success"])
-        self.assertIn("Nie znaleziono", result["error"])
+        self.assertEqual(result["error_code"], "ssh_keys.deployment_not_found")
 
     def test_remove_deployment_rejects_empty_password(self):
         ssh_keys._record_deployment("tomek", "192.168.0.20", "wieslaw", "ssh-ed25519 AAAAtest x")

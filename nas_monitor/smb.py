@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from nas_monitor import system_tools
+from nas_monitor import system_tools, errors
 
 
 def is_installed() -> bool:
@@ -26,21 +26,20 @@ def is_installed() -> bool:
 def list_samba_users() -> dict[str, Any]:
     """Usernames with SMB access configured, via pdbedit -L.
 
-    Returns {"available": bool, "usernames": [...], "error": str|None} -
-    same defensive shape as the rest of the project: missing tools or
-    permission problems become a status field, never an exception.
+    Returns {"available": bool, "usernames": [...]} plus error_code/
+    error_context on failure - same defensive shape as the rest of the
+    project: missing tools or permission problems become a status field,
+    never an exception.
     """
-    result: dict[str, Any] = {"available": False, "usernames": [], "error": None}
+    result: dict[str, Any] = {"available": False, "usernames": []}
 
     pdbedit_path = system_tools.find_binary("pdbedit")
     if pdbedit_path is None:
-        result["error"] = "pdbedit not installed"
-        return result
+        return errors.tool_missing(result, "pdbedit")
 
     code, out, err = system_tools.run([pdbedit_path, "-L"])
     if code != 0:
-        result["error"] = err.strip() or f"pdbedit exited {code}"
-        return result
+        return errors.command_failed(result, err, out, code, "pdbedit")
 
     usernames = []
     for line in out.splitlines():
@@ -59,16 +58,14 @@ def list_samba_users() -> dict[str, Any]:
 def set_password(username: str, password: str) -> dict[str, Any]:
     """Set (or create) a user's SMB password. The system account must
     already exist - use nas_monitor.users.create_user() first."""
-    result: dict[str, Any] = {"username": username, "success": False, "error": None}
+    result: dict[str, Any] = {"username": username, "success": False}
 
     if not password:
-        result["error"] = "Puste hasło"
-        return result
+        return errors.fail(result, "smb.empty_password")
 
     smbpasswd_path = system_tools.find_binary("smbpasswd")
     if smbpasswd_path is None:
-        result["error"] = "smbpasswd not installed"
-        return result
+        return errors.tool_missing(result, "smbpasswd")
 
     # -s reads the new password twice from stdin (not argv - keeps it out
     # of the process list) - see smbpasswd(8). -a adds the user to Samba's
@@ -78,8 +75,7 @@ def set_password(username: str, password: str) -> dict[str, Any]:
         input_text=f"{password}\n{password}\n",
     )
     if code != 0:
-        result["error"] = err.strip() or out.strip() or f"smbpasswd exited {code}"
-        return result
+        return errors.command_failed(result, err, out, code, "smbpasswd")
 
     result["success"] = True
     return result
@@ -87,17 +83,15 @@ def set_password(username: str, password: str) -> dict[str, Any]:
 
 def remove_user(username: str) -> dict[str, Any]:
     """Remove a user's SMB access only - does not touch the system account."""
-    result: dict[str, Any] = {"username": username, "success": False, "error": None}
+    result: dict[str, Any] = {"username": username, "success": False}
 
     smbpasswd_path = system_tools.find_binary("smbpasswd")
     if smbpasswd_path is None:
-        result["error"] = "smbpasswd not installed"
-        return result
+        return errors.tool_missing(result, "smbpasswd")
 
     code, out, err = system_tools.run([smbpasswd_path, "-x", username])
     if code != 0:
-        result["error"] = err.strip() or f"smbpasswd exited {code}"
-        return result
+        return errors.command_failed(result, err, out, code, "smbpasswd")
 
     result["success"] = True
     return result

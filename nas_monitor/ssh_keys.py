@@ -22,7 +22,7 @@ import shlex
 from datetime import datetime, timezone
 from typing import Any
 
-from nas_monitor import system_tools
+from nas_monitor import system_tools, errors
 from nas_monitor import users as users_mod
 from nas_monitor import state_store
 
@@ -99,13 +99,17 @@ def get_deployments(username: str) -> list[dict[str, Any]]:
 
 def get_key_status(username: str) -> dict[str, Any]:
     """Whether this user has a keypair here, and their public key text if
-    so - never returns anything about the private key's content."""
-    result: dict[str, Any] = {"username": username, "has_key": False, "public_key": None, "error": None}
+    so - never returns anything about the private key's content. This is a
+    read-only status query (no "success" field, unlike the mutations
+    below), so a read error is recorded but doesn't stop the rest of the
+    status from being filled in."""
+    result: dict[str, Any] = {"username": username, "has_key": False, "public_key": None}
 
     try:
         pw = pwd.getpwnam(username)
     except KeyError:
-        result["error"] = f"Użytkownik '{username}' nie istnieje"
+        result["error_code"] = "users.not_found"
+        result["error_context"] = {"username": username}
         return result
 
     _, pub_path = _key_paths(username)
@@ -115,7 +119,8 @@ def get_key_status(username: str) -> dict[str, Any]:
                 result["public_key"] = fh.read().strip()
             result["has_key"] = True
         except OSError as exc:
-            result["error"] = str(exc)
+            result["error_code"] = "system.io_failed"
+            result["error_context"] = {"path": pub_path, "detail": str(exc)}
 
     result["can_login"] = pw.pw_shell not in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "/usr/bin/false", "")
     result["deployments"] = get_deployments(username)
@@ -125,25 +130,19 @@ def get_key_status(username: str) -> dict[str, Any]:
 def generate_key(username: str) -> dict[str, Any]:
     """Generate a new ed25519 keypair for username's own ~/.ssh, owned by
     that user with correct (private-key-only-readable) permissions."""
-    result: dict[str, Any] = {"username": username, "success": False, "error": None}
+    result: dict[str, Any] = {"username": username, "success": False}
 
     try:
         pw = pwd.getpwnam(username)
     except KeyError:
-        result["error"] = f"Użytkownik '{username}' nie istnieje"
-        return result
+        return errors.fail(result, "users.not_found", username=username)
 
     if pw.pw_shell in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "/usr/bin/false", ""):
-        result["error"] = (
-            "To konto ma wyłączone logowanie (nologin) - klucz SSH nic by nie dał. "
-            "Włącz logowanie/SSH przy edycji użytkownika, jeśli to konto ma używać rsync przez SSH."
-        )
-        return result
+        return errors.fail(result, "ssh_keys.login_disabled", username=username)
 
     priv_path, pub_path = _key_paths(username)
     if os.path.isfile(priv_path):
-        result["error"] = f"Klucz dla '{username}' już istnieje - usuń go najpierw, jeśli chcesz wygenerować nowy"
-        return result
+        return errors.fail(result, "ssh_keys.already_exists", username=username)
 
     ssh_dir = _ssh_dir(username)
     try:
@@ -151,13 +150,11 @@ def generate_key(username: str) -> dict[str, Any]:
         os.chown(ssh_dir, pw.pw_uid, pw.pw_gid)
         os.chmod(ssh_dir, 0o700)
     except OSError as exc:
-        result["error"] = f"Nie udało się przygotować {ssh_dir}: {exc}"
-        return result
+        return errors.io_failed(result, exc, ssh_dir)
 
     keygen_path = system_tools.find_binary("ssh-keygen")
     if keygen_path is None:
-        result["error"] = "ssh-keygen not installed"
-        return result
+        return errors.tool_missing(result, "ssh-keygen")
 
     code, out, err = system_tools.run(
         [
@@ -170,8 +167,7 @@ def generate_key(username: str) -> dict[str, Any]:
         timeout=15,
     )
     if code != 0:
-        result["error"] = err.strip() or out.strip() or f"ssh-keygen exited {code}"
-        return result
+        return errors.command_failed(result, err, out, code, "ssh-keygen")
 
     try:
         os.chown(priv_path, pw.pw_uid, pw.pw_gid)
@@ -179,8 +175,10 @@ def generate_key(username: str) -> dict[str, Any]:
         os.chown(pub_path, pw.pw_uid, pw.pw_gid)
         os.chmod(pub_path, 0o644)
     except OSError as exc:
-        result["error"] = f"Klucz wygenerowany, ale nie udało się ustawić uprawnień: {exc}"
-        return result
+        # The key itself WAS generated - only the permission fixup failed -
+        # worth a distinct code so the UI can say so, rather than implying
+        # nothing happened.
+        return errors.fail(result, "ssh_keys.permission_fix_failed", path=priv_path, detail=str(exc))
 
     with open(pub_path, "r") as fh:
         result["public_key"] = fh.read().strip()
@@ -189,12 +187,11 @@ def generate_key(username: str) -> dict[str, Any]:
 
 
 def delete_key(username: str) -> dict[str, Any]:
-    result: dict[str, Any] = {"username": username, "success": False, "error": None}
+    result: dict[str, Any] = {"username": username, "success": False}
     try:
         pwd.getpwnam(username)
     except KeyError:
-        result["error"] = f"Użytkownik '{username}' nie istnieje"
-        return result
+        return errors.fail(result, "users.not_found", username=username)
 
     priv_path, pub_path = _key_paths(username)
     try:
@@ -202,8 +199,7 @@ def delete_key(username: str) -> dict[str, Any]:
             if os.path.isfile(p):
                 os.remove(p)
     except OSError as exc:
-        result["error"] = f"Nie udało się usunąć klucza: {exc}"
-        return result
+        return errors.io_failed(result, exc, priv_path)
 
     result["success"] = True
     return result
@@ -218,31 +214,25 @@ def deploy_key_to_remote(
     where `ps` could see it). display_name is a purely cosmetic label for
     the deployments list (e.g. "vOMV") - reverse DNS on a typical home
     LAN is unreliable, so this is asked for explicitly instead of guessed."""
-    result: dict[str, Any] = {"username": username, "success": False, "error": None}
+    result: dict[str, Any] = {"username": username, "success": False}
 
     if not remote_password:
-        result["error"] = "Puste hasło zdalnego konta"
-        return result
+        return errors.fail(result, "ssh_keys.empty_remote_password")
     if not _HOST_RE.match(remote_host):
-        result["error"] = "Nieprawidłowa nazwa/adres zdalnego hosta"
-        return result
+        return errors.fail(result, "ssh_keys.invalid_remote_host")
     if not users_mod.is_valid_username(remote_user):
-        result["error"] = "Nieprawidłowa nazwa zdalnego użytkownika"
-        return result
+        return errors.fail(result, "ssh_keys.invalid_remote_username")
 
     status = get_key_status(username)
     if not status.get("has_key"):
-        result["error"] = f"Użytkownik '{username}' nie ma jeszcze wygenerowanego klucza"
-        return result
+        return errors.fail(result, "ssh_keys.no_key_yet", username=username)
 
     sshpass_path = system_tools.find_binary("sshpass")
     if sshpass_path is None:
-        result["error"] = "sshpass not installed"
-        return result
+        return errors.tool_missing(result, "sshpass")
     ssh_copy_id_path = system_tools.find_binary("ssh-copy-id")
     if ssh_copy_id_path is None:
-        result["error"] = "ssh-copy-id not installed"
-        return result
+        return errors.tool_missing(result, "ssh-copy-id")
 
     _, pub_path = _key_paths(username)
     cmd = [
@@ -255,8 +245,9 @@ def deploy_key_to_remote(
     ]
     code, out, err = system_tools.run(cmd, timeout=20, extra_env={"SSHPASS": remote_password})
     if code != 0:
-        result["error"] = (err.strip() or out.strip() or f"ssh-copy-id exited {code}")[:400]
-        return result
+        failed = errors.command_failed(result, err, out, code, "ssh-copy-id")
+        failed["error_context"]["detail"] = failed["error_context"]["detail"][:400]
+        return failed
 
     with open(pub_path, "r") as fh:
         pub_content = fh.read().strip()
@@ -275,24 +266,21 @@ def remove_deployment(
     one entirely) and drop the local tracking record. Needs the remote
     password again - there's no other way to reliably reach a host whose
     key might already be stale/replaced."""
-    result: dict[str, Any] = {"success": False, "error": None}
+    result: dict[str, Any] = {"success": False}
 
     if not remote_password:
-        result["error"] = "Puste hasło zdalnego konta"
-        return result
+        return errors.fail(result, "ssh_keys.empty_remote_password")
 
     data = _load_deployments()
     entries = data.get(username, [])
     match = next((e for e in entries if e["host"] == remote_host and e["remote_user"] == remote_user), None)
     if match is None:
-        result["error"] = "Nie znaleziono zapisu o tym wdrożeniu"
-        return result
+        return errors.fail(result, "ssh_keys.deployment_not_found")
 
     sshpass_path = system_tools.find_binary("sshpass")
     ssh_path = system_tools.find_binary("ssh")
     if sshpass_path is None or ssh_path is None:
-        result["error"] = "sshpass/ssh not installed"
-        return result
+        return errors.tool_missing(result, "sshpass/ssh")
 
     # Fixed-string grep -v removes exactly the one recorded line, leaving
     # any other authorized_keys entries (from this tool or elsewhere)
@@ -319,15 +307,15 @@ def remove_deployment(
     ]
     code, out, err = system_tools.run(cmd, timeout=20, extra_env={"SSHPASS": remote_password})
     if code != 0:
-        result["error"] = (err.strip() or out.strip() or f"exit {code}")[:400]
-        return result
+        failed = errors.command_failed(result, err, out, code)
+        failed["error_context"]["detail"] = failed["error_context"]["detail"][:400]
+        return failed
 
     entries[:] = [e for e in entries if not (e["host"] == remote_host and e["remote_user"] == remote_user)]
     data[username] = entries
     save_result = _save_deployments(data)
     if not save_result["success"]:
-        result["error"] = f"Usunięto ze zdalnego urządzenia, ale nie udało się zapisać lokalnie: {save_result['error']}"
-        return result
+        return errors.fail(result, "ssh_keys.deployment_save_failed", detail=save_result.get("error") or "")
 
     result["success"] = True
     return result

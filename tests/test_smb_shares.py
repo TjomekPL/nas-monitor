@@ -155,7 +155,7 @@ class TestEnsureIncludeDirective(unittest.TestCase):
             fh.write("[printers]\n   path = /var/tmp\n")
         result = smb_shares._ensure_include_directive(self.smb_conf, self.managed)
         self.assertFalse(result["success"])
-        self.assertIn("global", result["error"])
+        self.assertEqual(result["error_code"], "shares.global_section_missing")
 
 
 class TestValidateAndApply(unittest.TestCase):
@@ -168,8 +168,8 @@ class TestValidateAndApply(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir)
 
-    @mock.patch("nas_monitor.smb_shares._ensure_include_directive", return_value={"success": True, "error": None})
-    @mock.patch("nas_monitor.smb_shares.reload_smbd", return_value={"success": True, "error": None})
+    @mock.patch("nas_monitor.smb_shares._ensure_include_directive", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares.reload_smbd", return_value={"success": True})
     @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/bin/testparm")
     @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(0, "Loaded services file OK.", ""))
     def test_keeps_new_content_when_testparm_passes(self, mock_run, mock_find, mock_reload, mock_include):
@@ -178,7 +178,7 @@ class TestValidateAndApply(unittest.TestCase):
         with open(self.managed) as fh:
             self.assertIn("[dane]", fh.read())
 
-    @mock.patch("nas_monitor.smb_shares._ensure_include_directive", return_value={"success": True, "error": None})
+    @mock.patch("nas_monitor.smb_shares._ensure_include_directive", return_value={"success": True})
     @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/bin/testparm")
     @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(1, "", "Error loading services."))
     def test_rolls_back_when_testparm_fails(self, mock_run, mock_find, mock_include):
@@ -189,7 +189,7 @@ class TestValidateAndApply(unittest.TestCase):
         self.assertEqual(content, "# old content\n")
         self.assertNotIn("[dane", content)
 
-    @mock.patch("nas_monitor.smb_shares._ensure_include_directive", return_value={"success": True, "error": None})
+    @mock.patch("nas_monitor.smb_shares._ensure_include_directive", return_value={"success": True})
     @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value=None)
     def test_rolls_back_when_testparm_missing(self, mock_find, mock_include):
         result = smb_shares._validate_and_apply("[dane]\n   path = /srv/dane\n", self.managed)
@@ -197,14 +197,15 @@ class TestValidateAndApply(unittest.TestCase):
         with open(self.managed) as fh:
             self.assertEqual(fh.read(), "# old content\n")
 
-    @mock.patch("nas_monitor.smb_shares._ensure_include_directive", return_value={"success": True, "error": None})
-    @mock.patch("nas_monitor.smb_shares.reload_smbd", return_value={"success": False, "error": "no pid"})
+    @mock.patch("nas_monitor.smb_shares._ensure_include_directive", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares.reload_smbd", return_value={"success": False, "error_code": "system.command_failed", "error_context": {"detail": "no pid"}})
     @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/bin/testparm")
     @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(0, "OK", ""))
     def test_reload_failure_is_a_soft_warning_not_a_rollback(self, mock_run, mock_find, mock_reload, mock_include):
         result = smb_shares._validate_and_apply("[dane]\n   path = /srv/dane\n", self.managed)
         self.assertTrue(result["success"])
-        self.assertIn("warning", result)
+        self.assertIn("warnings", result)
+        self.assertEqual(result["warnings"][0]["code"], "shares.reload_failed")
         with open(self.managed) as fh:
             self.assertIn("[dane]", fh.read())
 
@@ -215,8 +216,9 @@ class TestMissingSmbPasswordWarning(unittest.TestCase):
         mock_list.return_value = {"available": True, "usernames": ["wieslaw"], "error": None}
         warning = smb_shares._missing_smb_password_warning(["tomek", "wieslaw"])
         self.assertIsNotNone(warning)
-        self.assertIn("tomek", warning)
-        self.assertNotIn("wieslaw nie ma", warning)
+        self.assertEqual(warning["code"], "shares.missing_smb_password")
+        self.assertIn("tomek", warning["context"]["usernames"])
+        self.assertNotIn("wieslaw", warning["context"]["usernames"])
 
     @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users")
     def test_no_warning_when_everyone_has_a_password(self, mock_list):
@@ -265,12 +267,13 @@ class TestCreateShareWithPermissions(unittest.TestCase):
     def test_stops_and_reports_error_if_a_user_cannot_be_added(self, mock_add, mock_smb):
         result = smb_shares.create_share("dane", permissions={"ghost": "rw"}, managed_conf_path=self.managed)
         self.assertFalse(result["success"])
-        self.assertIn("ghost", result["error"])
+        self.assertEqual(result["error_context"]["user"], "ghost")
 
     def test_rejects_invalid_permission_level(self, mock_smb):
         result = smb_shares.create_share("dane", permissions={"tomek": "admin"}, managed_conf_path=self.managed)
         self.assertFalse(result["success"])
-        self.assertIn("tomek", result["error"])
+        self.assertEqual(result["error_code"], "shares.invalid_permission_level")
+        self.assertEqual(result["error_context"]["user"], "tomek")
 
 
 @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
@@ -388,7 +391,7 @@ class TestUpdateShareWithPermissions(unittest.TestCase):
         mock_read.return_value = [dict(self.existing_share)]
         result = smb_shares.update_share("does-not-exist", comment="x", managed_conf_path=self.managed)
         self.assertFalse(result["success"])
-        self.assertIn("nie istnieje", result["error"])
+        self.assertEqual(result["error_code"], "shares.not_found")
 
     @mock.patch("nas_monitor.smb_shares._read_managed_shares")
     def test_rejects_invalid_permission_level(self, mock_read, mock_smb):
@@ -409,7 +412,7 @@ class TestPrepareShareDirectory(unittest.TestCase):
     def test_rejects_nonexistent_group(self, mock_getgrnam):
         result = smb_shares._prepare_share_directory(self.path, "ghostgroup")
         self.assertFalse(result["success"])
-        self.assertIn("nie istnieje", result["error"])
+        self.assertEqual(result["error_code"], "shares.group_not_found")
 
     def test_creates_directory_without_group(self):
         result = smb_shares._prepare_share_directory(self.path, None)

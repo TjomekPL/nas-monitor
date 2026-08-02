@@ -18,7 +18,7 @@ import grp
 import os
 from typing import Any
 
-from nas_monitor import system_tools
+from nas_monitor import system_tools, errors
 
 # Standard Debian range for real ("human") accounts/groups - below this are
 # system/service accounts (root, daemon, www-data, ...) we don't want to
@@ -109,7 +109,7 @@ def ensure_group_exists(group_name: str) -> dict[str, Any]:
     """Create a group if it doesn't already exist. useradd -G requires
     secondary groups to pre-exist - it won't create them itself, and the
     UI lets you type a brand new group name at user-creation time."""
-    result: dict[str, Any] = {"group": group_name, "success": False, "error": None}
+    result: dict[str, Any] = {"group": group_name, "success": False}
 
     try:
         grp.getgrnam(group_name)
@@ -120,13 +120,11 @@ def ensure_group_exists(group_name: str) -> dict[str, Any]:
 
     groupadd_path = system_tools.find_binary("groupadd")
     if groupadd_path is None:
-        result["error"] = "groupadd not installed"
-        return result
+        return errors.tool_missing(result, "groupadd")
 
     code, out, err = system_tools.run([groupadd_path, group_name])
     if code != 0:
-        result["error"] = err.strip() or f"groupadd exited {code}"
-        return result
+        return errors.command_failed(result, err, out, code, "groupadd")
 
     result["success"] = True
     return result
@@ -153,37 +151,28 @@ def create_user(
     """
     display_name = raw_username.strip()
     username = display_name.lower()
-    result: dict[str, Any] = {"username": username, "display_name": display_name, "success": False, "error": None}
+    result: dict[str, Any] = {"username": username, "display_name": display_name, "success": False}
 
     if ":" in display_name or "\n" in display_name:
-        result["error"] = "Nazwa nie może zawierać ':' ani znaku nowej linii"
-        return result
+        return errors.fail(result, "users.invalid_display_name")
 
     if not is_valid_username(username):
-        result["error"] = (
-            "Nieprawidłowa nazwa użytkownika (litery/cyfry/_/-, "
-            "musi zaczynać się literą lub _, max 32 znaki)"
-        )
-        return result
+        return errors.fail(result, "users.invalid_username")
 
     if user_exists(username):
-        result["error"] = f"Użytkownik '{username}' już istnieje"
-        return result
+        return errors.fail(result, "users.already_exists", username=username)
 
     useradd_path = system_tools.find_binary("useradd")
     if useradd_path is None:
-        result["error"] = "useradd not installed"
-        return result
+        return errors.tool_missing(result, "useradd")
 
     for g in groups or []:
         if not is_valid_username(g):  # group names follow the same rules
-            result["error"] = f"Nieprawidłowa nazwa grupy: {g}"
-            return result
+            return errors.fail(result, "users.invalid_group_name", group=g)
     for g in groups or []:
         group_result = ensure_group_exists(g)
         if not group_result["success"]:
-            result["error"] = f"Nie udało się przygotować grupy '{g}': {group_result['error']}"
-            return result
+            return errors.propagate(result, group_result, group=g)
 
     resolved_shell = shell or default_nologin_shell()
 
@@ -198,8 +187,7 @@ def create_user(
 
     code, out, err = system_tools.run(cmd)
     if code != 0:
-        result["error"] = err.strip() or f"useradd exited {code}"
-        return result
+        return errors.command_failed(result, err, out, code, "useradd")
 
     result["success"] = True
     result["shell"] = resolved_shell
@@ -223,29 +211,25 @@ def update_user(
     these disposable SMB-only accounts, delete + recreate is the safer
     equivalent.
     """
-    result: dict[str, Any] = {"username": username, "success": False, "error": None}
+    result: dict[str, Any] = {"username": username, "success": False}
 
     if not user_exists(username):
-        result["error"] = f"Użytkownik '{username}' nie istnieje"
-        return result
+        return errors.fail(result, "users.not_found", username=username)
 
     usermod_path = system_tools.find_binary("usermod")
     if usermod_path is None:
-        result["error"] = "usermod not installed"
-        return result
+        return errors.tool_missing(result, "usermod")
 
     cmd = [usermod_path]
 
     if groups is not None:
         for g in groups:
             if not is_valid_username(g):
-                result["error"] = f"Nieprawidłowa nazwa grupy: {g}"
-                return result
+                return errors.fail(result, "users.invalid_group_name", group=g)
         for g in groups:
             group_result = ensure_group_exists(g)
             if not group_result["success"]:
-                result["error"] = f"Nie udało się przygotować grupy '{g}': {group_result['error']}"
-                return result
+                return errors.propagate(result, group_result, group=g)
         cmd += ["-G", ",".join(groups)]
 
     if shell is not None:
@@ -253,8 +237,7 @@ def update_user(
 
     if display_name is not None:
         if ":" in display_name or "\n" in display_name:
-            result["error"] = "Nazwa nie może zawierać ':' ani znaku nowej linii"
-            return result
+            return errors.fail(result, "users.invalid_display_name")
         cmd += ["-c", display_name]
 
     if len(cmd) == 1:
@@ -264,8 +247,7 @@ def update_user(
     cmd.append(username)
     code, out, err = system_tools.run(cmd)
     if code != 0:
-        result["error"] = err.strip() or f"usermod exited {code}"
-        return result
+        return errors.command_failed(result, err, out, code, "usermod")
 
     result["success"] = True
     return result
@@ -276,16 +258,14 @@ def delete_user(username: str, remove_home: bool = False) -> dict[str, Any]:
     typically SMB-only accounts whose actual files live in a share
     directory, not the account's own home dir, so there's rarely a reason
     to force this and no reason to risk it by default."""
-    result: dict[str, Any] = {"username": username, "success": False, "error": None}
+    result: dict[str, Any] = {"username": username, "success": False}
 
     if not user_exists(username):
-        result["error"] = f"Użytkownik '{username}' nie istnieje"
-        return result
+        return errors.fail(result, "users.not_found", username=username)
 
     userdel_path = system_tools.find_binary("userdel")
     if userdel_path is None:
-        result["error"] = "userdel not installed"
-        return result
+        return errors.tool_missing(result, "userdel")
 
     cmd = [userdel_path]
     if remove_home:
@@ -294,8 +274,7 @@ def delete_user(username: str, remove_home: bool = False) -> dict[str, Any]:
 
     code, out, err = system_tools.run(cmd)
     if code != 0:
-        result["error"] = err.strip() or f"userdel exited {code}"
-        return result
+        return errors.command_failed(result, err, out, code, "userdel")
 
     result["success"] = True
     return result
@@ -305,26 +284,22 @@ def add_user_to_group(username: str, group: str) -> dict[str, Any]:
     """Add username to group WITHOUT touching their other secondary group
     memberships (usermod -aG appends; update_user's groups= replaces the
     whole list, which is right for the edit-user form but wrong here)."""
-    result: dict[str, Any] = {"username": username, "success": False, "error": None}
+    result: dict[str, Any] = {"username": username, "success": False}
 
     if not user_exists(username):
-        result["error"] = f"Użytkownik '{username}' nie istnieje"
-        return result
+        return errors.fail(result, "users.not_found", username=username)
 
     group_result = ensure_group_exists(group)
     if not group_result["success"]:
-        result["error"] = group_result["error"]
-        return result
+        return errors.propagate(result, group_result, group=group)
 
     usermod_path = system_tools.find_binary("usermod")
     if usermod_path is None:
-        result["error"] = "usermod not installed"
-        return result
+        return errors.tool_missing(result, "usermod")
 
     code, out, err = system_tools.run([usermod_path, "-aG", group, username])
     if code != 0:
-        result["error"] = err.strip() or f"usermod exited {code}"
-        return result
+        return errors.command_failed(result, err, out, code, "usermod")
 
     result["success"] = True
     return result
@@ -335,10 +310,10 @@ def remove_user_from_group(username: str, group: str) -> dict[str, Any]:
     untouched. usermod has no single-group-removal flag, so this
     recomputes the full desired list and replaces it via update_user."""
     if not user_exists(username):
-        return {"username": username, "success": False, "error": f"Użytkownik '{username}' nie istnieje"}
+        return errors.fail({"username": username, "success": False}, "users.not_found", username=username)
 
     current = _groups_for_user(username)
     if group not in current:
-        return {"username": username, "success": True, "error": None}  # already not a member
+        return {"username": username, "success": True}  # already not a member
 
     return update_user(username, groups=[g for g in current if g != group])

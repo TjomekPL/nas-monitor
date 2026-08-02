@@ -26,24 +26,26 @@ class TestCreateUser(unittest.TestCase):
     def test_rejects_invalid_username_before_running_anything(self, mock_run, mock_find, mock_exists):
         result = users.create_user("Not Valid!")
         self.assertFalse(result["success"])
-        self.assertIn("Nieprawidłowa", result["error"])
+        self.assertEqual(result["error_code"], "users.invalid_username")
         mock_run.assert_not_called()
 
     @mock.patch("nas_monitor.users.user_exists", return_value=True)
     def test_rejects_existing_user(self, mock_exists):
         result = users.create_user("tomek")
         self.assertFalse(result["success"])
-        self.assertIn("już istnieje", result["error"])
+        self.assertEqual(result["error_code"], "users.already_exists")
+        self.assertEqual(result["error_context"]["username"], "tomek")
 
     @mock.patch("nas_monitor.users.user_exists", return_value=False)
     @mock.patch("nas_monitor.users.system_tools.find_binary", return_value=None)
     def test_missing_useradd_binary(self, mock_find, mock_exists):
         result = users.create_user("tomek")
         self.assertFalse(result["success"])
-        self.assertIn("not installed", result["error"])
+        self.assertEqual(result["error_code"], "system.tool_missing")
+        self.assertEqual(result["error_context"]["tool"], "useradd")
 
     @mock.patch("nas_monitor.users.default_nologin_shell", return_value="/usr/sbin/nologin")
-    @mock.patch("nas_monitor.users.ensure_group_exists", return_value={"success": True, "error": None})
+    @mock.patch("nas_monitor.users.ensure_group_exists", return_value={"success": True})
     @mock.patch("nas_monitor.users.user_exists", return_value=False)
     @mock.patch("nas_monitor.users.system_tools.find_binary", return_value="/usr/sbin/useradd")
     @mock.patch("nas_monitor.users.system_tools.run", return_value=(0, "", ""))
@@ -68,11 +70,12 @@ class TestCreateUser(unittest.TestCase):
     def test_group_creation_failure_aborts_before_useradd(self, mock_run, mock_find, mock_exists, mock_shell):
         with mock.patch(
             "nas_monitor.users.ensure_group_exists",
-            return_value={"success": False, "error": "groupadd exited 1"},
+            return_value={"success": False, "error_code": "system.command_failed", "error_context": {"detail": "groupadd exited 1"}},
         ):
             result = users.create_user("share1", groups=["brandnew"])
         self.assertFalse(result["success"])
-        self.assertIn("brandnew", result["error"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+        self.assertEqual(result["error_context"]["group"], "brandnew")
         mock_run.assert_not_called()  # useradd must never run if the group step failed
 
     @mock.patch("nas_monitor.users.user_exists", return_value=False)
@@ -80,7 +83,8 @@ class TestCreateUser(unittest.TestCase):
     def test_rejects_invalid_group_name(self, mock_find, mock_exists):
         result = users.create_user("share1", groups=["ok_group", "bad group!"])
         self.assertFalse(result["success"])
-        self.assertIn("grupy", result["error"])
+        self.assertEqual(result["error_code"], "users.invalid_group_name")
+        self.assertEqual(result["error_context"]["group"], "bad group!")
 
     @mock.patch("nas_monitor.users.default_nologin_shell", return_value="/usr/sbin/nologin")
     @mock.patch("nas_monitor.users.user_exists", return_value=False)
@@ -89,7 +93,8 @@ class TestCreateUser(unittest.TestCase):
     def test_propagates_useradd_failure(self, mock_run, mock_find, mock_exists, mock_shell):
         result = users.create_user("share1")
         self.assertFalse(result["success"])
-        self.assertIn("some real failure", result["error"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+        self.assertIn("some real failure", result["error_context"]["detail"])
 
     @mock.patch("nas_monitor.users.default_nologin_shell", return_value="/usr/sbin/nologin")
     @mock.patch("nas_monitor.users.user_exists", return_value=False)
@@ -109,7 +114,7 @@ class TestCreateUser(unittest.TestCase):
     def test_rejects_colon_in_display_name(self, mock_exists):
         result = users.create_user("Tom:ek")
         self.assertFalse(result["success"])
-        self.assertIn(":", result["error"])
+        self.assertEqual(result["error_code"], "users.invalid_display_name")
 
     @mock.patch("nas_monitor.users.user_exists", return_value=True)
     def test_existence_check_uses_lowercased_name(self, mock_exists):
@@ -142,7 +147,8 @@ class TestEnsureGroupExists(unittest.TestCase):
     def test_propagates_groupadd_failure(self, mock_run, mock_find, mock_getgrnam):
         result = users.ensure_group_exists("brandnew")
         self.assertFalse(result["success"])
-        self.assertIn("real failure", result["error"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+        self.assertIn("real failure", result["error_context"]["detail"])
 
 
 class TestUpdateUser(unittest.TestCase):
@@ -150,7 +156,7 @@ class TestUpdateUser(unittest.TestCase):
     def test_rejects_nonexistent_user(self, mock_exists):
         result = users.update_user("ghost", groups=["dane"])
         self.assertFalse(result["success"])
-        self.assertIn("nie istnieje", result["error"])
+        self.assertEqual(result["error_code"], "users.not_found")
 
     @mock.patch("nas_monitor.users.user_exists", return_value=True)
     @mock.patch("nas_monitor.users.system_tools.find_binary", return_value="/usr/sbin/usermod")
@@ -160,7 +166,7 @@ class TestUpdateUser(unittest.TestCase):
         self.assertTrue(result["success"])
         mock_run.assert_not_called()
 
-    @mock.patch("nas_monitor.users.ensure_group_exists", return_value={"success": True, "error": None})
+    @mock.patch("nas_monitor.users.ensure_group_exists", return_value={"success": True})
     @mock.patch("nas_monitor.users.user_exists", return_value=True)
     @mock.patch("nas_monitor.users.system_tools.find_binary", return_value="/usr/sbin/usermod")
     @mock.patch("nas_monitor.users.system_tools.run", return_value=(0, "", ""))
@@ -186,7 +192,7 @@ class TestUpdateUser(unittest.TestCase):
     def test_rejects_colon_in_display_name(self, mock_exists):
         result = users.update_user("tomek", display_name="Tom:ek")
         self.assertFalse(result["success"])
-        self.assertIn(":", result["error"])
+        self.assertEqual(result["error_code"], "users.invalid_display_name")
 
     @mock.patch("nas_monitor.users.user_exists", return_value=True)
     @mock.patch("nas_monitor.users.system_tools.find_binary", return_value="/usr/sbin/usermod")
@@ -194,7 +200,8 @@ class TestUpdateUser(unittest.TestCase):
     def test_propagates_usermod_failure(self, mock_run, mock_find, mock_exists):
         result = users.update_user("tomek", shell="/bin/bash")
         self.assertFalse(result["success"])
-        self.assertIn("real failure", result["error"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+        self.assertIn("real failure", result["error_context"]["detail"])
 
 
 class TestDeleteUser(unittest.TestCase):
@@ -202,7 +209,8 @@ class TestDeleteUser(unittest.TestCase):
     def test_rejects_nonexistent_user(self, mock_exists):
         result = users.delete_user("ghost")
         self.assertFalse(result["success"])
-        self.assertIn("nie istnieje", result["error"])
+        self.assertEqual(result["error_code"], "users.not_found")
+        self.assertEqual(result["error_context"]["username"], "ghost")
 
     @mock.patch("nas_monitor.users.user_exists", return_value=True)
     @mock.patch("nas_monitor.users.system_tools.find_binary", return_value="/usr/sbin/userdel")
@@ -228,7 +236,8 @@ class TestDeleteUser(unittest.TestCase):
     def test_propagates_userdel_failure(self, mock_run, mock_find, mock_exists):
         result = users.delete_user("tomek")
         self.assertFalse(result["success"])
-        self.assertIn("real failure", result["error"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+        self.assertIn("real failure", result["error_context"]["detail"])
 
 
 class TestGroupMembershipHelpers(unittest.TestCase):
@@ -236,10 +245,10 @@ class TestGroupMembershipHelpers(unittest.TestCase):
     def test_add_rejects_nonexistent_user(self, mock_exists):
         result = users.add_user_to_group("ghost", "dane_access")
         self.assertFalse(result["success"])
-        self.assertIn("nie istnieje", result["error"])
+        self.assertEqual(result["error_code"], "users.not_found")
 
     @mock.patch("nas_monitor.users.user_exists", return_value=True)
-    @mock.patch("nas_monitor.users.ensure_group_exists", return_value={"success": True, "error": None})
+    @mock.patch("nas_monitor.users.ensure_group_exists", return_value={"success": True})
     @mock.patch("nas_monitor.users.system_tools.find_binary", return_value="/usr/sbin/usermod")
     @mock.patch("nas_monitor.users.system_tools.run", return_value=(0, "", ""))
     def test_add_uses_append_flag_not_replace(self, mock_run, mock_find, mock_ensure, mock_exists):

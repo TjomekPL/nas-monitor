@@ -1,9 +1,12 @@
 """
 nas_monitor.app
 ----------------
-Read-only web dashboard for disk S.M.A.R.T. health and mdadm/RAID status.
-No write operations, no mounting, no array creation - this is phase 1
-(monitoring only) of a larger tool. See README.md.
+Flask app, all routes. Every mutating endpoint returns machine-readable
+error_code/error_context (and, for soft failures, warning_code/context)
+instead of pre-composed prose - see nas_monitor/errors.py. The frontend
+(nas_monitor/static/i18n/{pl,en}.js) owns all user-facing text, so this
+file and everything it calls never needs to know which language the
+dashboard is showing.
 """
 
 from __future__ import annotations
@@ -67,29 +70,26 @@ def api_users_create():
         shell="/bin/bash" if allow_login else None,
     )
     if not user_result["success"]:
-        oplog.log_event("users", "create", "failure", f"Nie udało się utworzyć użytkownika {username}", user_result["error"])
-        return jsonify({"success": False, "step": "user", "error": user_result["error"]}), 400
+        oplog.log_event("users", "create", "failure", params={"username": username})
+        return jsonify(
+            {"success": False, "step": "user", "error_code": user_result["error_code"], "error_context": user_result["error_context"]}
+        ), 400
 
     if password:
         smb_result = smb.set_password(user_result["username"], password)
         if not smb_result["success"]:
-            oplog.log_event(
-                "users",
-                "create",
-                "failure",
-                f"Utworzono użytkownika {username}, ale nie udało się ustawić hasła SMB",
-                smb_result["error"],
-            )
+            oplog.log_event("users", "create", "failure", params={"username": username}, message="smb_password_failed")
             return jsonify(
                 {
                     "success": False,
                     "step": "smb",
-                    "error": smb_result["error"],
-                    "note": "Konto systemowe zostało utworzone, ale nie udało się ustawić hasła SMB.",
+                    "error_code": smb_result["error_code"],
+                    "error_context": smb_result["error_context"],
+                    "note_code": "users.create_smb_password_failed",
                 }
             ), 400
 
-    oplog.log_event("users", "create", "success", f"Utworzono użytkownika {username}")
+    oplog.log_event("users", "create", "success", params={"username": username})
     return jsonify({"success": True, "user": user_result})
 
 
@@ -108,29 +108,26 @@ def api_users_update(username):
         display_name=display_name,
     )
     if not user_result["success"]:
-        oplog.log_event("users", "update", "failure", f"Nie udało się zaktualizować użytkownika {username}", user_result["error"])
-        return jsonify({"success": False, "step": "user", "error": user_result["error"]}), 400
+        oplog.log_event("users", "update", "failure", params={"username": username})
+        return jsonify(
+            {"success": False, "step": "user", "error_code": user_result["error_code"], "error_context": user_result["error_context"]}
+        ), 400
 
     if password:
         smb_result = smb.set_password(username, password)
         if not smb_result["success"]:
-            oplog.log_event(
-                "users",
-                "update",
-                "failure",
-                f"Zaktualizowano użytkownika {username}, ale nie udało się zmienić hasła SMB",
-                smb_result["error"],
-            )
+            oplog.log_event("users", "update", "failure", params={"username": username}, message="smb_password_failed")
             return jsonify(
                 {
                     "success": False,
                     "step": "smb",
-                    "error": smb_result["error"],
-                    "note": "Dane konta zostały zaktualizowane, ale nie udało się zmienić hasła SMB.",
+                    "error_code": smb_result["error_code"],
+                    "error_context": smb_result["error_context"],
+                    "note_code": "users.update_smb_password_failed",
                 }
             ), 400
 
-    oplog.log_event("users", "update", "success", f"Zaktualizowano użytkownika {username}")
+    oplog.log_event("users", "update", "success", params={"username": username})
     return jsonify({"success": True, "user": user_result})
 
 
@@ -138,9 +135,9 @@ def api_users_update(username):
 def api_users_remove_smb(username):
     result = smb.remove_user(username)
     if not result["success"]:
-        oplog.log_event("users", "remove-smb", "failure", f"Nie udało się usunąć dostępu SMB dla {username}", result["error"])
-        return jsonify({"success": False, "error": result["error"]}), 400
-    oplog.log_event("users", "remove-smb", "success", f"Usunięto dostęp SMB dla {username}")
+        oplog.log_event("users", "remove_smb", "failure", params={"username": username})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("users", "remove_smb", "success", params={"username": username})
     return jsonify({"success": True})
 
 
@@ -156,10 +153,12 @@ def api_users_delete(username):
 
     user_result = users.delete_user(username, remove_home=remove_home)
     if not user_result["success"]:
-        oplog.log_event("users", "delete", "failure", f"Nie udało się usunąć użytkownika {username}", user_result["error"])
-        return jsonify({"success": False, "step": "user", "error": user_result["error"]}), 400
+        oplog.log_event("users", "delete", "failure", params={"username": username})
+        return jsonify(
+            {"success": False, "step": "user", "error_code": user_result["error_code"], "error_context": user_result["error_context"]}
+        ), 400
 
-    oplog.log_event("users", "delete", "success", f"Usunięto użytkownika {username}")
+    oplog.log_event("users", "delete", "success", params={"username": username})
     return jsonify({"success": True})
 
 
@@ -181,13 +180,13 @@ def api_shares_create():
 
     result = smb_shares.create_share(name, comment=comment, permissions=permissions)
     if not result["success"]:
-        oplog.log_event("shares", "create", "failure", f"Nie udało się utworzyć udziału {name}", result["error"])
-        return jsonify({"success": False, "error": result["error"]}), 400
-    oplog.log_event("shares", "create", "success", f"Utworzono udział {name}")
+        oplog.log_event("shares", "create", "failure", params={"name": name})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("shares", "create", "success", params={"name": name})
     return jsonify({"success": True, "share": result})
 
 
-@app.route("/api/shares/<name>/update", methods=["POST"])
+@app.route("/api/shares/<n>/update", methods=["POST"])
 def api_shares_update(name):
     data = request.get_json(force=True, silent=True) or {}
     comment = data.get("comment")
@@ -204,22 +203,22 @@ def api_shares_update(name):
         permissions=permissions,
     )
     if not result["success"]:
-        oplog.log_event("shares", "update", "failure", f"Nie udało się zaktualizować udziału {name}", result["error"])
-        return jsonify({"success": False, "error": result["error"]}), 400
-    oplog.log_event("shares", "update", "success", f"Zaktualizowano udział {name}")
+        oplog.log_event("shares", "update", "failure", params={"name": name})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("shares", "update", "success", params={"name": name})
     return jsonify({"success": True, "share": result})
 
 
-@app.route("/api/shares/<name>/delete", methods=["POST"])
+@app.route("/api/shares/<n>/delete", methods=["POST"])
 def api_shares_delete(name):
     data = request.get_json(force=True, silent=True) or {}
     delete_files = bool(data.get("delete_files", False))
 
     result = smb_shares.delete_share(name, delete_files=delete_files)
     if not result["success"]:
-        oplog.log_event("shares", "delete", "failure", f"Nie udało się usunąć udziału {name}", result["error"])
-        return jsonify({"success": False, "error": result["error"]}), 400
-    oplog.log_event("shares", "delete", "success", f"Usunięto udział {name}")
+        oplog.log_event("shares", "delete", "failure", params={"name": name})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("shares", "delete", "success", params={"name": name})
     return jsonify({"success": True, "share": result})
 
 
@@ -234,9 +233,9 @@ def api_ssh_keys():
 def api_ssh_keys_generate(username):
     result = ssh_keys.generate_key(username)
     if not result["success"]:
-        oplog.log_event("certs", "generate", "failure", f"Nie udało się wygenerować klucza SSH dla {username}", result["error"])
-        return jsonify({"success": False, "error": result["error"]}), 400
-    oplog.log_event("certs", "generate", "success", f"Wygenerowano klucz SSH dla {username}")
+        oplog.log_event("certs", "generate", "failure", params={"username": username})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("certs", "generate", "success", params={"username": username})
     return jsonify({"success": True, "public_key": result["public_key"]})
 
 
@@ -251,11 +250,9 @@ def api_ssh_keys_deploy(username):
     result = ssh_keys.deploy_key_to_remote(username, remote_host, remote_user, remote_password, display_name)
     target = display_name or remote_host
     if not result["success"]:
-        oplog.log_event(
-            "certs", "deploy", "failure", f"Nie udało się wysłać klucza {username} na {target}", result["error"]
-        )
-        return jsonify({"success": False, "error": result["error"]}), 400
-    oplog.log_event("certs", "deploy", "success", f"Wysłano klucz {username} na {target}")
+        oplog.log_event("certs", "deploy", "failure", params={"username": username, "target": target})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("certs", "deploy", "success", params={"username": username, "target": target})
     return jsonify({"success": True})
 
 
@@ -263,9 +260,9 @@ def api_ssh_keys_deploy(username):
 def api_ssh_keys_delete(username):
     result = ssh_keys.delete_key(username)
     if not result["success"]:
-        oplog.log_event("certs", "delete", "failure", f"Nie udało się usunąć klucza SSH dla {username}", result["error"])
-        return jsonify({"success": False, "error": result["error"]}), 400
-    oplog.log_event("certs", "delete", "success", f"Usunięto klucz SSH dla {username}")
+        oplog.log_event("certs", "delete", "failure", params={"username": username})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("certs", "delete", "success", params={"username": username})
     return jsonify({"success": True})
 
 
@@ -278,11 +275,9 @@ def api_ssh_keys_remove_deployment(username):
 
     result = ssh_keys.remove_deployment(username, remote_host, remote_user, remote_password)
     if not result["success"]:
-        oplog.log_event(
-            "certs", "remove-deployment", "failure", f"Nie udało się usunąć klucza {username} z {remote_host}", result["error"]
-        )
-        return jsonify({"success": False, "error": result["error"]}), 400
-    oplog.log_event("certs", "remove-deployment", "success", f"Usunięto klucz {username} z {remote_host}")
+        oplog.log_event("certs", "remove_deployment", "failure", params={"username": username, "target": remote_host})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("certs", "remove_deployment", "success", params={"username": username, "target": remote_host})
     return jsonify({"success": True})
 
 
@@ -309,7 +304,7 @@ def api_log():
 def api_log_clear():
     result = oplog.clear_events()
     if not result["success"]:
-        return jsonify({"success": False, "error": result["error"]}), 400
+        return jsonify({"success": False, "error_code": "system.io_failed", "error_context": {"detail": result.get("error", "")}}), 400
     return jsonify({"success": True})
 
 
@@ -320,11 +315,11 @@ def api_log_settings():
     try:
         max_entries = int(max_entries)
     except (TypeError, ValueError):
-        return jsonify({"success": False, "error": "Nieprawidłowa wartość limitu."}), 400
+        return jsonify({"success": False, "error_code": "log.invalid_max_entries", "error_context": {}}), 400
 
     result = oplog.set_max_entries(max_entries)
     if not result["success"]:
-        return jsonify({"success": False, "error": result["error"]}), 400
+        return jsonify({"success": False, "error_code": "system.io_failed", "error_context": {"detail": result.get("error", "")}}), 400
     return jsonify({"success": True, "max_entries": result["max_entries"]})
 
 
