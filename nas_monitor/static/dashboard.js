@@ -1046,7 +1046,6 @@ function renderNetwork(data) {
     <dl class="facts">
       <div><dt>${t("ui.network.hostname")}</dt><dd class="mono">${data.hostname || "\u2013"}</dd></div>
       <div><dt>${t("ui.network.managedBy")}</dt><dd>${t(`net.backend.${data.backend}`)}</dd></div>
-      <div><dt>${t("ui.network.dnsServers")}</dt><dd class="mono">${(data.dns_servers || []).join(", ") || "\u2013"}</dd></div>
     </dl>
   `;
   summary.appendChild(overview);
@@ -1071,6 +1070,7 @@ function renderNetwork(data) {
     card.className = "card";
     const addrLines = (iface.addresses || []).map((a) => `${a.address}/${a.prefixlen}`).join("<br>");
     const maskLines = (iface.addresses || []).map((a) => a.netmask).join("<br>");
+    const dnsLine = (iface.dns_servers || []).join(", ");
     const typeLabel = formatIfaceType(iface.type);
     card.innerHTML = `
       <div class="card-head">
@@ -1082,6 +1082,7 @@ function renderNetwork(data) {
         <div><dt>${t("ui.network.ip")}</dt><dd class="mono">${addrLines || "\u2013"}</dd></div>
         <div><dt>${t("ui.network.netmask")}</dt><dd class="mono">${maskLines || "\u2013"}</dd></div>
         <div><dt>${t("ui.network.gateway")}</dt><dd class="mono">${iface.gateway || "\u2013"}</dd></div>
+        <div><dt>${t("ui.network.dnsServers")}</dt><dd class="mono">${dnsLine || "\u2013"}</dd></div>
         <div><dt>${t("ui.network.mac")}</dt><dd class="mono">${iface.mac || "\u2013"}</dd></div>
       </dl>
     `;
@@ -1163,7 +1164,7 @@ function openNetworkEditDialog(iface) {
   networkEditIp.value = addr ? addr.address : "";
   networkEditPrefix.value = addr ? addr.prefixlen : "";
   networkEditGateway.value = iface.gateway || "";
-  networkEditDns.value = (lastNetworkData.dns_servers || []).join(", ");
+  networkEditDns.value = (iface.dns_servers || []).join(", ");
   networkEditDialog.showModal();
 }
 

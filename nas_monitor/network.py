@@ -112,6 +112,32 @@ def _classify_interface_type(name: str) -> dict[str, str | None]:
     return {"kind": kind, "bus": None}
 
 
+def _interface_dns_servers(name: str) -> list[str]:
+    """DNS servers actually assigned to this specific connection (from
+    DHCP or static config), via NetworkManager - NOT /etc/resolv.conf,
+    which reflects the one merged, system-wide "resolver of first
+    choice" that systemd-resolved/NetworkManager currently prioritizes
+    above every interface. If a VPN/mesh tool like Tailscale is active
+    with its own DNS (MagicDNS), that global file shows ITS resolver
+    regardless of what's actually configured on this connection - which
+    looks like a bug but isn't; it's just a different question. Degrades
+    to [] on any backend other than NetworkManager, or if nmcli isn't
+    installed - same graceful-empty pattern as everything else here."""
+    nmcli_path = system_tools.find_binary("nmcli")
+    if nmcli_path is None:
+        return []
+    code, out, _ = system_tools.run([nmcli_path, "-t", "-f", "IP4.DNS", "device", "show", name])
+    if code != 0:
+        return []
+    servers = []
+    for line in out.splitlines():
+        if line.startswith("IP4.DNS"):
+            _, _, value = line.partition(":")
+            if value:
+                servers.append(value)
+    return servers
+
+
 def list_interfaces() -> dict[str, Any]:
     """Every network interface with its current state, straight from the
     kernel via `ip -j` - true regardless of which backend (if any) is
@@ -170,6 +196,7 @@ def list_interfaces() -> dict[str, Any]:
                 "type": _classify_interface_type(name),
                 "addresses": ipv4_addrs,
                 "gateway": gateway_by_dev.get(name),
+                "dns_servers": _interface_dns_servers(name),
             }
         )
 
@@ -218,7 +245,6 @@ def get_status() -> dict[str, Any]:
     return {
         "hostname": get_hostname(),
         "backend": detect_backend(),
-        "dns_servers": get_dns_servers(),
         "interfaces": interfaces_result.get("interfaces", []),
         "error_code": interfaces_result.get("error_code"),
         "error_context": interfaces_result.get("error_context"),

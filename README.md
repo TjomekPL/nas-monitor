@@ -246,20 +246,12 @@ klienta), więc ta separacja jest zamierzona.
    nazwa hosta, który system zarządza siecią (NetworkManager /
    systemd-networkd / ifupdown / nierozpoznany - wykrywane naprawdę, nie
    zakładane, bo różne maszyny w tym projekcie różnią się pod tym
-   względem), serwery DNS, oraz każdy interfejs z prawdziwym stanem
-   (adres, maska, brama, MAC, up/down) czytanym na żywo przez `ip -j`,
-   niezależnie od tego, który z powyższych systemów nim zarządza.
+   względem), oraz każdy interfejs z prawdziwym stanem (adres, maska,
+   brama, DNS, MAC, up/down) czytanym na żywo, niezależnie od tego,
+   który z powyższych systemów nim zarządza.
 
-   **Zmiana ustawień jeszcze NIE jest zrobiona** - celowo, to jedyne
-   miejsce w całym narzędziu, gdzie błąd może odciąć dostęp do samego
-   dashboardu. Ustalony plan zabezpieczenia: nowe ustawienia stosowane
-   od razu, ale z zaplanowanym automatycznym powrotem do poprzednich po
-   **30 sekundach**, chyba że administrator potwierdzi w interfejsie, że
-   nowe ustawienia działają - dokładnie taki wzorzec jak w pfSense/OPNsense.
-   Do zaprojektowania: mechanizm powrotu musi przeżyć nawet, gdyby sama
-   aplikacja/worker padły w międzyczasie (prawdopodobnie `systemd-run
-   --on-active=30s` jako niezależny, zaplanowany timer, nie wątek w
-   samym procesie Flask).
+   **Zmiana ustawień** - ✅ zrobiona, opisana niżej jako osobny punkt
+   (razem z auto-cofnięciem 30s).
 
    **Tailscale** - w dwóch oddzielnych krokach na wyraźną prośbę: (1)
    instalacja + `tailscale up` (bezpieczne, tylko dodaje dostęp, link do
@@ -272,9 +264,18 @@ klienta), więc ta separacja jest zamierzona.
    podobne VPN) często zgłaszają jądru stan "unknown" zamiast "up" mimo że
    realnie działają - dodane pole `effective_up` (stan "unknown" + realny
    adres = liczy się jako aktywny dla kropki statusu; surowy stan nadal
-   pokazany osobno, uczciwie). DNS pokazujący `100.100.100.100` zamiast
-   adresów lokalnego routera to oczekiwane zachowanie Tailscale MagicDNS
-   (podmienia `/etc/resolv.conf`), nie błąd.
+   pokazany osobno, uczciwie).
+
+   **DNS pokazywany per-interfejs, nie globalnie** - pierwsza wersja
+   czytała `/etc/resolv.conf`, czyli jeden, scalony widok tego, kogo
+   systemd-resolved aktualnie traktuje jako resolver pierwszego wyboru
+   dla całego systemu. Z aktywnym Tailscale (MagicDNS) to zawsze pokazywało
+   `100.100.100.100` (adres resolvera Tailscale) zamiast realnych DNS-ów
+   danego połączenia - myląco wyglądało jak błąd, ale to inne pytanie niż
+   zadaje panel ustawień sieci w GNOME (który pyta konkretne połączenie,
+   nie system globalnie). Naprawione: DNS czytany per-interfejs przez
+   `nmcli device show <if>` (pole `IP4.DNS`), dokładnie to co pokazuje
+   panel GNOME - zgodne 1:1 sprawdzone na żywym przykładzie.
 
    **Typ karty sieciowej** - dopisek przy nazwie interfejsu np. "(USB)",
    "(WiFi)", "(wbudowana)" - żeby łatwiej rozpoznać, która karta jest

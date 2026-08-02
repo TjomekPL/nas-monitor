@@ -91,11 +91,12 @@ class TestClassifyInterfaceType(unittest.TestCase):
             self.assertEqual(network._classify_interface_type("wlx1234"), {"kind": "wifi", "bus": "usb"})
 
 
+@mock.patch("nas_monitor.network._interface_dns_servers", return_value=[])
 @mock.patch("nas_monitor.network._classify_interface_type", return_value={"kind": "ethernet", "bus": None})
 class TestListInterfaces(unittest.TestCase):
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
     @mock.patch("nas_monitor.network.system_tools.run")
-    def test_excludes_loopback_includes_others(self, mock_run, mock_find, mock_classify):
+    def test_excludes_loopback_includes_others(self, mock_run, mock_find, mock_classify, mock_dns):
         mock_run.side_effect = [
             (0, IP_ADDR_SAMPLE, ""),
             (0, IP_ROUTE_SAMPLE, ""),
@@ -108,7 +109,7 @@ class TestListInterfaces(unittest.TestCase):
 
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
     @mock.patch("nas_monitor.network.system_tools.run")
-    def test_converts_prefixlen_and_attaches_gateway(self, mock_run, mock_find, mock_classify):
+    def test_converts_prefixlen_and_attaches_gateway(self, mock_run, mock_find, mock_classify, mock_dns):
         mock_run.side_effect = [
             (0, IP_ADDR_SAMPLE, ""),
             (0, IP_ROUTE_SAMPLE, ""),
@@ -123,7 +124,7 @@ class TestListInterfaces(unittest.TestCase):
 
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
     @mock.patch("nas_monitor.network.system_tools.run")
-    def test_tailscale_style_unknown_state_with_ip_counts_as_effectively_up(self, mock_run, mock_find, mock_classify):
+    def test_tailscale_style_unknown_state_with_ip_counts_as_effectively_up(self, mock_run, mock_find, mock_classify, mock_dns):
         # Real-world case: a Tailscale interface reports operstate
         # "UNKNOWN" from the kernel even while genuinely connected -
         # that's normal for tunnel-type devices, not a sign it's down.
@@ -139,7 +140,7 @@ class TestListInterfaces(unittest.TestCase):
 
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
     @mock.patch("nas_monitor.network.system_tools.run")
-    def test_unknown_state_with_no_address_is_not_effectively_up(self, mock_run, mock_find, mock_classify):
+    def test_unknown_state_with_no_address_is_not_effectively_up(self, mock_run, mock_find, mock_classify, mock_dns):
         # unknown state AND no address at all - genuinely nothing to suggest it's active
         sample = """
         [{"ifname": "dummy0", "flags": [], "operstate": "UNKNOWN", "address": "", "addr_info": []}]
@@ -150,7 +151,7 @@ class TestListInterfaces(unittest.TestCase):
 
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
     @mock.patch("nas_monitor.network.system_tools.run")
-    def test_explicit_down_state_is_never_effectively_up_even_with_stale_address(self, mock_run, mock_find, mock_classify):
+    def test_explicit_down_state_is_never_effectively_up_even_with_stale_address(self, mock_run, mock_find, mock_classify, mock_dns):
         sample = """
         [{"ifname": "eno1", "flags": [], "operstate": "DOWN", "address": "",
           "addr_info": [{"family": "inet", "local": "10.0.0.5", "prefixlen": 24}]}]
@@ -160,14 +161,14 @@ class TestListInterfaces(unittest.TestCase):
         self.assertFalse(result["interfaces"][0]["effective_up"])
 
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value=None)
-    def test_missing_ip_binary(self, mock_find, mock_classify):
+    def test_missing_ip_binary(self, mock_find, mock_classify, mock_dns):
         result = network.list_interfaces()
         self.assertFalse(result["available"])
         self.assertEqual(result["error_code"], "system.tool_missing")
 
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
     @mock.patch("nas_monitor.network.system_tools.run", return_value=(0, "not json", ""))
-    def test_garbage_output_does_not_crash(self, mock_run, mock_find, mock_classify):
+    def test_garbage_output_does_not_crash(self, mock_run, mock_find, mock_classify, mock_dns):
         result = network.list_interfaces()
         self.assertFalse(result["available"])
         self.assertIsNotNone(result.get("error_code"))
@@ -217,6 +218,36 @@ class TestGetDnsServers(unittest.TestCase):
     @mock.patch("nas_monitor.network.os.path.isfile", return_value=False)
     def test_missing_resolv_conf(self, mock_isfile):
         self.assertEqual(network.get_dns_servers(), [])
+
+
+class TestInterfaceDnsServers(unittest.TestCase):
+    """Per-connection DNS via nmcli - deliberately NOT /etc/resolv.conf,
+    which reflects one merged system-wide resolver (whichever interface/
+    VPN currently has top priority), not what's actually configured on a
+    given connection. See network.py's docstring for the real-world case
+    this was built for (Tailscale's MagicDNS masking a wired connection's
+    real DNS servers)."""
+
+    @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/bin/nmcli")
+    @mock.patch("nas_monitor.network.system_tools.run")
+    def test_parses_indexed_dns_fields(self, mock_run, mock_find):
+        mock_run.return_value = (0, "IP4.DNS[1]:192.168.0.5\nIP4.DNS[2]:192.168.0.6\n", "")
+        self.assertEqual(network._interface_dns_servers("eno1"), ["192.168.0.5", "192.168.0.6"])
+
+    @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/bin/nmcli")
+    @mock.patch("nas_monitor.network.system_tools.run")
+    def test_no_dns_configured(self, mock_run, mock_find):
+        mock_run.return_value = (0, "", "")
+        self.assertEqual(network._interface_dns_servers("eno1"), [])
+
+    @mock.patch("nas_monitor.network.system_tools.find_binary", return_value=None)
+    def test_missing_nmcli_returns_empty_not_raises(self, mock_find):
+        self.assertEqual(network._interface_dns_servers("eno1"), [])
+
+    @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/bin/nmcli")
+    @mock.patch("nas_monitor.network.system_tools.run", return_value=(1, "", "no such device"))
+    def test_command_failure_returns_empty_not_raises(self, mock_run, mock_find):
+        self.assertEqual(network._interface_dns_servers("eno1"), [])
 
 
 class TestGetHostname(unittest.TestCase):
