@@ -99,7 +99,8 @@ nas_monitor/
   smb_shares.py       - backend SMB: udziały (tworzenie/edycja/usuwanie pod /srv, testparm+rollback)
   ssh_keys.py          - klucze SSH per użytkownik: generowanie + wysyłanie na zdalne urządzenie
   state_store.py        - mały lokalny magazyn JSON na stan, którego nie da się wyczytać z systemu (śledzenie wdrożeń kluczy, log operacji)
-  network.py             - wykrywanie sieci: hostname, backend (NM/networkd/ifupdown), interfejsy, DNS - na razie tylko odczyt
+  network.py             - wykrywanie sieci: hostname, backend (NM/networkd/ifupdown), interfejsy, DNS - tylko odczyt
+  network_mutate.py        - mutacja sieci (IP/brama/DNS): walidacja, nmcli, snapshot+auto-cofnięcie 30s
   oplog.py                - log operacji: co się wykonało, sukces/błąd, pełny szczegół na żądanie
   app.py              - Flask app, wszystkie trasy
   templates/
@@ -117,6 +118,7 @@ tests/
   test_smb_shares.py     - testy warstwy SMB (udziały) - w tym prawdziwe testy na tmpdir dla configparser
   test_ssh_keys.py        - testy kluczy SSH
   test_network.py         - testy wykrywania sieci
+  test_network_mutate.py    - testy mutacji sieci (walidacja, snapshot/apply/revert, potwierdzenie, samonaprawa po restarcie)
   test_oplog.py             - testy logu operacji (persystencja, limit, filtr czasowy)
 nas-monitor.service      - jednostka systemd (uruchamia przez gunicorn)
 ```
@@ -289,6 +291,35 @@ klienta), więc ta separacja jest zamierzona.
    sieciowych, gdy wykryte zostanie więcej niż jedna - do ustalenia z Tomkiem
    dokładny scenariusz (failover vs. agregacja przepustowości) i czy to
    dotyczy komputera czy raczej ustawień switcha/routera.
+
+   **Mutacja ustawień sieciowych (IP/brama/DNS)** - ✅ zrobione, tylko
+   NetworkManager (`nmcli`) na start - inne backendy (systemd-networkd,
+   ifupdown) świadomie poza zakresem na razie, `install.sh` ostrzega
+   (nie blokuje instalacji) jeśli NetworkManager nie jest aktywny. To
+   jedyna mutacja w całym narzędziu, która przy błędzie może odciąć
+   admina od samego dashboardu, więc ma dedykowaną warstwę bezpieczeństwa
+   (`nas_monitor/network_mutate.py`):
+   - Walidacja przez `ipaddress` (stdlib) zamiast ręcznego regexa, plus
+     sprawdzenie że brama leży w tej samej podsieci co nowy adres
+   - Snapshot obecnej konfiguracji (`nmcli connection show`) przed każdą
+     zmianą
+   - Stan "oczekująca zmiana" zapisany na dysk (`state_store.py`), NIE w
+     zmiennej w pamięci procesu - `nas-monitor.service` odpala gunicorn z
+     2 workerami (osobne procesy!), więc żądanie "zastosuj" i późniejsze
+     "potwierdź" mogą trafić do różnych procesów
+   - Timer 30s (server-side, `threading.Timer`) automatycznie cofa zmianę
+     jeśli nie zostanie potwierdzona - ale zawsze najpierw sprawdza stan
+     zapisany na dysku, więc jest bezpieczny niezależnie od tego, który
+     worker co obsłużył
+   - Samonaprawa przy starcie usługi: jeśli serwis zrestartuje się
+     w trakcie okna 30s (np. przez `systemctl restart` po kolejnym
+     wdrożeniu), przy starcie sprawdza czy coś czeka na potwierdzenie -
+     cofa od razu albo uzbraja nowy, krótszy timer na resztę czasu
+   - Frontend: dialog edycji (zamiast edycji wprost w karcie - decyzja
+     Tomka, dla spójności z resztą UI) + baner z odliczaniem,
+     przeglądarka automatycznie podąża za nowym adresem, ale **tylko**
+     jeśli edytowany interfejs to ten, przez który akurat jest otwarty
+     dashboard - edycja innego interfejsu niczego nie przełącza
 8. **Zdalne montowanie** - jeszcze nie omówione w szczegółach.
 9. **Backupy przez rsync (lub inne metody)** - jeszcze nie omówione w
    szczegółach.

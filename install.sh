@@ -34,3 +34,12 @@ systemctl restart nas-monitor
 
 IP=$(hostname -I | awk '{print $1}')
 echo "==> Gotowe. Dashboard: http://${IP}:8420"
+
+if ! systemctl is-active --quiet NetworkManager; then
+  echo ""
+  echo "Uwaga: NetworkManager nie jest aktywny na tym hoście."
+  echo "Reszta nas-monitor dziala normalnie (dyski, uzytkownicy, udzialy,"
+  echo "klucze SSH, podglad sieci) - ale EDYCJA ustawien sieciowych"
+  echo "(IP/brama/DNS) w zakladce Siec wymaga NetworkManagera i bedzie"
+  echo "niedostepna, dopoki go nie wlaczysz."
+fi

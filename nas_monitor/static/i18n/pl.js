@@ -79,7 +79,7 @@ window.NAS_I18N.pl = {
     },
     network: {
       heading: "Sieć",
-      subtitle: "Na razie tylko podgląd rzeczywistego stanu - zmiana ustawień (z automatycznym powrotem do poprzednich, jeśli coś pójdzie źle) jeszcze nie jest tu dostępna.",
+      subtitle: "Zmiana adresu IP/bramy/DNS jest dostępna tylko z NetworkManagerem i wymaga potwierdzenia w ciągu 30s - inaczej wraca automatycznie do poprzednich ustawień.",
       overviewCardTitle: "Ogólne",
       hostname: "Nazwa hosta",
       managedBy: "Zarządzane przez",
@@ -88,6 +88,8 @@ window.NAS_I18N.pl = {
       netmask: "Maska",
       gateway: "Brama",
       mac: "MAC",
+      editBtn: "Edytuj",
+      stateAssumedUp: "aktywny (wykryto po adresie)",
     },
     log: {
       heading: "Log operacji",
@@ -135,6 +137,16 @@ window.NAS_I18N.pl = {
       passwordLabel: "Hasło zdalnego konta (użyte tylko raz, nigdzie niezapisywane)",
       cancelBtn: "Anuluj",
       sendBtn: "Wyślij",
+    },
+    networkEditDialog: {
+      title: "Edytuj ustawienia sieci: {interface}",
+      prefixLabel: "Prefiks (0-32)",
+      dnsLabel: "Serwery DNS (oddziel przecinkiem)",
+      revertHint: "Zmiana będzie wymagała potwierdzenia w ciągu 30s, inaczej wróci automatycznie do poprzednich ustawień.",
+      cancelBtn: "Anuluj",
+      applyBtn: "Zastosuj",
+      pendingText: "Zmiana ustawień sieci czeka na potwierdzenie",
+      confirmBtn: "Potwierdź",
     },
     addUserDialog: {
       titleNew: "Nowy użytkownik",
@@ -196,6 +208,7 @@ window.NAS_I18N.pl = {
     confirmRemoveDeployment: "Na pewno usunąć klucz z {user}@{host}? Ten host straci dostęp bez hasła.",
     keyDeployed: "Klucz zainstalowany poprawnie.",
     copiedToClipboard: "Skopiowano do schowka.",
+    networkChangeConfirmed: "Potwierdzono zmianę ustawień sieci.",
     copyFailed: "Nie udało się skopiować.",
     logClearConfirm: "Wyczyścić cały log operacji? Tej operacji nie można cofnąć.",
     logClearFailed: "Nie udało się wyczyścić logu: {detail}",
@@ -211,6 +224,8 @@ window.NAS_I18N.pl = {
       command_failed: "Polecenie systemowe nie powiodło się: {detail}",
       io_failed: "Operacja na pliku nie powiodła się ({path}): {detail}",
       unknown: "Wystąpił nieoczekiwany błąd.",
+      unexpected_error: "Nieoczekiwany błąd serwera: {detail}",
+      http_error: "Błąd HTTP {status}",
     },
     users: {
       invalid_display_name: "Nazwa nie może zawierać ':' ani znaku nowej linii",
@@ -247,6 +262,16 @@ window.NAS_I18N.pl = {
     },
     network: {
       parse_failed: "Nie udało się odczytać danych sieciowych (nieprawidłowa odpowiedź 'ip')",
+      backend_unsupported: "Edycja ustawień sieci jest dostępna tylko z NetworkManagerem",
+      change_already_pending: "Inna zmiana ustawień sieci czeka jeszcze na potwierdzenie",
+      invalid_ip: "Nieprawidłowy adres IP",
+      invalid_prefix: "Nieprawidłowy prefiks/maska (0-32)",
+      invalid_gateway: "Nieprawidłowy adres bramy",
+      invalid_dns: "Nieprawidłowy adres DNS: {value}",
+      gateway_outside_subnet: "Brama nie leży w tej samej podsieci co adres IP",
+      connection_not_found: "Nie znaleziono profilu połączenia NetworkManagera dla {interface}",
+      snapshot_failed: "Nie udało się odczytać obecnej konfiguracji przed zmianą - przerwano dla bezpieczeństwa",
+      change_not_found: "Nie znaleziono oczekującej zmiany o tym tokenie (mogła już wygasnąć i zostać cofnięta)",
     },
     log: {
       invalid_max_entries: "Nieprawidłowa wartość limitu.",
@@ -270,6 +295,13 @@ window.NAS_I18N.pl = {
   },
 
   log: {
+    system: {
+      error: { failure: "Nieoczekiwany błąd w {path}" },
+    },
+    network: {
+      apply: { success: "Zmieniono adres IP interfejsu {interface} na {ip}", failure: "Nie udało się zmienić ustawień sieci dla {interface}" },
+      confirm: { success: "Potwierdzono zmianę ustawień sieci na {interface}", failure: "Nie udało się potwierdzić zmiany ustawień sieci" },
+    },
     users: {
       create: { success: "Utworzono użytkownika {username}", failure: "Nie udało się utworzyć użytkownika {username}" },
       update: { success: "Zaktualizowano użytkownika {username}", failure: "Nie udało się zaktualizować użytkownika {username}" },

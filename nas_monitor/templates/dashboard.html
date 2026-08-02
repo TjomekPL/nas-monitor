@@ -85,9 +85,14 @@
       <section>
         <h2 data-i18n="ui.network.heading">Sieć</h2>
         <p class="subtitle" data-i18n="ui.network.subtitle">
-          Na razie tylko podgląd rzeczywistego stanu - zmiana ustawień (z automatycznym
-          powrotem do poprzednich, jeśli coś pójdzie źle) jeszcze nie jest tu dostępna.
+          Zmiana adresu IP/bramy/DNS jest dostępna tylko z NetworkManagerem i wymaga
+          potwierdzenia w ciągu 30s - inaczej wraca automatycznie do poprzednich ustawień.
         </p>
+        <div id="network-pending-banner" style="display:none;" class="pending-change-banner">
+          <span data-i18n="ui.networkEditDialog.pendingText">Zmiana ustawień sieci czeka na potwierdzenie</span>
+          (<span id="network-pending-countdown">30</span>s)
+          <button type="button" id="network-pending-confirm-btn" class="btn-primary" data-i18n="ui.networkEditDialog.confirmBtn">Potwierdź</button>
+        </div>
         <div id="network-container"></div>
       </section>
     </div>
@@ -237,6 +242,41 @@
       <div class="dialog-actions">
         <button type="button" id="add-user-cancel" data-i18n="ui.addUserDialog.cancelBtn">Anuluj</button>
         <button type="submit" id="add-user-submit" class="btn-primary" data-i18n="ui.addUserDialog.createBtn">Utwórz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="network-edit-dialog">
+    <form id="network-edit-form" method="dialog">
+      <h3 id="network-edit-title" data-i18n="ui.networkEditDialog.title">Edytuj ustawienia sieci</h3>
+
+      <label>
+        <span class="label-text" data-i18n="ui.network.ip">Adres IP</span>
+        <input type="text" id="network-edit-ip" required autocomplete="off">
+      </label>
+
+      <label>
+        <span class="label-text" data-i18n="ui.networkEditDialog.prefixLabel">Prefiks (0-32)</span>
+        <input type="number" id="network-edit-prefix" min="0" max="32" required autocomplete="off">
+      </label>
+
+      <label>
+        <span class="label-text" data-i18n="ui.network.gateway">Brama</span>
+        <input type="text" id="network-edit-gateway" required autocomplete="off">
+      </label>
+
+      <label>
+        <span class="label-text" data-i18n="ui.networkEditDialog.dnsLabel">Serwery DNS (oddziel przecinkiem)</span>
+        <input type="text" id="network-edit-dns" autocomplete="off">
+      </label>
+
+      <p class="field-hint" data-i18n="ui.networkEditDialog.revertHint">Zmiana będzie wymagała potwierdzenia w ciągu 30s, inaczej wróci automatycznie do poprzednich ustawień.</p>
+
+      <p class="form-error" id="network-edit-error"></p>
+
+      <div class="dialog-actions">
+        <button type="button" id="network-edit-cancel" data-i18n="ui.networkEditDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="network-edit-submit" class="btn-primary" data-i18n="ui.networkEditDialog.applyBtn">Zastosuj</button>
       </div>
     </form>
   </dialog>

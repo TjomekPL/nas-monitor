@@ -12,10 +12,12 @@ dashboard is showing.
 from __future__ import annotations
 
 from flask import Flask, jsonify, render_template, request
+from werkzeug.exceptions import HTTPException
 
-from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, oplog
+from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog
 
 app = Flask(__name__)
+network_mutate.check_and_recover_on_startup()
 
 
 @app.route("/")
@@ -294,7 +296,46 @@ def api_ssh_keys_remove_deployment(username):
 
 @app.route("/api/network")
 def api_network():
-    return jsonify(network.get_status())
+    status = network.get_status()
+    pending = network_mutate.get_pending_change()
+    if pending:
+        status["pending_change"] = {
+            "token": pending["token"],
+            "interface": pending["interface"],
+            "created_at": pending["created_at"],
+        }
+    return jsonify(status)
+
+
+@app.route("/api/network/<iface>/apply", methods=["POST"])
+def api_network_apply(iface):
+    data = request.get_json(force=True, silent=True) or {}
+    ip = (data.get("ip") or "").strip()
+    prefixlen = data.get("prefixlen")
+    gateway = (data.get("gateway") or "").strip()
+    dns = data.get("dns") or []
+
+    result = network_mutate.request_ip_change(iface, ip, prefixlen, gateway, dns)
+    if not result["success"]:
+        oplog.log_event("network", "apply", "failure", params={"interface": iface})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+
+    oplog.log_event("network", "apply", "success", params={"interface": iface, "ip": ip})
+    return jsonify({"success": True, "token": result["token"], "expires_in": result["expires_in"], "new_host": result["new_host"]})
+
+
+@app.route("/api/network/confirm", methods=["POST"])
+def api_network_confirm():
+    data = request.get_json(force=True, silent=True) or {}
+    token = (data.get("token") or "").strip()
+
+    result = network_mutate.confirm_change(token)
+    if not result["success"]:
+        oplog.log_event("network", "confirm", "failure", params={})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+
+    oplog.log_event("network", "confirm", "success", params={"interface": result.get("interface", "")})
+    return jsonify({"success": True})
 
 
 @app.route("/api/log")
@@ -332,6 +373,30 @@ def api_log_settings():
     if not result["success"]:
         return jsonify({"success": False, "error_code": "system.io_failed", "error_context": {"detail": result.get("error", "")}}), 400
     return jsonify({"success": True, "max_entries": result["max_entries"]})
+
+
+@app.errorhandler(Exception)
+def handle_unexpected_error(exc):
+    """Last-resort safety net. Without this, any bug that raises before a
+    route's own error handling kicks in - or a routing-level mistake like
+    a URL variable name that doesn't match the view function's parameter -
+    falls through to Werkzeug's default HTML error page. The frontend
+    then fails trying to parse that HTML as JSON ("Unexpected token '<'"),
+    and - just as importantly - the failure never reaches oplog, since
+    the crash happens before the route's own log_event() call is ever
+    reached. This handler guarantees every /api/ failure is both valid
+    JSON and visible in the operations log, regardless of where in the
+    stack it went wrong."""
+    if isinstance(exc, HTTPException):
+        if request.path.startswith("/api/"):
+            return jsonify({"success": False, "error_code": "system.http_error", "error_context": {"status": exc.code}}), exc.code
+        return exc
+
+    app.logger.exception("Unhandled error in %s %s", request.method, request.path)
+    if request.path.startswith("/api/"):
+        oplog.log_event("system", "error", "failure", params={"path": request.path}, message=str(exc))
+        return jsonify({"success": False, "error_code": "system.unexpected_error", "error_context": {"detail": str(exc)}}), 500
+    raise exc
 
 
 def main():

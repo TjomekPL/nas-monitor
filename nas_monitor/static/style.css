@@ -674,6 +674,24 @@ form label.checkbox-row {
 }
 
 /* ---------------------------------------------------------------------
+   Pending network-change confirm banner
+   ------------------------------------------------------------------- */
+
+.pending-change-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin: 0 0 16px;
+  font-size: 13.5px;
+}
+.pending-change-banner button { margin-left: auto; }
+
+/* ---------------------------------------------------------------------
    Quality floor: focus visibility, reduced motion, small screens
    ------------------------------------------------------------------- */
 

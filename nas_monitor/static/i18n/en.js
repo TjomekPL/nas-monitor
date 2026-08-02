@@ -79,7 +79,7 @@ window.NAS_I18N.en = {
     },
     network: {
       heading: "Network",
-      subtitle: "Detection only for now - changing settings (with automatic revert if something goes wrong) isn't available here yet.",
+      subtitle: "Changing IP/gateway/DNS is only available with NetworkManager and needs confirming within 30s, or it reverts to the previous settings automatically.",
       overviewCardTitle: "Overview",
       hostname: "Hostname",
       managedBy: "Managed by",
@@ -88,6 +88,8 @@ window.NAS_I18N.en = {
       netmask: "Netmask",
       gateway: "Gateway",
       mac: "MAC",
+      editBtn: "Edit",
+      stateAssumedUp: "active (detected via address)",
     },
     log: {
       heading: "Operations log",
@@ -135,6 +137,16 @@ window.NAS_I18N.en = {
       passwordLabel: "Remote account password (used once, never stored)",
       cancelBtn: "Cancel",
       sendBtn: "Deploy",
+    },
+    networkEditDialog: {
+      title: "Edit network settings: {interface}",
+      prefixLabel: "Prefix (0-32)",
+      dnsLabel: "DNS servers (comma-separated)",
+      revertHint: "The change will need confirming within 30s, or it reverts to the previous settings automatically.",
+      cancelBtn: "Cancel",
+      applyBtn: "Apply",
+      pendingText: "A network change is waiting to be confirmed",
+      confirmBtn: "Confirm",
     },
     addUserDialog: {
       titleNew: "New user",
@@ -196,6 +208,7 @@ window.NAS_I18N.en = {
     confirmRemoveDeployment: "Really remove the key from {user}@{host}? That host will lose passwordless access.",
     keyDeployed: "Key deployed successfully.",
     copiedToClipboard: "Copied to clipboard.",
+    networkChangeConfirmed: "Network change confirmed.",
     copyFailed: "Couldn't copy.",
     logClearConfirm: "Clear the whole operations log? This can't be undone.",
     logClearFailed: "Couldn't clear the log: {detail}",
@@ -211,6 +224,8 @@ window.NAS_I18N.en = {
       command_failed: "System command failed: {detail}",
       io_failed: "File operation failed ({path}): {detail}",
       unknown: "An unexpected error occurred.",
+      unexpected_error: "Unexpected server error: {detail}",
+      http_error: "HTTP error {status}",
     },
     users: {
       invalid_display_name: "The name can't contain ':' or a newline",
@@ -247,6 +262,16 @@ window.NAS_I18N.en = {
     },
     network: {
       parse_failed: "Couldn't read network data (invalid 'ip' output)",
+      backend_unsupported: "Editing network settings is only available with NetworkManager",
+      change_already_pending: "Another network change is still waiting to be confirmed",
+      invalid_ip: "Invalid IP address",
+      invalid_prefix: "Invalid prefix/netmask (0-32)",
+      invalid_gateway: "Invalid gateway address",
+      invalid_dns: "Invalid DNS address: {value}",
+      gateway_outside_subnet: "The gateway isn't in the same subnet as the IP address",
+      connection_not_found: "No NetworkManager connection profile found for {interface}",
+      snapshot_failed: "Couldn't read the current configuration before changing it - stopped for safety",
+      change_not_found: "No pending change found for that token (it may have already expired and reverted)",
     },
     log: {
       invalid_max_entries: "Invalid limit value.",
@@ -270,6 +295,13 @@ window.NAS_I18N.en = {
   },
 
   log: {
+    system: {
+      error: { failure: "Unexpected error in {path}" },
+    },
+    network: {
+      apply: { success: "Changed interface {interface}'s IP to {ip}", failure: "Failed to change network settings for {interface}" },
+      confirm: { success: "Confirmed the network change on {interface}", failure: "Failed to confirm the network change" },
+    },
     users: {
       create: { success: "Created user {username}", failure: "Failed to create user {username}" },
       update: { success: "Updated user {username}", failure: "Failed to update user {username}" },

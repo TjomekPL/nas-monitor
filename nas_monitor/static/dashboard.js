@@ -1025,7 +1025,12 @@ function formatIfaceType(type) {
   if (!type || !type.kind) return "";
   const kindLabel = t(`net.kind.${type.kind}`);
   if (!type.bus) return kindLabel;
-  return `${kindLabel} (${t(`net.bus.${type.bus}`)})`;
+  return `${kindLabel}, ${t(`net.bus.${type.bus}`)}`;
+}
+
+function ifaceStateLabel(iface) {
+  if (iface.state !== "up" && iface.effective_up) return t("ui.network.stateAssumedUp");
+  return iface.state;
 }
 
 function renderNetwork(data) {
@@ -1064,37 +1069,198 @@ function renderNetwork(data) {
   for (const iface of data.interfaces) {
     const card = document.createElement("div");
     card.className = "card";
-    const addr = iface.addresses[0];
+    const addrLines = (iface.addresses || []).map((a) => `${a.address}/${a.prefixlen}`).join("<br>");
+    const maskLines = (iface.addresses || []).map((a) => a.netmask).join("<br>");
     const typeLabel = formatIfaceType(iface.type);
     card.innerHTML = `
       <div class="card-head">
         <span class="badge ${iface.effective_up ? 'ok' : 'unknown'}"></span>
         <span class="name mono">${iface.name}</span>
-        <span class="level">${typeLabel ? `(${typeLabel})` : ""} ${iface.state}</span>
+        <span class="level">${typeLabel ? `(${typeLabel})` : ""} ${ifaceStateLabel(iface)}</span>
       </div>
       <dl class="facts">
-        <div><dt>${t("ui.network.ip")}</dt><dd class="mono">${addr ? addr.address + "/" + addr.prefixlen : "\u2013"}</dd></div>
-        <div><dt>${t("ui.network.netmask")}</dt><dd class="mono">${addr ? addr.netmask : "\u2013"}</dd></div>
+        <div><dt>${t("ui.network.ip")}</dt><dd class="mono">${addrLines || "\u2013"}</dd></div>
+        <div><dt>${t("ui.network.netmask")}</dt><dd class="mono">${maskLines || "\u2013"}</dd></div>
         <div><dt>${t("ui.network.gateway")}</dt><dd class="mono">${iface.gateway || "\u2013"}</dd></div>
         <div><dt>${t("ui.network.mac")}</dt><dd class="mono">${iface.mac || "\u2013"}</dd></div>
       </dl>
     `;
     ifaceCards.appendChild(card);
+
+    if (data.backend === "networkmanager") {
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "link-btn";
+      editBtn.style.marginTop = "10px";
+      editBtn.textContent = t("ui.network.editBtn");
+      editBtn.addEventListener("click", () => openNetworkEditDialog(iface));
+      card.appendChild(editBtn);
+    }
   }
   networkContainer.appendChild(ifaceCards);
 }
 
 async function loadNetwork() {
+  if (networkEditDialog.open) return;
   try {
     const res = await fetch("/api/network");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     lastNetworkData = data;
     renderNetwork(data);
+    if (data.pending_change) {
+      showPendingBanner(data.pending_change.token, data.pending_change.created_at);
+    } else {
+      hidePendingBanner();
+    }
   } catch (err) {
     emptyState(networkContainer, t("msg.loadErrorNetwork", { detail: err.message }));
   }
 }
+
+// loadNetwork() is invoked once all the dialog element refs below exist -
+// see the bottom of this section. It references networkEditDialog, which
+// isn't declared yet at this point in the file.
+
+// --------------------------------------------------------------------
+// Network settings edit dialog + the 30s auto-revert confirm banner.
+// The whole point of the banner is that confirmation is a courtesy, not
+// the actual safety mechanism - the real revert timer lives server-side
+// (see network_mutate.py) and fires regardless of whether this tab, or
+// any tab, is even open. The banner is re-derived from the server's
+// pending_change on every loadNetwork() poll (not just right after
+// applying), so it reappears correctly even after a plain page reload
+// mid-window, from this browser or another one.
+// --------------------------------------------------------------------
+
+const networkEditDialog = document.getElementById("network-edit-dialog");
+const networkEditForm = document.getElementById("network-edit-form");
+const networkEditTitle = document.getElementById("network-edit-title");
+const networkEditCancel = document.getElementById("network-edit-cancel");
+const networkEditError = document.getElementById("network-edit-error");
+const networkEditIp = document.getElementById("network-edit-ip");
+const networkEditPrefix = document.getElementById("network-edit-prefix");
+const networkEditGateway = document.getElementById("network-edit-gateway");
+const networkEditDns = document.getElementById("network-edit-dns");
+const networkEditSubmit = document.getElementById("network-edit-submit");
+
+const networkPendingBanner = document.getElementById("network-pending-banner");
+const networkPendingCountdown = document.getElementById("network-pending-countdown");
+const networkPendingConfirmBtn = document.getElementById("network-pending-confirm-btn");
+
+let editingInterface = null;
+let editingOldIp = null;
+let pendingChangeTimer = null;
+let pendingChangeToken = null;
+
+function openNetworkEditDialog(iface) {
+  networkEditForm.reset();
+  networkEditError.textContent = "";
+  editingInterface = iface.name;
+  const addr = (iface.addresses || [])[0];
+  editingOldIp = addr ? addr.address : null;
+  networkEditTitle.textContent = t("ui.networkEditDialog.title", { interface: iface.name });
+  networkEditIp.value = addr ? addr.address : "";
+  networkEditPrefix.value = addr ? addr.prefixlen : "";
+  networkEditGateway.value = iface.gateway || "";
+  networkEditDns.value = (lastNetworkData.dns_servers || []).join(", ");
+  networkEditDialog.showModal();
+}
+
+networkEditCancel.addEventListener("click", () => networkEditDialog.close());
+
+networkEditForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  networkEditError.textContent = "";
+
+  const ip = networkEditIp.value.trim();
+  const prefixlen = parseInt(networkEditPrefix.value, 10);
+  const gateway = networkEditGateway.value.trim();
+  const dns = networkEditDns.value.split(",").map((s) => s.trim()).filter(Boolean);
+
+  networkEditSubmit.disabled = true;
+  try {
+    const res = await fetch(`/api/network/${encodeURIComponent(editingInterface)}/apply`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ip, prefixlen, gateway, dns }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      networkEditError.textContent = apiErrorMessage(data, res);
+      return;
+    }
+    networkEditDialog.close();
+
+    // Only follow the browser to the new address if this tab is
+    // actually connected via the address that just changed - editing
+    // some other interface than the one you're browsing through
+    // shouldn't yank you anywhere.
+    if (window.location.hostname === editingOldIp) {
+      window.location.href = `http://${data.new_host}/`;
+      return;
+    }
+    await loadNetwork();
+  } catch (err) {
+    networkEditError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
+  } finally {
+    networkEditSubmit.disabled = false;
+  }
+});
+
+function hidePendingBanner() {
+  clearInterval(pendingChangeTimer);
+  pendingChangeTimer = null;
+  pendingChangeToken = null;
+  networkPendingBanner.style.display = "none";
+}
+
+function showPendingBanner(token, createdAtIso) {
+  pendingChangeToken = token;
+  networkPendingBanner.style.display = "flex";
+
+  function computeRemaining() {
+    if (!createdAtIso) return 30;
+    const elapsed = (Date.now() - new Date(createdAtIso).getTime()) / 1000;
+    return Math.max(0, Math.round(30 - elapsed));
+  }
+
+  networkPendingCountdown.textContent = computeRemaining();
+  clearInterval(pendingChangeTimer);
+  pendingChangeTimer = setInterval(() => {
+    const remaining = computeRemaining();
+    if (remaining <= 0) {
+      hidePendingBanner();
+      loadNetwork();
+      return;
+    }
+    networkPendingCountdown.textContent = remaining;
+  }, 1000);
+}
+
+networkPendingConfirmBtn.addEventListener("click", async () => {
+  if (!pendingChangeToken) return;
+  networkPendingConfirmBtn.disabled = true;
+  try {
+    const res = await fetch("/api/network/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ token: pendingChangeToken }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      showToast(apiErrorMessage(data, res), true);
+      return;
+    }
+    hidePendingBanner();
+    showToast(t("msg.networkChangeConfirmed"));
+    await loadNetwork();
+  } catch (err) {
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
+  } finally {
+    networkPendingConfirmBtn.disabled = false;
+  }
+});
 
 loadNetwork();
 setInterval(loadNetwork, REFRESH_MS);
