@@ -69,6 +69,59 @@ themeToggleBtn.addEventListener("click", () => {
 applyThemeIcon();
 
 // --------------------------------------------------------------------
+// Title glow easter egg - lightsaber-style, ignites at random moments
+// while the tab is open (not on every load - the point is that it's a
+// surprise, not a fixed decoration). Dark theme always glows red;
+// light theme picks green/blue/purple at random each time.
+// --------------------------------------------------------------------
+
+const appTitle = document.getElementById("app-title");
+const TITLE_GLOWS = {
+  red: { core: "#fff", mid: "#ff3b3b", out: "#ff0000" },
+  green: { core: "#eafff0", mid: "#3ddc6a", out: "#1fb851" },
+  blue: { core: "#eaf4ff", mid: "#4fa3ff", out: "#2b7fe0" },
+  purple: { core: "#fdf2ff", mid: "#c13bf5", out: "#8a0fd1" },
+};
+
+function glowShadow(c) {
+  return `0 0 5px ${c.core}, 0 0 14px ${c.mid}, 0 0 30px ${c.mid}, 0 0 55px ${c.out}, 0 0 95px ${c.out}`;
+}
+
+function randomBetween(minMs, maxMs) {
+  return minMs + Math.random() * (maxMs - minMs);
+}
+
+function igniteTitle() {
+  const isDark = currentTheme() === "dark";
+  const key = isDark ? "red" : ["green", "blue", "purple"][Math.floor(Math.random() * 3)];
+  const c = TITLE_GLOWS[key];
+  const restColor = getComputedStyle(appTitle).color;
+
+  appTitle.style.transition = "text-shadow 0.2s ease-out, color 0.2s ease-out";
+  appTitle.style.color = c.out;
+  appTitle.style.textShadow = glowShadow(c);
+
+  setTimeout(() => {
+    appTitle.style.transition = "text-shadow 1.8s ease-in, color 1.8s ease-in";
+    appTitle.style.textShadow = "none";
+    appTitle.style.color = restColor;
+  }, 2500);
+}
+
+function scheduleNextGlow() {
+  setTimeout(() => {
+    igniteTitle();
+    scheduleNextGlow();
+  }, randomBetween(4 * 60 * 1000, 15 * 60 * 1000));
+}
+
+// First ignition is sooner (so it's not a 15-minute wait to ever see it)
+// but still never on the very first paint - that would just be a static
+// decoration, not a surprise.
+setTimeout(igniteTitle, randomBetween(45 * 1000, 4 * 60 * 1000));
+scheduleNextGlow();
+
+// --------------------------------------------------------------------
 // Language toggle - cycles through every language that has a loaded
 // dictionary (currently PL/EN; adding a language automatically makes it
 // part of the cycle, see nas_monitor/static/i18n/).
