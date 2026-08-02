@@ -29,8 +29,17 @@ if [[ -f "$CREDENTIALS_FILE" ]]; then
   echo "==> Konto administratora już skonfigurowane - pomijam (użyj panelu konta w dashboardzie, żeby zmienić hasło)."
   ADMIN_USERNAME=""
 else
-  echo "==> Konfiguracja konta administratora"
-  echo "    (logowanie do dashboardu - osobne od kont systemowych/SMB)"
+  if [[ -t 1 ]] && command -v tput >/dev/null 2>&1; then
+    BOLD=$(tput bold); CYAN=$(tput setaf 6); RESET=$(tput sgr0)
+  else
+    BOLD=""; CYAN=""; RESET=""
+  fi
+  echo ""
+  echo "${BOLD}${CYAN}============================================================${RESET}"
+  echo "${BOLD}${CYAN}  KONFIGURACJA KONTA ADMINISTRATORA${RESET}"
+  echo "${CYAN}  (logowanie do dashboardu - osobne od kont systemowych/SMB)${RESET}"
+  echo "${BOLD}${CYAN}============================================================${RESET}"
+  echo ""
   read -rp "Nazwa użytkownika [admin]: " ADMIN_USERNAME
   ADMIN_USERNAME="${ADMIN_USERNAME:-admin}"
 

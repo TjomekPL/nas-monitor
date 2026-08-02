@@ -57,10 +57,10 @@ def login():
     session.clear()
     session["authenticated"] = True
     session["username"] = username
-    duration = auth.get_session_duration_hours()
+    duration = auth.get_session_duration_minutes()
     if duration is not None:
         session.permanent = True
-        app.permanent_session_lifetime = timedelta(hours=duration)
+        app.permanent_session_lifetime = timedelta(minutes=duration)
     else:
         session.permanent = False  # a plain session cookie - gone when the browser closes
 
@@ -84,7 +84,7 @@ def api_auth_status():
             "configured": auth.is_configured(),
             "authenticated": bool(session.get("authenticated")),
             "username": auth.get_username(),
-            "session_duration_hours": auth.get_session_duration_hours(),
+            "session_duration_minutes": auth.get_session_duration_minutes(),
         }
     )
 
@@ -107,12 +107,12 @@ def api_auth_change_password():
 @app.route("/api/auth/session-duration", methods=["POST"])
 def api_auth_session_duration():
     data = request.get_json(force=True, silent=True) or {}
-    hours = data.get("hours")  # null/None = until the browser closes
+    minutes = data.get("minutes")  # null/None = until the browser closes
 
-    result = auth.set_session_duration_hours(hours)
+    result = auth.set_session_duration_minutes(minutes)
     if not result["success"]:
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
-    return jsonify({"success": True, "session_duration_hours": result["session_duration_hours"]})
+    return jsonify({"success": True, "session_duration_minutes": result["session_duration_minutes"]})
 
 
 @app.route("/")

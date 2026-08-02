@@ -8,9 +8,11 @@
   <script>
     (function () {
       var saved = localStorage.getItem("nas-monitor-theme");
-      if (saved === "light" || saved === "dark") {
-        document.documentElement.setAttribute("data-theme", saved);
-      }
+      // Respect an explicit saved choice either way; with none yet (e.g.
+      // a browser that's never opened the dashboard before), default to
+      // dark rather than following the OS preference - his call for the
+      // login page specifically.
+      document.documentElement.setAttribute("data-theme", saved === "light" ? "light" : "dark");
     })();
   </script>
 </head>

@@ -399,3 +399,13 @@ klienta), więc ta separacja jest zamierzona.
       poprawne logowanie, wylogowanie, wyłącznik awaryjny, stan "jeszcze
       nieskonfigurowane" (nigdy nie blokuje, dopóki `install.sh` nie
       uruchomi setupu)
+
+    Poprawki po pierwszym realnym teście: czas trwania sesji przebudowany
+    na minuty zamiast godzin (dodane 5/15/30 min i 1 godz. obok
+    istniejących opcji, wcześniej brakowało jednostek przy liczbach w
+    rozwijanej liście - wyglądało jak gołe cyfry bez znaczenia). Strona
+    logowania domyślnie ciemny motyw (zamiast podążać za preferencją
+    systemu jak reszta apki) - jego wybór. Dodany `reset-admin-password.sh`
+    jako prostszy sposób na zmianę/reset hasła bezpośrednio z SSH, bez
+    pamiętania składni `printf | python3 -m nas_monitor.setup_admin`
+    (decyzja: reset hasła tylko przez SSH, świadomie bez maila z linkiem).

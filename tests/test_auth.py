@@ -75,9 +75,9 @@ class TestSetCredentials(AuthTestCase):
 
     def test_overwriting_credentials_preserves_session_duration_setting(self):
         auth.set_credentials("admin", "correcthorse9")
-        auth.set_session_duration_hours(24)
+        auth.set_session_duration_minutes(24 * 60)
         auth.set_credentials("admin", "anotherpass1")
-        self.assertEqual(auth.get_session_duration_hours(), 24)
+        self.assertEqual(auth.get_session_duration_minutes(), 24 * 60)
 
 
 class TestVerifyCredentials(AuthTestCase):
@@ -127,29 +127,36 @@ class TestChangePassword(AuthTestCase):
 class TestSessionDuration(AuthTestCase):
     def test_default_is_none_until_browser_closes(self):
         auth.set_credentials("admin", "correcthorse9")
-        self.assertIsNone(auth.get_session_duration_hours())
+        self.assertIsNone(auth.get_session_duration_minutes())
 
     def test_set_and_get(self):
         auth.set_credentials("admin", "correcthorse9")
-        result = auth.set_session_duration_hours(24)
+        result = auth.set_session_duration_minutes(24 * 60)
         self.assertTrue(result["success"])
-        self.assertEqual(auth.get_session_duration_hours(), 24)
+        self.assertEqual(auth.get_session_duration_minutes(), 24 * 60)
+
+    def test_short_durations_supported(self):
+        auth.set_credentials("admin", "correcthorse9")
+        for minutes in [5, 15, 30, 60]:
+            result = auth.set_session_duration_minutes(minutes)
+            self.assertTrue(result["success"], minutes)
+            self.assertEqual(auth.get_session_duration_minutes(), minutes)
 
     def test_set_back_to_none(self):
         auth.set_credentials("admin", "correcthorse9")
-        auth.set_session_duration_hours(24)
-        auth.set_session_duration_hours(None)
-        self.assertIsNone(auth.get_session_duration_hours())
+        auth.set_session_duration_minutes(24 * 60)
+        auth.set_session_duration_minutes(None)
+        self.assertIsNone(auth.get_session_duration_minutes())
 
     def test_rejects_out_of_range(self):
         auth.set_credentials("admin", "correcthorse9")
-        for bad in [0, -5, 24 * 31]:
-            result = auth.set_session_duration_hours(bad)
+        for bad in [0, -5, 4, 30 * 24 * 60 + 1]:
+            result = auth.set_session_duration_minutes(bad)
             self.assertFalse(result["success"])
             self.assertEqual(result["error_code"], "auth.invalid_session_duration")
 
     def test_requires_credentials_configured_first(self):
-        result = auth.set_session_duration_hours(24)
+        result = auth.set_session_duration_minutes(24 * 60)
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "auth.not_configured")
 

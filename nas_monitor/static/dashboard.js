@@ -145,7 +145,6 @@ function igniteTitle() {
   const isDark = currentTheme() === "dark";
   const key = isDark ? "red" : ["green", "blue", "purple"][Math.floor(Math.random() * 3)];
   const c = TITLE_GLOWS[key];
-  const restColor = getComputedStyle(appTitle).color;
 
   appTitle.style.transition = "text-shadow 0.2s ease-out, color 0.2s ease-out";
   appTitle.style.color = c.out;
@@ -153,8 +152,14 @@ function igniteTitle() {
 
   setTimeout(() => {
     appTitle.style.transition = "text-shadow 1.8s ease-in, color 1.8s ease-in";
-    appTitle.style.textShadow = "none";
-    appTitle.style.color = restColor;
+    appTitle.style.textShadow = "";
+    appTitle.style.color = "";
+    // Clearing the inline color lets CSS (which tracks the current
+    // theme) take back over. Freezing a captured getComputedStyle()
+    // value here instead was the actual bug - it looked fine until the
+    // theme was switched afterward, at which point the title stayed
+    // stuck at whichever color the OLD theme had, occasionally landing
+    // on dark-on-dark or light-on-light and going nearly invisible.
   }, 2500);
 }
 
@@ -233,14 +238,15 @@ async function openAccountDialog() {
     const res = await nativeFetch("/api/auth/status");
     const data = await res.json();
     accountLoggedInAs.textContent = data.username ? t("ui.accountDialog.loggedInAs", { username: data.username }) : "";
-    const hours = data.session_duration_hours;
-    if (hours === null || hours === undefined) {
+    const minutes = data.session_duration_minutes;
+    const presetValues = ["5", "15", "30", "60", "720", "1440", "10080"];
+    if (minutes === null || minutes === undefined) {
       sessionDurationSelect.value = "";
-    } else if (["12", "24", "168"].includes(String(hours))) {
-      sessionDurationSelect.value = String(hours);
+    } else if (presetValues.includes(String(minutes))) {
+      sessionDurationSelect.value = String(minutes);
     } else {
       sessionDurationSelect.value = "custom";
-      sessionDurationCustomInput.value = hours;
+      sessionDurationCustomInput.value = Math.round(minutes / 60);
     }
     sessionDurationCustomLabel.style.display = sessionDurationSelect.value === "custom" ? "block" : "none";
   } catch (err) {
@@ -292,22 +298,23 @@ sessionDurationForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   sessionDurationError.textContent = "";
 
-  let hours = null;
+  let minutes = null;
   if (sessionDurationSelect.value === "custom") {
-    hours = parseInt(sessionDurationCustomInput.value, 10);
-    if (!hours || hours <= 0) {
+    const customHours = parseInt(sessionDurationCustomInput.value, 10);
+    if (!customHours || customHours <= 0) {
       sessionDurationError.textContent = window.i18n.errorText("auth.invalid_session_duration");
       return;
     }
+    minutes = customHours * 60;
   } else if (sessionDurationSelect.value !== "") {
-    hours = parseInt(sessionDurationSelect.value, 10);
+    minutes = parseInt(sessionDurationSelect.value, 10);
   }
 
   try {
     const res = await fetch("/api/auth/session-duration", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hours }),
+      body: JSON.stringify({ minutes }),
     });
     const data = await res.json();
     if (!res.ok || !data.success) {

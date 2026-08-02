@@ -99,7 +99,7 @@ def set_credentials(username: str, password: str) -> dict[str, Any]:
         "password_hash": generate_password_hash(password),
         # None = "until the browser closes" (a non-permanent session
         # cookie) - the default; a number is hours.
-        "session_duration_hours": existing.get("session_duration_hours"),
+        "session_duration_minutes": existing.get("session_duration_minutes"),
     }
     save_result = state_store.save(CREDENTIALS_FILE, data)
     if not save_result["success"]:
@@ -141,31 +141,31 @@ def change_password(current_password: str, new_password: str) -> dict[str, Any]:
     return result
 
 
-def get_session_duration_hours() -> int | None:
+def get_session_duration_minutes() -> int | None:
     """None means "until the browser closes" - a non-permanent session
-    cookie with no explicit expiry, rather than a fixed number of hours."""
+    cookie with no explicit expiry, rather than a fixed duration."""
     data = state_store.load(CREDENTIALS_FILE, default=None)
-    return data.get("session_duration_hours") if data else None
+    return data.get("session_duration_minutes") if data else None
 
 
-def set_session_duration_hours(hours: int | None) -> dict[str, Any]:
+def set_session_duration_minutes(minutes: int | None) -> dict[str, Any]:
     result: dict[str, Any] = {"success": False}
     data = state_store.load(CREDENTIALS_FILE, default=None)
     if not data:
         return errors.fail(result, "auth.not_configured")
-    if hours is not None:
+    if minutes is not None:
         try:
-            hours = int(hours)
+            minutes = int(minutes)
         except (TypeError, ValueError):
             return errors.fail(result, "auth.invalid_session_duration")
-        if hours <= 0 or hours > 24 * 30:
+        if minutes < 5 or minutes > 30 * 24 * 60:
             return errors.fail(result, "auth.invalid_session_duration")
-    data["session_duration_hours"] = hours
+    data["session_duration_minutes"] = minutes
     save_result = state_store.save(CREDENTIALS_FILE, data)
     if not save_result["success"]:
         return errors.fail(result, "system.io_failed", path=CREDENTIALS_FILE, detail=save_result.get("error", ""))
     result["success"] = True
-    result["session_duration_hours"] = hours
+    result["session_duration_minutes"] = minutes
     return result
 
 
