@@ -197,7 +197,7 @@ def api_shares_create():
     return jsonify({"success": True, "share": result})
 
 
-@app.route("/api/shares/<n>/update", methods=["POST"])
+@app.route("/api/shares/<name>/update", methods=["POST"])
 def api_shares_update(name):
     data = request.get_json(force=True, silent=True) or {}
     comment = data.get("comment")
@@ -220,7 +220,7 @@ def api_shares_update(name):
     return jsonify({"success": True, "share": result})
 
 
-@app.route("/api/shares/<n>/delete", methods=["POST"])
+@app.route("/api/shares/<name>/delete", methods=["POST"])
 def api_shares_delete(name):
     data = request.get_json(force=True, silent=True) or {}
     delete_files = bool(data.get("delete_files", False))
