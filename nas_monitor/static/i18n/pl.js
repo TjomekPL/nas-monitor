@@ -261,6 +261,14 @@ window.NAS_I18N.pl = {
     },
   },
 
+  note: {
+    users: {
+      create_smb_password_failed: "Konto systemowe zostało utworzone, ale nie udało się ustawić hasła SMB.",
+      update_smb_password_failed: "Dane konta zostały zaktualizowane, ale nie udało się zmienić hasła SMB.",
+      delete_remote_keys_remain: "Lokalny klucz SSH usunięty. Uwaga: zdalne urządzenia, na które wcześniej wysłano ten klucz, WCIĄŻ go mają w authorized_keys - to nie zostało cofnięte automatycznie. Jeśli chcesz odebrać dostęp, zrób to ręcznie na każdym z nich.",
+    },
+  },
+
   log: {
     users: {
       create: { success: "Utworzono użytkownika {username}", failure: "Nie udało się utworzyć użytkownika {username}" },

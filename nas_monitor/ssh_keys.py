@@ -66,6 +66,21 @@ def _record_deployment(
     _save_deployments(data)
 
 
+def forget_user(username: str) -> None:
+    """Drop all deployment records for username. Called when the local
+    account (and its key, via delete_key()) is being removed entirely -
+    there's no key left locally for those records to be current/stale
+    against, so keeping them around would just be confusing leftover
+    bookkeeping. Does NOT touch anything on the remote hosts themselves -
+    a deployed public key stays in each remote authorized_keys file
+    until explicitly revoked there (remove_deployment(), which needs
+    that host's password) or removed by hand."""
+    data = _load_deployments()
+    if username in data:
+        del data[username]
+        _save_deployments(data)
+
+
 def get_deployments(username: str) -> list[dict[str, Any]]:
     """Every remote host this key has ever been deployed to, each flagged
     is_current: True if that deployment's public key still matches what's

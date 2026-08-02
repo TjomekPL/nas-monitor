@@ -374,6 +374,12 @@ h2 {
 }
 .link-btn:hover { text-decoration: underline; }
 .link-btn.danger { color: var(--crit); }
+.link-btn:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.link-btn:disabled:hover { text-decoration: none; }
 
 .display-name {
   font-weight: 600;

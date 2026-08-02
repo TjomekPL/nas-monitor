@@ -425,7 +425,9 @@ addUserForm.addEventListener("submit", async (ev) => {
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
-      addUserError.textContent = apiErrorMessage(data, res);
+      let text = apiErrorMessage(data, res);
+      if (data.note_code) text += " " + window.i18n.noteText(data.note_code);
+      addUserError.textContent = text;
       return;
     }
     addUserDialog.close();
@@ -468,6 +470,7 @@ async function deleteUser(username, displayName) {
       showToast(apiErrorMessage(data, res), true);
       return;
     }
+    if (data.note_code) showToast(window.i18n.noteText(data.note_code), true);
     await loadUsers();
     await loadSshKeys();
   } catch (err) {
@@ -1087,9 +1090,12 @@ function fmtLogTime(iso) {
 
 function logEntrySummary(ev) {
   // Older, pre-i18n entries persisted a plain "summary" string directly
-  // (before the log started storing category/action/params) - shown
-  // verbatim, since there's no code to re-translate it from.
-  if (ev.category && ev.action) {
+  // (before the log started storing params for interpolation) - shown
+  // verbatim, since there's no code to re-translate it from. category/
+  // action existed in BOTH schemas, so params is the only reliable
+  // marker of "this is a new-style entry" (new entries always have it,
+  // even as an empty object; old entries never have the key at all).
+  if (ev.params !== undefined) {
     return window.i18n.logSummary(ev.category, ev.action, ev.status, ev.params || {});
   }
   return ev.summary || "";

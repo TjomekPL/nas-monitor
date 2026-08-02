@@ -2,7 +2,7 @@ window.NAS_I18N = window.NAS_I18N || {};
 window.NAS_I18N.en = {
   ui: {
     app: {
-      subtitle: "Monitoring, users, and Samba shares",
+      subtitle: "Disk, user and share monitoring",
     },
     header: {
       connStatus: "Connection status",
@@ -258,6 +258,14 @@ window.NAS_I18N.en = {
       missing_smb_password: "Note: {usernames} doesn't have an SMB password set yet - they won't be able to log in until you set one in the Users tab.",
       reload_failed: "Configuration saved, but reloading smbd failed.",
       file_delete_failed: "Share removed from Samba, but failed to delete {path}: {detail}",
+    },
+  },
+
+  note: {
+    users: {
+      create_smb_password_failed: "The system account was created, but setting the SMB password failed.",
+      update_smb_password_failed: "The account was updated, but changing the SMB password failed.",
+      delete_remote_keys_remain: "The local SSH key was deleted. Note: any remote devices this key was previously deployed to STILL have it in authorized_keys - that wasn't reverted automatically. Remove it by hand on each of them if you want to revoke access.",
     },
   },
 

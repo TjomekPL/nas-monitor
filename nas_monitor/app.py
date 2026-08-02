@@ -146,10 +146,18 @@ def api_users_delete(username):
     data = request.get_json(force=True, silent=True) or {}
     remove_home = bool(data.get("remove_home", False))
 
-    # Best-effort: remove any SMB access first (less destructive than
-    # deleting the account). A missing/already-gone SMB entry isn't a
-    # failure - the point is the account being gone, not this side effect.
+    # Best-effort side effects, before the account itself is gone:
+    # - drop SMB access (less destructive than deleting the account)
+    # - remove the local SSH keypair, so it can't be left orphaned under
+    #   a now-deleted account's UID
+    # A pre-existing remote deployment is NOT touched here - revoking it
+    # needs that remote host's password, which nobody supplied as part
+    # of "delete this user". had_deployments is captured before the
+    # local key is gone, purely to decide whether to warn about it.
+    had_deployments = bool(ssh_keys.get_deployments(username))
     smb.remove_user(username)
+    ssh_keys.delete_key(username)
+    ssh_keys.forget_user(username)
 
     user_result = users.delete_user(username, remove_home=remove_home)
     if not user_result["success"]:
@@ -159,7 +167,10 @@ def api_users_delete(username):
         ), 400
 
     oplog.log_event("users", "delete", "success", params={"username": username})
-    return jsonify({"success": True})
+    response = {"success": True}
+    if had_deployments:
+        response["note_code"] = "users.delete_remote_keys_remain"
+    return jsonify(response)
 
 
 @app.route("/api/shares")

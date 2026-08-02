@@ -78,6 +78,10 @@
     return t(`warn.${code}`, context);
   }
 
+  function noteText(code, context) {
+    return t(`note.${code}`, context);
+  }
+
   function logSummary(category, action, status, params) {
     return t(`log.${category}.${action}.${status}`, params);
   }
@@ -118,6 +122,7 @@
     t,
     errorText,
     warningText,
+    noteText,
     logSummary,
     applyTranslations,
     setLanguage,
