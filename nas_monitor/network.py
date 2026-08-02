@@ -80,6 +80,34 @@ def _prefixlen_to_netmask(prefixlen: int) -> str:
     return ".".join(str((mask >> shift) & 0xFF) for shift in (24, 16, 8, 0))
 
 
+def _classify_interface_type(name: str) -> str:
+    """Human-friendly hardware type for the Sieć tab, e.g. "WiFi (USB)" -
+    read from /sys/class/net, not guessed from the interface name (which
+    a udev rule could rename to anything). No /device symlink at all
+    means a purely virtual interface (Tailscale, Docker, veth, bridges)."""
+    base = f"/sys/class/net/{name}"
+    device_link = os.path.join(base, "device")
+    if not os.path.islink(device_link) and not os.path.isdir(device_link):
+        return "wirtualny"
+
+    is_wireless = os.path.isdir(os.path.join(base, "wireless")) or os.path.isdir(os.path.join(base, "phy80211"))
+
+    bus = None
+    subsystem_link = os.path.join(device_link, "subsystem")
+    try:
+        target = os.readlink(subsystem_link)
+        bus = os.path.basename(target)
+    except OSError:
+        pass
+
+    kind = "WiFi" if is_wireless else "Ethernet"
+    if bus == "usb":
+        return f"{kind} (USB)"
+    if bus in ("pci", "virtio"):
+        return f"{kind} (wbudowana)"
+    return kind
+
+
 def list_interfaces() -> dict[str, Any]:
     """Every network interface with its current state, straight from the
     kernel via `ip -j` - true regardless of which backend (if any) is
@@ -123,11 +151,22 @@ def list_interfaces() -> dict[str, Any]:
                 }
             )
 
+        raw_state = iface.get("operstate", "UNKNOWN").lower()
+        # Point-to-point/tunnel interfaces (Tailscale, WireGuard, other VPN
+        # tools) commonly report operstate "unknown" from the kernel even
+        # while genuinely carrying traffic - real carrier-state tracking
+        # isn't well supported for that class of virtual device. Treat
+        # "unknown" as up if it actually has an address, which for a
+        # tunnel interface is a reasonable proxy for "connected".
+        effective_up = raw_state == "up" or (raw_state == "unknown" and bool(ipv4_addrs))
+
         interfaces.append(
             {
                 "name": name,
                 "mac": iface.get("address"),
-                "state": iface.get("operstate", "UNKNOWN").lower(),
+                "state": raw_state,
+                "effective_up": effective_up,
+                "type": _classify_interface_type(name),
                 "addresses": ipv4_addrs,
                 "gateway": gateway_by_dev.get(name),
             }

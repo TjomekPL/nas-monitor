@@ -962,9 +962,9 @@ function renderNetwork(data) {
     const addr = iface.addresses[0];
     card.innerHTML = `
       <div class="card-head">
-        <span class="badge ${iface.state === 'up' ? 'ok' : 'unknown'}"></span>
+        <span class="badge ${iface.effective_up ? 'ok' : 'unknown'}"></span>
         <span class="name mono">${iface.name}</span>
-        <span class="level">${iface.state}</span>
+        <span class="level">${iface.type ? `(${iface.type})` : ""} ${iface.state}</span>
       </div>
       <dl class="facts">
         <div><dt>Adres IP</dt><dd class="mono">${addr ? addr.address + "/" + addr.prefixlen : "\u2013"}</dd></div>

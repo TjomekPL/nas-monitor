@@ -219,6 +219,18 @@ klienta), więc ta separacja jest zamierzona.
    opcjonalne pole przy wysyłce, nie automatyczne rozpoznawanie po DNS
    (na typowej domowej sieci zwrotne DNS zwykle i tak nie działa
    niezawodnie dla własnoręcznie skonfigurowanych urządzeń).
+
+   **⚠️ Incydent i poprawka bezpieczeństwa nazwy pliku klucza**: klucz
+   generowany był pod domyślną, konwencjonalną nazwą `~/.ssh/id_ed25519`
+   - dla zwykłego, prawdziwego konta logowania (nie dedykowanego wyłącznie
+   do udziałów) to jest dokładnie ta sama ścieżka, gdzie leży własny,
+   osobisty klucz (np. do GitHuba). Wygenerowanie klucza przez to narzędzie
+   dla takiego konta nadpisało realny, używany klucz GitHub, co zerwało
+   dostęp `git push` do repozytorium. Naprawione: własna, jednoznacznie
+   nazwana ścieżka `~/.ssh/id_ed25519_nasmonitor`, która nigdy nie może się
+   zetknąć z żadnym cudzym kluczem - potwierdzone testem odtwarzającym
+   dokładnie ten scenariusz (prawdziwy osobisty klucz + wygenerowanie
+   klucza nas-monitor obok, hash osobistego klucza identyczny przed/po).
 6. **Zakładki zamiast jednej długiej strony** - ✅ zrobione. Pasek zakładek
    pod nagłówkiem (Dyski i macierze / Użytkownicy / Certyfikaty / Udziały /
    Sieć), wybór zapamiętywany w `localStorage`.
@@ -247,6 +259,30 @@ klienta), więc ta separacja jest zamierzona.
    "ukrycie" z sieci lokalnej (blokada dostępu po zwykłym IP) - osobny,
    świadomy krok dopiero po potwierdzeniu że Tailscale faktycznie działa,
    żeby nie łączyć dwóch ryzyk zablokowania się naraz.
+
+   Poprawki po pierwszym realnym teście: interfejsy tunelowe (Tailscale,
+   podobne VPN) często zgłaszają jądru stan "unknown" zamiast "up" mimo że
+   realnie działają - dodane pole `effective_up` (stan "unknown" + realny
+   adres = liczy się jako aktywny dla kropki statusu; surowy stan nadal
+   pokazany osobno, uczciwie). DNS pokazujący `100.100.100.100` zamiast
+   adresów lokalnego routera to oczekiwane zachowanie Tailscale MagicDNS
+   (podmienia `/etc/resolv.conf`), nie błąd.
+
+   **Typ karty sieciowej** - dopisek przy nazwie interfejsu np. "(USB)",
+   "(WiFi)", "(wbudowana)" - żeby łatwiej rozpoznać, która karta jest
+   którą (frustrowało to na OMV). Czytane wprost z `/sys/class/net/<if>`
+   - obecność katalogu `wireless` do wykrycia WiFi, a symlink
+   `device/subsystem` do typu magistrali (usb/pci/virtio) - nie zgadywane
+   z nazwy interfejsu (którą mogłaby zmienić reguła udev). Brak w ogóle
+   symlinku `device` = interfejs czysto wirtualny (Tailscale, Docker,
+   mosty, veth). Sprawdzone testem odtwarzającym dokładnie zestaw kart
+   z produkcji (eno1, enx-USB, wlp2s0, tailscale0) i na prawdziwym sysfs
+   w sandboxie.
+
+   **Zaplanowane, jeszcze nie zaczęte**: redundancja/bonding kart
+   sieciowych, gdy wykryte zostanie więcej niż jedna - do ustalenia z Tomkiem
+   dokładny scenariusz (failover vs. agregacja przepustowości) i czy to
+   dotyczy komputera czy raczej ustawień switcha/routera.
 8. **Zdalne montowanie** - jeszcze nie omówione w szczegółach.
 9. **Backupy przez rsync (lub inne metody)** - jeszcze nie omówione w
    szczegółach.

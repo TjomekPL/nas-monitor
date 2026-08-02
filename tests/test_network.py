@@ -31,10 +31,71 @@ class TestPrefixlenToNetmask(unittest.TestCase):
         self.assertEqual(network._prefixlen_to_netmask(0), "0.0.0.0")
 
 
+class TestClassifyInterfaceType(unittest.TestCase):
+    def _fake_sysfs(self, devices):
+        """devices: {iface: None | {"wireless": bool, "bus": str}}
+        None means no /device link at all (purely virtual interface)."""
+
+        def fake_islink(path):
+            parts = path.split("/")
+            iface = parts[4] if len(parts) > 4 else None
+            return iface in devices and devices[iface] is not None and path.endswith("/device")
+
+        def fake_isdir(path):
+            parts = path.split("/")
+            if len(parts) < 5:
+                return False
+            iface = parts[4]
+            if iface not in devices or devices[iface] is None:
+                return False
+            if path.endswith("/wireless"):
+                return devices[iface].get("wireless", False)
+            if path.endswith("/phy80211"):
+                return False
+            return False
+
+        def fake_readlink(path):
+            parts = path.split("/")
+            iface = parts[4] if len(parts) > 4 else None
+            if iface in devices and devices[iface] is not None and path.endswith("/device/subsystem"):
+                return f"../../../../bus/{devices[iface]['bus']}"
+            raise OSError("no such link")
+
+        return fake_islink, fake_isdir, fake_readlink
+
+    def test_real_world_mixed_setup_from_screenshot(self):
+        # eno1 = onboard ethernet, enx... = USB ethernet, wlp2s0 = internal
+        # WiFi, tailscale0 = purely virtual (no /device at all) - exactly
+        # the interface set reported in production
+        devices = {
+            "eno1": {"wireless": False, "bus": "pci"},
+            "enx00e04c680121": {"wireless": False, "bus": "usb"},
+            "wlp2s0": {"wireless": True, "bus": "pci"},
+            "tailscale0": None,
+        }
+        fake_islink, fake_isdir, fake_readlink = self._fake_sysfs(devices)
+        with mock.patch("nas_monitor.network.os.path.islink", side_effect=fake_islink), \
+             mock.patch("nas_monitor.network.os.path.isdir", side_effect=fake_isdir), \
+             mock.patch("nas_monitor.network.os.readlink", side_effect=fake_readlink):
+            self.assertEqual(network._classify_interface_type("eno1"), "Ethernet (wbudowana)")
+            self.assertEqual(network._classify_interface_type("enx00e04c680121"), "Ethernet (USB)")
+            self.assertEqual(network._classify_interface_type("wlp2s0"), "WiFi (wbudowana)")
+            self.assertEqual(network._classify_interface_type("tailscale0"), "wirtualny")
+
+    def test_usb_wifi_dongle(self):
+        devices = {"wlx1234": {"wireless": True, "bus": "usb"}}
+        fake_islink, fake_isdir, fake_readlink = self._fake_sysfs(devices)
+        with mock.patch("nas_monitor.network.os.path.islink", side_effect=fake_islink), \
+             mock.patch("nas_monitor.network.os.path.isdir", side_effect=fake_isdir), \
+             mock.patch("nas_monitor.network.os.readlink", side_effect=fake_readlink):
+            self.assertEqual(network._classify_interface_type("wlx1234"), "WiFi (USB)")
+
+
+@mock.patch("nas_monitor.network._classify_interface_type", return_value="Ethernet")
 class TestListInterfaces(unittest.TestCase):
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
     @mock.patch("nas_monitor.network.system_tools.run")
-    def test_excludes_loopback_includes_others(self, mock_run, mock_find):
+    def test_excludes_loopback_includes_others(self, mock_run, mock_find, mock_classify):
         mock_run.side_effect = [
             (0, IP_ADDR_SAMPLE, ""),
             (0, IP_ROUTE_SAMPLE, ""),
@@ -47,7 +108,7 @@ class TestListInterfaces(unittest.TestCase):
 
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
     @mock.patch("nas_monitor.network.system_tools.run")
-    def test_converts_prefixlen_and_attaches_gateway(self, mock_run, mock_find):
+    def test_converts_prefixlen_and_attaches_gateway(self, mock_run, mock_find, mock_classify):
         mock_run.side_effect = [
             (0, IP_ADDR_SAMPLE, ""),
             (0, IP_ROUTE_SAMPLE, ""),
@@ -60,15 +121,53 @@ class TestListInterfaces(unittest.TestCase):
         self.assertIsNone(eth1["gateway"])  # no default route via eth1
         self.assertEqual(eth1["addresses"], [])
 
+    @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
+    @mock.patch("nas_monitor.network.system_tools.run")
+    def test_tailscale_style_unknown_state_with_ip_counts_as_effectively_up(self, mock_run, mock_find, mock_classify):
+        # Real-world case: a Tailscale interface reports operstate
+        # "UNKNOWN" from the kernel even while genuinely connected -
+        # that's normal for tunnel-type devices, not a sign it's down.
+        sample = """
+        [{"ifname": "tailscale0", "flags": ["POINTOPOINT", "UP"], "operstate": "UNKNOWN",
+          "address": "", "addr_info": [{"family": "inet", "local": "100.77.203.121", "prefixlen": 32}]}]
+        """
+        mock_run.side_effect = [(0, sample, ""), (0, "[]", "")]
+        result = network.list_interfaces()
+        ts = result["interfaces"][0]
+        self.assertEqual(ts["state"], "unknown")  # raw state stays honest/visible
+        self.assertTrue(ts["effective_up"])  # but treated as up for the status dot
+
+    @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
+    @mock.patch("nas_monitor.network.system_tools.run")
+    def test_unknown_state_with_no_address_is_not_effectively_up(self, mock_run, mock_find, mock_classify):
+        # unknown state AND no address at all - genuinely nothing to suggest it's active
+        sample = """
+        [{"ifname": "dummy0", "flags": [], "operstate": "UNKNOWN", "address": "", "addr_info": []}]
+        """
+        mock_run.side_effect = [(0, sample, ""), (0, "[]", "")]
+        result = network.list_interfaces()
+        self.assertFalse(result["interfaces"][0]["effective_up"])
+
+    @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
+    @mock.patch("nas_monitor.network.system_tools.run")
+    def test_explicit_down_state_is_never_effectively_up_even_with_stale_address(self, mock_run, mock_find, mock_classify):
+        sample = """
+        [{"ifname": "eno1", "flags": [], "operstate": "DOWN", "address": "",
+          "addr_info": [{"family": "inet", "local": "10.0.0.5", "prefixlen": 24}]}]
+        """
+        mock_run.side_effect = [(0, sample, ""), (0, "[]", "")]
+        result = network.list_interfaces()
+        self.assertFalse(result["interfaces"][0]["effective_up"])
+
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value=None)
-    def test_missing_ip_binary(self, mock_find):
+    def test_missing_ip_binary(self, mock_find, mock_classify):
         result = network.list_interfaces()
         self.assertFalse(result["available"])
         self.assertIn("not installed", result["error"])
 
     @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/sbin/ip")
     @mock.patch("nas_monitor.network.system_tools.run", return_value=(0, "not json", ""))
-    def test_garbage_output_does_not_crash(self, mock_run, mock_find):
+    def test_garbage_output_does_not_crash(self, mock_run, mock_find, mock_classify):
         result = network.list_interfaces()
         self.assertFalse(result["available"])
         self.assertIsNotNone(result["error"])
