@@ -992,6 +992,155 @@ async function loadNetwork() {
 loadNetwork();
 setInterval(loadNetwork, REFRESH_MS);
 
+// --------------------------------------------------------------------
+// Log operacji - collapsed-by-default entries; full raw message only
+// shown once expanded, with a copy button. Time-range filter + a
+// configurable retention cap (persisted server-side).
+// --------------------------------------------------------------------
+
+const logContainer = document.getElementById("log-container");
+const logEntryTemplate = document.getElementById("log-entry-template");
+const logClearBtn = document.getElementById("log-clear-btn");
+const logFilterSince = document.getElementById("log-filter-since");
+const logFilterUntil = document.getElementById("log-filter-until");
+const logFilterClearBtn = document.getElementById("log-filter-clear-btn");
+const logMaxEntriesInput = document.getElementById("log-max-entries");
+
+const expandedLogIds = new Set();
+
+function localInputToIso(value) {
+  // <input type="datetime-local"> gives local time with no offset
+  // (e.g. "2026-08-02T10:30"); interpret it as local and convert to a
+  // real UTC ISO timestamp so it compares correctly against stored
+  // event timestamps.
+  if (!value) return null;
+  const d = new Date(value);
+  if (isNaN(d.getTime())) return null;
+  return d.toISOString();
+}
+
+function fmtLogTime(iso) {
+  try {
+    return new Date(iso).toLocaleString("pl-PL", {
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  } catch {
+    return iso;
+  }
+}
+
+function renderLog(events) {
+  logContainer.innerHTML = "";
+  if (!events.length) {
+    emptyState(logContainer, "Brak zdarzeń do pokazania.");
+    return;
+  }
+  for (const ev of events) {
+    const node = logEntryTemplate.content.cloneNode(true);
+    const article = node.querySelector(".log-entry");
+    const isOk = ev.status === "success";
+    const pill = node.querySelector(".status-pill");
+    pill.classList.add(isOk ? "pill-ok" : "pill-crit");
+    pill.textContent = isOk ? "sukces" : "błąd";
+    node.querySelector(".log-summary").textContent = ev.summary;
+    node.querySelector(".log-time").textContent = fmtLogTime(ev.timestamp);
+
+    const messageEl = node.querySelector(".log-message");
+    messageEl.textContent = ev.message && ev.message.trim() ? ev.message : "(brak dodatkowych szczegółów)";
+
+    if (expandedLogIds.has(ev.id)) article.classList.add("expanded");
+
+    node.querySelector(".log-entry-head").addEventListener("click", () => {
+      const nowExpanded = article.classList.toggle("expanded");
+      if (nowExpanded) expandedLogIds.add(ev.id);
+      else expandedLogIds.delete(ev.id);
+    });
+
+    node.querySelector(".log-copy-btn").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      try {
+        await navigator.clipboard.writeText(`${ev.summary}\n${fmtLogTime(ev.timestamp)}\n\n${messageEl.textContent}`);
+        showToast("Skopiowano do schowka.");
+      } catch {
+        showToast("Nie udało się skopiować.", true);
+      }
+    });
+
+    logContainer.appendChild(node);
+  }
+}
+
+async function loadLog() {
+  try {
+    const params = new URLSearchParams();
+    const since = localInputToIso(logFilterSince.value);
+    const until = localInputToIso(logFilterUntil.value);
+    if (since) params.set("since", since);
+    if (until) params.set("until", until);
+
+    const res = await fetch(`/api/log?${params.toString()}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderLog(data.events || []);
+    if (document.activeElement !== logMaxEntriesInput) {
+      logMaxEntriesInput.value = data.max_entries;
+    }
+  } catch (err) {
+    emptyState(logContainer, `Błąd wczytywania logu (${err.message})`);
+  }
+}
+
+logFilterSince.addEventListener("change", loadLog);
+logFilterUntil.addEventListener("change", loadLog);
+
+logFilterClearBtn.addEventListener("click", () => {
+  logFilterSince.value = "";
+  logFilterUntil.value = "";
+  loadLog();
+});
+
+logClearBtn.addEventListener("click", async () => {
+  if (!confirm("Wyczyścić cały log operacji? Tej operacji nie można cofnąć.")) return;
+  try {
+    const res = await fetch("/api/log/clear", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+    expandedLogIds.clear();
+    await loadLog();
+  } catch (err) {
+    showToast(`Nie udało się wyczyścić logu: ${err.message}`, true);
+  }
+});
+
+logMaxEntriesInput.addEventListener("change", async () => {
+  const value = parseInt(logMaxEntriesInput.value, 10);
+  if (!value || value < 10 || value > 1000) {
+    showToast("Limit wpisów musi być liczbą od 10 do 1000.", true);
+    await loadLog();
+    return;
+  }
+  try {
+    const res = await fetch("/api/log/settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ max_entries: value }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) throw new Error(data.error || `HTTP ${res.status}`);
+    showToast("Zapisano limit wpisów.");
+    await loadLog();
+  } catch (err) {
+    showToast(`Nie udało się zapisać limitu: ${err.message}`, true);
+  }
+});
+
+loadLog();
+setInterval(loadLog, REFRESH_MS);
+
 // Kick off polling now that everything above is declared.
 loadUsers();
 setInterval(loadUsers, REFRESH_MS);

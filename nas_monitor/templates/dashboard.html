@@ -36,6 +36,7 @@
     <button type="button" class="tab-btn" data-tab="certs" role="tab">Certyfikaty</button>
     <button type="button" class="tab-btn" data-tab="shares" role="tab">Udziały</button>
     <button type="button" class="tab-btn" data-tab="network" role="tab">Sieć</button>
+    <button type="button" class="tab-btn" data-tab="log" role="tab">Log</button>
   </nav>
 
   <main>
@@ -87,6 +88,34 @@
           powrotem do poprzednich, jeśli coś pójdzie źle) jeszcze nie jest tu dostępna.
         </p>
         <div id="network-container"></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-tab="log">
+      <section>
+        <div class="section-head">
+          <h2>Log operacji</h2>
+          <button id="log-clear-btn" class="link-btn danger" type="button">Wyczyść log</button>
+        </div>
+        <p class="subtitle">Historia zmian wprowadzonych przez to narzędzie (użytkownicy, udziały, klucze SSH).</p>
+
+        <div class="log-toolbar">
+          <label class="log-toolbar-field">
+            <span class="label-text">Od</span>
+            <input type="datetime-local" id="log-filter-since">
+          </label>
+          <label class="log-toolbar-field">
+            <span class="label-text">Do</span>
+            <input type="datetime-local" id="log-filter-until">
+          </label>
+          <button id="log-filter-clear-btn" class="link-btn" type="button">Wyczyść filtr</button>
+          <label class="log-toolbar-field log-max-field">
+            <span class="label-text">Maks. liczba wpisów</span>
+            <input type="number" id="log-max-entries" min="10" max="1000" step="1">
+          </label>
+        </div>
+
+        <div id="log-container" class="log-list"></div>
       </section>
     </div>
   </main>
@@ -288,6 +317,21 @@
         <button type="button" class="link-btn danger delete-btn">Usuń</button>
       </td>
     </tr>
+  </template>
+
+  <template id="log-entry-template">
+    <article class="log-entry">
+      <button type="button" class="log-entry-head">
+        <span class="pill status-pill"></span>
+        <span class="log-summary"></span>
+        <span class="log-time mono"></span>
+        <span class="log-chevron">▾</span>
+      </button>
+      <div class="log-entry-body">
+        <pre class="log-message mono"></pre>
+        <button type="button" class="link-btn log-copy-btn">Kopiuj</button>
+      </div>
+    </article>
   </template>
 
   <script src="{{ url_for('static', filename='dashboard.js') }}"></script>

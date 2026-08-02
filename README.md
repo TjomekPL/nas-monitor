@@ -97,8 +97,9 @@ nas_monitor/
   smb.py             - backend SMB: hasła Samby, dowiązanie do kont systemowych
   smb_shares.py       - backend SMB: udziały (tworzenie/edycja/usuwanie pod /srv, testparm+rollback)
   ssh_keys.py          - klucze SSH per użytkownik: generowanie + wysyłanie na zdalne urządzenie
-  state_store.py        - mały lokalny magazyn JSON na stan, którego nie da się wyczytać z systemu (śledzenie wdrożeń kluczy, docelowo log)
+  state_store.py        - mały lokalny magazyn JSON na stan, którego nie da się wyczytać z systemu (śledzenie wdrożeń kluczy, log operacji)
   network.py             - wykrywanie sieci: hostname, backend (NM/networkd/ifupdown), interfejsy, DNS - na razie tylko odczyt
+  oplog.py                - log operacji: co się wykonało, sukces/błąd, pełny szczegół na żądanie
   app.py              - Flask app, wszystkie trasy
   templates/
     dashboard.html
@@ -112,6 +113,7 @@ tests/
   test_smb_shares.py     - testy warstwy SMB (udziały) - w tym prawdziwe testy na tmpdir dla configparser
   test_ssh_keys.py        - testy kluczy SSH
   test_network.py         - testy wykrywania sieci
+  test_oplog.py             - testy logu operacji (persystencja, limit, filtr czasowy)
 nas-monitor.service      - jednostka systemd (uruchamia przez gunicorn)
 ```
 
@@ -233,7 +235,7 @@ klienta), więc ta separacja jest zamierzona.
    klucza nas-monitor obok, hash osobistego klucza identyczny przed/po).
 6. **Zakładki zamiast jednej długiej strony** - ✅ zrobione. Pasek zakładek
    pod nagłówkiem (Dyski i macierze / Użytkownicy / Certyfikaty / Udziały /
-   Sieć), wybór zapamiętywany w `localStorage`.
+   Sieć / Log), wybór zapamiętywany w `localStorage`.
 7. **Sieć** - ✅ **wykrywanie** zrobione (`nas_monitor/network.py`):
    nazwa hosta, który system zarządza siecią (NetworkManager /
    systemd-networkd / ifupdown / nierozpoznany - wykrywane naprawdę, nie
@@ -286,8 +288,13 @@ klienta), więc ta separacja jest zamierzona.
 8. **Zdalne montowanie** - jeszcze nie omówione w szczegółach.
 9. **Backupy przez rsync (lub inne metody)** - jeszcze nie omówione w
    szczegółach.
-10. **Log operacji** - osobna sekcja z jasnym podziałem: co się wykonało
-   poprawnie, co się nie udało i dlaczego. Zaplanowane jako następny krok,
-   żeby objąć od razu wszystkie istniejące operacje (użytkownicy, udziały,
-   klucze) zamiast dorabiać to osobno do każdej. Magazyn stanu
-   (`state_store.py`) już gotowy od funkcji certyfikatów.
+10. **Log operacji** - ✅ zrobione. Osobna zakładka "Log", jedna implementacja
+   obejmująca od razu wszystkie mutujące operacje (użytkownicy, udziały,
+   klucze SSH) zamiast dorabiania per-funkcja. Świadomie NIE jest to log
+   w stylu konsoli - każdy wpis to zwinięty nagłówek (co się stało + pigułka
+   sukces/błąd + czas), pełny szczegół (treść błędu / komunikat) widoczny
+   dopiero po rozwinięciu, z przyciskiem kopiowania. Do tego: wyszukiwanie
+   wpisów po zakresie czasowym, przycisk "Wyczyść log" i konfigurowalny
+   limit liczby przechowywanych wpisów (domyślnie 50, zakres 10-1000,
+   najstarsze wpisy usuwane automatycznie po przekroczeniu). Zapisane przez
+   `state_store.py` (jak wdrożenia kluczy SSH) - przetrwa restart usługi.
