@@ -344,7 +344,17 @@ logoutBtn.addEventListener("click", async () => {
 const tabButtons = document.querySelectorAll(".tab-btn");
 const tabPanels = document.querySelectorAll(".tab-panel");
 
-function activateTab(name) {
+const tabRefreshFns = {
+  disks: () => refresh(),
+  users: () => loadUsers(),
+  groups: () => loadGroups(),
+  certs: () => loadSshKeys(),
+  shares: () => loadShares(),
+  network: () => loadNetwork(),
+  log: () => loadLog(),
+};
+
+function activateTab(name, { refresh: shouldRefresh = false } = {}) {
   let matched = false;
   tabButtons.forEach((btn) => {
     const isMatch = btn.dataset.tab === name;
@@ -352,11 +362,25 @@ function activateTab(name) {
     if (isMatch) matched = true;
   });
   tabPanels.forEach((panel) => panel.classList.toggle("active", panel.dataset.tab === name));
-  if (matched) localStorage.setItem("nas-monitor-tab", name);
+  if (matched) {
+    localStorage.setItem("nas-monitor-tab", name);
+    // Every tab otherwise only refreshes on its own independent timer -
+    // without this, data changed from a DIFFERENT tab (e.g. adding
+    // someone to a group while editing a user) wouldn't show up here
+    // until that timer's next cycle, up to REFRESH_MS later. Only wired
+    // to actual clicks, not the initial page-load restore below - each
+    // tab's own load*() call further down the file already handles its
+    // first load, and calling it from here instead would run before
+    // that load function's own dialog-guard consts are even declared.
+    if (shouldRefresh) {
+      const refreshFn = tabRefreshFns[name];
+      if (refreshFn) refreshFn();
+    }
+  }
 }
 
 tabButtons.forEach((btn) => {
-  btn.addEventListener("click", () => activateTab(btn.dataset.tab));
+  btn.addEventListener("click", () => activateTab(btn.dataset.tab, { refresh: true }));
 });
 
 activateTab(localStorage.getItem("nas-monitor-tab") || tabButtons[0].dataset.tab);
@@ -1078,7 +1102,7 @@ function populateShareGroupGrantsList(existingGrants) {
 
     const select = document.createElement("select");
     select.dataset.group = g.name;
-    select.className = "group-grant-select";
+    select.className = "permission-select group-grant-select";
     for (const [value, label] of Object.entries(permissionLabels())) {
       const opt = document.createElement("option");
       opt.value = value;
