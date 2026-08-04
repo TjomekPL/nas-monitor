@@ -714,6 +714,109 @@ async function deleteUser(username, displayName) {
 }
 
 // --------------------------------------------------------------------
+// Groups (general system groups - NOT <share>_access groups, which
+// stay auto-managed from the Shares tab and never appear here)
+// --------------------------------------------------------------------
+
+const groupsContainer = document.getElementById("groups-container");
+const groupRowTemplate = document.getElementById("group-row-template");
+const addGroupBtn = document.getElementById("add-group-btn");
+const groupDialog = document.getElementById("group-dialog");
+const groupForm = document.getElementById("group-form");
+const groupCancel = document.getElementById("group-cancel");
+const groupError = document.getElementById("group-error");
+const groupNameInput = document.getElementById("new-group-dialog-name");
+const groupSubmitBtn = document.getElementById("group-submit");
+
+function renderGroups(groupsList) {
+  groupsContainer.innerHTML = "";
+  if (!groupsList.length) {
+    emptyState(groupsContainer, t("msg.empty.groups"));
+    return;
+  }
+  const table = document.createElement("table");
+  table.innerHTML = `<thead><tr><th>${t("ui.groups.colName")}</th><th>${t("ui.groups.colMembers")}</th><th></th></tr></thead>`;
+  const tbody = document.createElement("tbody");
+  for (const g of groupsList) {
+    const row = groupRowTemplate.content.cloneNode(true);
+    window.i18n.applyTranslations(row);
+    row.querySelector(".display-name").textContent = g.name;
+    row.querySelector(".members").textContent = g.members && g.members.length ? g.members.join(", ") : t("ui.groups.noMembers");
+    row.querySelector(".delete-btn").addEventListener("click", () => deleteGroup(g.name));
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+  groupsContainer.appendChild(table);
+}
+
+async function loadGroups() {
+  if (groupDialog.open) return;
+  try {
+    const res = await fetch("/api/groups");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderGroups(data.groups || []);
+  } catch (err) {
+    emptyState(groupsContainer, t("msg.loadErrorGroups", { detail: err.message }));
+  }
+}
+
+addGroupBtn.addEventListener("click", () => {
+  groupForm.reset();
+  groupError.textContent = "";
+  groupDialog.showModal();
+});
+groupCancel.addEventListener("click", () => groupDialog.close());
+
+groupForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  groupError.textContent = "";
+  const name = groupNameInput.value.trim();
+
+  if (!(await confirmDialog(t("msg.confirmCreateGroup", { name })))) return;
+
+  groupSubmitBtn.disabled = true;
+  try {
+    const res = await fetch("/api/groups/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      groupError.textContent = apiErrorMessage(data, res);
+      return;
+    }
+    groupDialog.close();
+    await loadGroups();
+    await loadUsers(); // the new group should show up in the user-edit checklist too
+  } catch (err) {
+    groupError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
+  } finally {
+    groupSubmitBtn.disabled = false;
+  }
+});
+
+async function deleteGroup(name) {
+  if (!(await confirmDialog(t("msg.confirmDeleteGroup", { name }), { danger: true }))) return;
+  try {
+    const res = await fetch(`/api/groups/${encodeURIComponent(name)}/delete`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      showToast(apiErrorMessage(data, res), true);
+      return;
+    }
+    await loadGroups();
+    await loadUsers();
+  } catch (err) {
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
+  }
+}
+
+loadGroups();
+setInterval(loadGroups, REFRESH_MS);
+
+// --------------------------------------------------------------------
 // Shares
 // --------------------------------------------------------------------
 

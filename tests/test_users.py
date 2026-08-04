@@ -151,6 +151,52 @@ class TestEnsureGroupExists(unittest.TestCase):
         self.assertIn("real failure", result["error_context"]["detail"])
 
 
+class TestCreateGroup(unittest.TestCase):
+    @mock.patch("nas_monitor.users.grp.getgrnam", side_effect=KeyError)
+    @mock.patch("nas_monitor.users.system_tools.find_binary", return_value="/usr/sbin/groupadd")
+    @mock.patch("nas_monitor.users.system_tools.run", return_value=(0, "", ""))
+    def test_creates_new_group(self, mock_run, mock_find, mock_getgrnam):
+        result = users.create_group("editors")
+        self.assertTrue(result["success"])
+        mock_run.assert_called_once_with(["/usr/sbin/groupadd", "editors"])
+
+    @mock.patch("nas_monitor.users.grp.getgrnam", return_value=object())
+    def test_rejects_duplicate_group(self, mock_getgrnam):
+        result = users.create_group("existing")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "users.group_already_exists")
+
+    def test_rejects_invalid_name(self):
+        result = users.create_group("bad name!")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "users.invalid_group_name")
+
+
+class TestDeleteGroup(unittest.TestCase):
+    @mock.patch("nas_monitor.users.grp.getgrnam", return_value=object())
+    @mock.patch("nas_monitor.users.system_tools.find_binary", return_value="/usr/sbin/groupdel")
+    @mock.patch("nas_monitor.users.system_tools.run", return_value=(0, "", ""))
+    def test_deletes_existing_group(self, mock_run, mock_find, mock_getgrnam):
+        result = users.delete_group("editors")
+        self.assertTrue(result["success"])
+        mock_run.assert_called_once_with(["/usr/sbin/groupdel", "editors"])
+
+    @mock.patch("nas_monitor.users.grp.getgrnam", side_effect=KeyError)
+    def test_rejects_nonexistent_group(self, mock_getgrnam):
+        result = users.delete_group("ghost")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "users.group_not_found")
+
+    @mock.patch("nas_monitor.users.grp.getgrnam", return_value=object())
+    @mock.patch("nas_monitor.users.system_tools.find_binary", return_value="/usr/sbin/groupdel")
+    @mock.patch("nas_monitor.users.system_tools.run", return_value=(1, "", "groupdel: cannot remove the primary group of user 'x'"))
+    def test_propagates_groupdel_failure_eg_primary_group(self, mock_run, mock_find, mock_getgrnam):
+        result = users.delete_group("someones-primary")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+        self.assertIn("primary group", result["error_context"]["detail"])
+
+
 class TestUpdateUser(unittest.TestCase):
     @mock.patch("nas_monitor.users.user_exists", return_value=False)
     def test_rejects_nonexistent_user(self, mock_exists):

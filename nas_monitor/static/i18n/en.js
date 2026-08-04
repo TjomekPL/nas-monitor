@@ -43,6 +43,7 @@ window.NAS_I18N.en = {
     tabs: {
       disks: "Disks & arrays",
       users: "Users",
+      groups: "Groups",
       certs: "Certificates",
       shares: "Shares",
       network: "Network",
@@ -73,6 +74,15 @@ window.NAS_I18N.en = {
       editBtn: "Edit",
       smbRemoveBtn: "SMB only",
       deleteBtn: "Delete",
+    },
+    groups: {
+      heading: "Groups",
+      subtitle: "General system groups - independent of share-access groups, which are managed automatically from the Shares tab.",
+      addBtn: "+ Add group",
+      colName: "Name",
+      colMembers: "Members",
+      deleteBtn: "Delete",
+      noMembers: "\u2013 (none)",
     },
     certs: {
       heading: "Certificates (SSH keys)",
@@ -167,6 +177,13 @@ window.NAS_I18N.en = {
       cancelBtn: "Cancel",
       sendBtn: "Deploy",
     },
+    groupDialog: {
+      title: "New group",
+      nameLabel: "Group name",
+      namePlaceholder: "e.g. family",
+      cancelBtn: "Cancel",
+      createBtn: "Create",
+    },
     confirmDialog: {
       cancelBtn: "Cancel",
       okBtn: "OK",
@@ -207,6 +224,7 @@ window.NAS_I18N.en = {
       disks: "No disks detected (lsblk unavailable or insufficient permissions).",
       users: "No user accounts detected.",
       sshKeys: "No user accounts detected.",
+      groups: "No general groups yet - add one with the button above.",
       shares: "No shares yet - add one with the button above.",
       networkInterfaces: "No network interfaces detected.",
       log: "No events to show.",
@@ -214,6 +232,7 @@ window.NAS_I18N.en = {
     lastUpdated: "updated {time}",
     connectionError: "connection error ({detail})",
     loadErrorUsers: "Error loading users ({detail})",
+    loadErrorGroups: "Error loading groups ({detail})",
     loadErrorShares: "Error loading shares ({detail})",
     loadErrorSshKeys: "Error loading keys ({detail})",
     loadErrorNetwork: "Error loading network ({detail})",
@@ -233,6 +252,8 @@ window.NAS_I18N.en = {
     confirmSaveShare: "Save changes to share \"{name}\"?\n\nAccess: {summary}",
     confirmCreateShare: "Create share \"{name}\" under /srv/{name}?\n\nAccess: {summary}",
     confirmDeleteShare: "Delete share \"{name}\"?\n\nOK = remove from Samba only, KEEP the files on disk (safe).\nCancel = abort.\n\n(Deleting the files too isn't available from this dialog yet - on purpose, so nobody's data gets wiped in one click.)",
+    confirmCreateGroup: "Create group \"{name}\"?",
+    confirmDeleteGroup: "Delete group \"{name}\"? Every member loses whatever access came from it.",
     confirmGenerateKey: "Generate a new SSH keypair for \"{username}\"?",
     confirmDeleteKey: "Delete the SSH key for \"{username}\"? It will need to be redeployed everywhere it was installed.",
     confirmDeployKey: "Install the key on {user}@{host}?",
@@ -275,6 +296,11 @@ window.NAS_I18N.en = {
       already_exists: "User '{username}' already exists",
       not_found: "User '{username}' doesn't exist",
       invalid_group_name: "Invalid group name: {group}",
+      group_already_exists: "Group '{group}' already exists",
+      group_not_found: "Group '{group}' doesn't exist",
+    },
+    groups: {
+      is_share_access_group: "Group '{group}' is auto-managed by a share - remove access there instead of deleting the group directly",
     },
     smb: {
       empty_password: "Empty password",
@@ -344,6 +370,10 @@ window.NAS_I18N.en = {
     network: {
       apply: { success: "Changed interface {interface}'s IP to {ip}", failure: "Failed to change network settings for {interface}" },
       confirm: { success: "Confirmed the network change on {interface}", failure: "Failed to confirm the network change" },
+    },
+    groups: {
+      create: { success: "Created group {name}", failure: "Failed to create group {name}" },
+      delete: { success: "Deleted group {name}", failure: "Failed to delete group {name}" },
     },
     users: {
       create: { success: "Created user {username}", failure: "Failed to create user {username}" },

@@ -266,7 +266,7 @@ klienta), więc ta separacja jest zamierzona.
    dokładnie ten scenariusz (prawdziwy osobisty klucz + wygenerowanie
    klucza nas-monitor obok, hash osobistego klucza identyczny przed/po).
 6. **Zakładki zamiast jednej długiej strony** - ✅ zrobione. Pasek zakładek
-   pod nagłówkiem (Dyski i macierze / Użytkownicy / Certyfikaty / Udziały /
+   pod nagłówkiem (Dyski i macierze / Użytkownicy / Grupy / Certyfikaty / Udziały /
    Sieć / Log), wybór zapamiętywany w `localStorage`.
 7. **Sieć** - ✅ **wykrywanie** zrobione (`nas_monitor/network.py`):
    nazwa hosta, który system zarządza siecią (NetworkManager /
@@ -429,3 +429,15 @@ klienta), więc ta separacja jest zamierzona.
     jako prostszy sposób na zmianę/reset hasła bezpośrednio z SSH, bez
     pamiętania składni `printf | python3 -m nas_monitor.setup_admin`
     (decyzja: reset hasła tylko przez SSH, świadomie bez maila z linkiem).
+
+13. **Grupy** - ✅ zrobione. Osobna zakładka, obok Użytkowników - pełne CRUD
+    (lista/dodaj/usuń) dla **ogólnych** grup systemowych, niezależna od
+    grup dostępu do udziałów (`<udział>_access`), które nadal są wyłącznie
+    automatyczne i nigdy się tu nie pokazują - ten sam filtr, co już
+    istniał dla listy grup w edycji użytkownika, teraz wydzielony do
+    wspólnej funkcji (`_general_groups()`) i użyty w obu miejscach.
+    Usuwanie idzie przez `groupdel` - naturalnie odmawia, jeśli grupa jest
+    czyjąś grupą główną (nie trzeba tego sprawdzać ręcznie, system i tak
+    to wymusi). Obrona w głąb: bezpośrednie wywołanie API nie pozwoli
+    skasować grupy dostępu do udziału z pominięciem UI, nawet jeśli ktoś
+    poda jej nazwę wprost.

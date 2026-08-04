@@ -125,6 +125,18 @@ def api_status():
     return jsonify(monitor.get_full_status())
 
 
+def _general_groups():
+    """Groups a human should ever see/manage directly - excludes the
+    <share>_access groups this tool auto-manages from the Udziały
+    section. Showing those here would invite exactly the kind of
+    accidental un-sharing (or accidental deletion, for the Groups tab)
+    that this filter exists to prevent."""
+    share_access_groups = {
+        s["access_group"] for s in smb_shares.list_shares().get("shares", []) if s.get("access_group")
+    }
+    return [g for g in users.list_system_groups() if g["name"] not in share_access_groups]
+
+
 @app.route("/api/users")
 def api_users():
     samba = smb.list_samba_users()
@@ -137,24 +149,51 @@ def api_users():
     for u in system_users:
         u["has_smb"] = u["username"] in samba_set
 
-    # Share-access groups (<share>_access) are auto-managed exclusively
-    # from the Udziały section - showing them in the general "edit user"
-    # checklist invites exactly the kind of accidental un-sharing that
-    # happened before this filter existed: editing something else about
-    # a user, not realizing one of the checked boxes IS their access to
-    # a share, and losing it on save.
-    share_access_groups = {
-        s["access_group"] for s in smb_shares.list_shares().get("shares", []) if s.get("access_group")
-    }
-    general_groups = [g for g in users.list_system_groups() if g["name"] not in share_access_groups]
-
     return jsonify(
         {
             "users": system_users,
-            "groups": general_groups,
+            "groups": _general_groups(),
             "samba": samba,
         }
     )
+
+
+@app.route("/api/groups")
+def api_groups():
+    return jsonify({"groups": _general_groups()})
+
+
+@app.route("/api/groups/create", methods=["POST"])
+def api_groups_create():
+    data = request.get_json(force=True, silent=True) or {}
+    name = (data.get("name") or "").strip()
+
+    result = users.create_group(name)
+    if not result["success"]:
+        oplog.log_event("groups", "create", "failure", params={"name": name})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("groups", "create", "success", params={"name": name})
+    return jsonify({"success": True})
+
+
+@app.route("/api/groups/<name>/delete", methods=["POST"])
+def api_groups_delete(name):
+    # Same defense-in-depth as the sync account: the Groups tab UI never
+    # offers a share's own access group for deletion, but nothing stops
+    # a direct API call from naming one - reject that outright rather
+    # than pulling access out from under a share.
+    share_access_groups = {
+        s["access_group"] for s in smb_shares.list_shares().get("shares", []) if s.get("access_group")
+    }
+    if name in share_access_groups:
+        return jsonify({"success": False, "error_code": "groups.is_share_access_group", "error_context": {"group": name}}), 400
+
+    result = users.delete_group(name)
+    if not result["success"]:
+        oplog.log_event("groups", "delete", "failure", params={"name": name})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("groups", "delete", "success", params={"name": name})
+    return jsonify({"success": True})
 
 
 @app.route("/api/users/create", methods=["POST"])

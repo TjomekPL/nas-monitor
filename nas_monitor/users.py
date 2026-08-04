@@ -130,6 +130,50 @@ def ensure_group_exists(group_name: str) -> dict[str, Any]:
     return result
 
 
+def create_group(group_name: str) -> dict[str, Any]:
+    """Explicit create for the Groups tab - unlike ensure_group_exists()
+    (used internally when a user-creation form names a brand new group
+    inline), this FAILS if the group already exists rather than treating
+    it as a no-op success, since an explicit "create" action getting
+    silently swallowed would be confusing here."""
+    result: dict[str, Any] = {"group": group_name, "success": False}
+
+    if not is_valid_username(group_name):  # same charset/length rules as usernames
+        return errors.fail(result, "users.invalid_group_name", group=group_name)
+
+    try:
+        grp.getgrnam(group_name)
+        return errors.fail(result, "users.group_already_exists", group=group_name)
+    except KeyError:
+        pass
+
+    return ensure_group_exists(group_name)
+
+
+def delete_group(group_name: str) -> dict[str, Any]:
+    """Removes a group via groupdel - fails naturally (surfaced as
+    system.command_failed) if it's still someone's PRIMARY group;
+    secondary membership doesn't block deletion, groupdel just drops
+    the group and every member loses that membership."""
+    result: dict[str, Any] = {"group": group_name, "success": False}
+
+    try:
+        grp.getgrnam(group_name)
+    except KeyError:
+        return errors.fail(result, "users.group_not_found", group=group_name)
+
+    groupdel_path = system_tools.find_binary("groupdel")
+    if groupdel_path is None:
+        return errors.tool_missing(result, "groupdel")
+
+    code, out, err = system_tools.run([groupdel_path, group_name])
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "groupdel")
+
+    result["success"] = True
+    return result
+
+
 def create_user(
     raw_username: str,
     groups: list[str] | None = None,

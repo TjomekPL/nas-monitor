@@ -37,6 +37,7 @@
   <nav class="tabs" id="tabs" role="tablist">
     <button type="button" class="tab-btn" data-tab="disks" role="tab" data-i18n="ui.tabs.disks">Dyski i macierze</button>
     <button type="button" class="tab-btn" data-tab="users" role="tab" data-i18n="ui.tabs.users">Użytkownicy</button>
+    <button type="button" class="tab-btn" data-tab="groups" role="tab" data-i18n="ui.tabs.groups">Grupy</button>
     <button type="button" class="tab-btn" data-tab="certs" role="tab" data-i18n="ui.tabs.certs">Certyfikaty</button>
     <button type="button" class="tab-btn" data-tab="shares" role="tab" data-i18n="ui.tabs.shares">Udziały</button>
     <button type="button" class="tab-btn" data-tab="network" role="tab" data-i18n="ui.tabs.network">Sieć</button>
@@ -63,6 +64,17 @@
           <button id="add-user-btn" class="btn-primary" type="button" data-i18n="ui.users.addBtn">+ Dodaj użytkownika</button>
         </div>
         <div id="users-container" class="user-table"></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-tab="groups">
+      <section>
+        <div class="section-head">
+          <h2 data-i18n="ui.groups.heading">Grupy</h2>
+          <button id="add-group-btn" class="btn-primary" type="button" data-i18n="ui.groups.addBtn">+ Dodaj grupę</button>
+        </div>
+        <p class="subtitle" data-i18n="ui.groups.subtitle">Ogólne grupy systemowe - niezależne od grup dostępu do udziałów, które są zarządzane automatycznie z poziomu zakładki Udziały.</p>
+        <div id="groups-container" class="user-table"></div>
       </section>
     </div>
 
@@ -343,6 +355,22 @@
     </div>
   </dialog>
 
+  <dialog id="group-dialog">
+    <form id="group-form" method="dialog">
+      <h3 data-i18n="ui.groupDialog.title">Nowa grupa</h3>
+      <label>
+        <span class="label-text" data-i18n="ui.groupDialog.nameLabel">Nazwa grupy</span>
+        <input type="text" id="new-group-dialog-name" pattern="[a-z_][a-z0-9_-]{0,31}" required
+               data-i18n-placeholder="ui.groupDialog.namePlaceholder" placeholder="np. rodzina" autocomplete="off">
+      </label>
+      <p class="form-error" id="group-error"></p>
+      <div class="dialog-actions">
+        <button type="button" id="group-cancel" data-i18n="ui.groupDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="group-submit" class="btn-primary" data-i18n="ui.groupDialog.createBtn">Utwórz</button>
+      </div>
+    </form>
+  </dialog>
+
   <template id="raid-card-template">
     <article class="card">
       <div class="card-head">
@@ -389,6 +417,16 @@
         <button type="button" class="link-btn edit-btn" data-i18n="ui.users.editBtn">Edytuj</button>
         <button type="button" class="link-btn smb-remove-btn" data-i18n="ui.users.smbRemoveBtn">tylko SMB</button>
         <button type="button" class="link-btn danger delete-btn" data-i18n="ui.users.deleteBtn">Usuń</button>
+      </td>
+    </tr>
+  </template>
+
+  <template id="group-row-template">
+    <tr>
+      <td class="display-name mono"></td>
+      <td class="members"></td>
+      <td class="row-actions">
+        <button type="button" class="link-btn danger delete-btn" data-i18n="ui.groups.deleteBtn">Usuń</button>
       </td>
     </tr>
   </template>

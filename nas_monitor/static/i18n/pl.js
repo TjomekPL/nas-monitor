@@ -43,6 +43,7 @@ window.NAS_I18N.pl = {
     tabs: {
       disks: "Dyski i macierze",
       users: "Użytkownicy",
+      groups: "Grupy",
       certs: "Certyfikaty",
       shares: "Udziały",
       network: "Sieć",
@@ -73,6 +74,15 @@ window.NAS_I18N.pl = {
       editBtn: "Edytuj",
       smbRemoveBtn: "tylko SMB",
       deleteBtn: "Usuń",
+    },
+    groups: {
+      heading: "Grupy",
+      subtitle: "Ogólne grupy systemowe - niezależne od grup dostępu do udziałów, które są zarządzane automatycznie z poziomu zakładki Udziały.",
+      addBtn: "+ Dodaj grupę",
+      colName: "Nazwa",
+      colMembers: "Członkowie",
+      deleteBtn: "Usuń",
+      noMembers: "\u2013 (nikt)",
     },
     certs: {
       heading: "Certyfikaty (klucze SSH)",
@@ -167,6 +177,13 @@ window.NAS_I18N.pl = {
       cancelBtn: "Anuluj",
       sendBtn: "Wyślij",
     },
+    groupDialog: {
+      title: "Nowa grupa",
+      nameLabel: "Nazwa grupy",
+      namePlaceholder: "np. rodzina",
+      cancelBtn: "Anuluj",
+      createBtn: "Utwórz",
+    },
     confirmDialog: {
       cancelBtn: "Anuluj",
       okBtn: "OK",
@@ -207,6 +224,7 @@ window.NAS_I18N.pl = {
       disks: "Nie wykryto dysków (lsblk niedostępny lub brak uprawnień).",
       users: "Nie wykryto żadnych kont użytkowników.",
       sshKeys: "Nie wykryto żadnych kont użytkowników.",
+      groups: "Brak grup ogólnych - dodaj pierwszą przyciskiem powyżej.",
       shares: "Brak udziałów - dodaj pierwszy przyciskiem powyżej.",
       networkInterfaces: "Brak wykrytych interfejsów sieciowych.",
       log: "Brak zdarzeń do pokazania.",
@@ -214,6 +232,7 @@ window.NAS_I18N.pl = {
     lastUpdated: "zaktualizowano {time}",
     connectionError: "błąd połączenia ({detail})",
     loadErrorUsers: "Błąd wczytywania użytkowników ({detail})",
+    loadErrorGroups: "Błąd wczytywania grup ({detail})",
     loadErrorShares: "Błąd wczytywania udziałów ({detail})",
     loadErrorSshKeys: "Błąd wczytywania kluczy ({detail})",
     loadErrorNetwork: "Błąd wczytywania sieci ({detail})",
@@ -233,6 +252,8 @@ window.NAS_I18N.pl = {
     confirmSaveShare: "Zapisać zmiany dla udziału \"{name}\"?\n\nDostęp: {summary}",
     confirmCreateShare: "Utworzyć udział \"{name}\" pod /srv/{name}?\n\nDostęp: {summary}",
     confirmDeleteShare: "Usunąć udział \"{name}\"?\n\nOK = usuń tylko z Samby, ZOSTAW pliki na dysku (bezpieczne).\nAnuluj = przerwij.\n\n(Skasowanie też plików nie jest tu jeszcze dostępne z tego dialogu - celowo, żeby nie skasować czyichś danych jednym kliknięciem.)",
+    confirmCreateGroup: "Utworzyć grupę \"{name}\"?",
+    confirmDeleteGroup: "Usunąć grupę \"{name}\"? Wszyscy jej członkowie stracą wynikające z niej uprawnienia.",
     confirmGenerateKey: "Wygenerować nową parę kluczy SSH dla \"{username}\"?",
     confirmDeleteKey: "Usunąć klucz SSH dla \"{username}\"? Będzie trzeba go ponownie wysłać wszędzie, gdzie był zainstalowany.",
     confirmDeployKey: "Zainstalować klucz na {user}@{host}?",
@@ -275,6 +296,11 @@ window.NAS_I18N.pl = {
       already_exists: "Użytkownik '{username}' już istnieje",
       not_found: "Użytkownik '{username}' nie istnieje",
       invalid_group_name: "Nieprawidłowa nazwa grupy: {group}",
+      group_already_exists: "Grupa '{group}' już istnieje",
+      group_not_found: "Grupa '{group}' nie istnieje",
+    },
+    groups: {
+      is_share_access_group: "Grupa '{group}' jest zarządzana automatycznie przez udział - usuń stamtąd dostęp zamiast kasować grupę bezpośrednio",
     },
     smb: {
       empty_password: "Puste hasło",
@@ -344,6 +370,10 @@ window.NAS_I18N.pl = {
     network: {
       apply: { success: "Zmieniono adres IP interfejsu {interface} na {ip}", failure: "Nie udało się zmienić ustawień sieci dla {interface}" },
       confirm: { success: "Potwierdzono zmianę ustawień sieci na {interface}", failure: "Nie udało się potwierdzić zmiany ustawień sieci" },
+    },
+    groups: {
+      create: { success: "Utworzono grupę {name}", failure: "Nie udało się utworzyć grupy {name}" },
+      delete: { success: "Usunięto grupę {name}", failure: "Nie udało się usunąć grupy {name}" },
     },
     users: {
       create: { success: "Utworzono użytkownika {username}", failure: "Nie udało się utworzyć użytkownika {username}" },
