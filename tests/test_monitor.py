@@ -283,21 +283,73 @@ class TestHumanSizeIec(unittest.TestCase):
 class TestGetFilesystemUsage(unittest.TestCase):
     @mock.patch("nas_monitor.monitor._find_binary", return_value="/usr/bin/lsblk")
     @mock.patch("nas_monitor.monitor._run")
-    def test_filesystem_directly_on_the_device(self, mock_run, mock_find):
+    def test_single_filesystem_directly_on_the_device(self, mock_run, mock_find):
         sample = json.dumps(
             {
                 "blockdevices": [
-                    {"name": "sda", "mountpoint": "/srv", "fssize": 4000000000000, "fsavail": 1000000000000, "fsused": 3000000000000}
+                    {"name": "sda", "mountpoint": "/srv", "fstype": "ext4", "fssize": 4000000000000, "fsavail": 1000000000000, "fsused": 3000000000000}
                 ]
             }
         )
         mock_run.return_value = (0, sample, "")
         result = monitor.get_filesystem_usage("/dev/sda")
         self.assertTrue(result["mounted"])
-        self.assertEqual(result["mountpoint"], "/srv")
+        self.assertEqual(result["mountpoints"], ["/srv"])
         self.assertEqual(result["total_bytes"], 4000000000000)
         self.assertEqual(result["used_bytes"], 3000000000000)
         self.assertEqual(result["available_bytes"], 1000000000000)
+
+    @mock.patch("nas_monitor.monitor._find_binary", return_value="/usr/bin/lsblk")
+    @mock.patch("nas_monitor.monitor._run")
+    def test_real_world_layout_sums_data_partitions_excludes_efi_and_swap(self, mock_run, mock_find):
+        # The exact layout that was reported broken: a desktop-style disk
+        # with EFI + btrfs root ("System") + swap + a separate ext4 data
+        # partition. The old "just take the first mounted one" logic
+        # landed on the ~1 GiB EFI partition and showed "9 MiB of 974 MiB"
+        # instead of anything resembling the real ~490 GB of actual data.
+        gib = 1024**3
+        sample = json.dumps(
+            {
+                "blockdevices": [
+                    {
+                        "name": "nvme0n1",
+                        "mountpoint": None,
+                        "fstype": None,
+                        "fssize": None,
+                        "fsavail": None,
+                        "fsused": None,
+                        "children": [
+                            {"name": "nvme0n1p1", "mountpoint": "/boot/efi", "fstype": "vfat", "fssize": int(0.951 * gib), "fsavail": int(0.94 * gib), "fsused": int(0.009 * gib)},
+                            {"name": "nvme0n1p2", "mountpoint": "/", "fstype": "btrfs", "fssize": 152 * gib, "fsavail": 64 * gib, "fsused": 88 * gib},
+                            {"name": "nvme0n1p3", "mountpoint": "/srv", "fstype": "ext4", "fssize": 339 * gib, "fsavail": 200 * gib, "fsused": 139 * gib},
+                            {"name": "nvme0n1p4", "mountpoint": "[SWAP]", "fstype": "swap", "fssize": None, "fsavail": None, "fsused": None},
+                        ],
+                    }
+                ]
+            }
+        )
+        mock_run.return_value = (0, sample, "")
+        result = monitor.get_filesystem_usage("/dev/nvme0n1")
+        self.assertTrue(result["mounted"])
+        self.assertNotIn("/boot/efi", result["mountpoints"])
+        self.assertNotIn("[SWAP]", result["mountpoints"])
+        self.assertEqual(set(result["mountpoints"]), {"/", "/srv"})
+        self.assertEqual(result["total_bytes"], 152 * gib + 339 * gib)
+        self.assertEqual(result["used_bytes"], 88 * gib + 139 * gib)
+        self.assertEqual(result["available_bytes"], 64 * gib + 200 * gib)
+
+    @mock.patch("nas_monitor.monitor._find_binary", return_value="/usr/bin/lsblk")
+    @mock.patch("nas_monitor.monitor._run")
+    def test_efi_only_disk_reports_not_mounted(self, mock_run, mock_find):
+        # A disk with nothing BUT an EFI partition mounted has no real
+        # data filesystem at all - correctly no bar, not a bar showing
+        # the boot partition.
+        sample = json.dumps(
+            {"blockdevices": [{"name": "sda1", "mountpoint": "/boot/efi", "fstype": "vfat", "fssize": 1000000000, "fsavail": 900000000, "fsused": 100000000}]}
+        )
+        mock_run.return_value = (0, sample, "")
+        result = monitor.get_filesystem_usage("/dev/sda")
+        self.assertFalse(result["mounted"])
 
     @mock.patch("nas_monitor.monitor._find_binary", return_value="/usr/bin/lsblk")
     @mock.patch("nas_monitor.monitor._run")
@@ -308,11 +360,12 @@ class TestGetFilesystemUsage(unittest.TestCase):
                     {
                         "name": "sda",
                         "mountpoint": None,
+                        "fstype": None,
                         "fssize": None,
                         "fsavail": None,
                         "fsused": None,
                         "children": [
-                            {"name": "sda1", "mountpoint": "/srv", "fssize": 2000000000000, "fsavail": 500000000000, "fsused": 1500000000000}
+                            {"name": "sda1", "mountpoint": "/srv", "fstype": "ext4", "fssize": 2000000000000, "fsavail": 500000000000, "fsused": 1500000000000}
                         ],
                     }
                 ]
@@ -321,13 +374,13 @@ class TestGetFilesystemUsage(unittest.TestCase):
         mock_run.return_value = (0, sample, "")
         result = monitor.get_filesystem_usage("/dev/sda")
         self.assertTrue(result["mounted"])
-        self.assertEqual(result["mountpoint"], "/srv")
+        self.assertEqual(result["mountpoints"], ["/srv"])
         self.assertEqual(result["total_bytes"], 2000000000000)
 
     @mock.patch("nas_monitor.monitor._find_binary", return_value="/usr/bin/lsblk")
     @mock.patch("nas_monitor.monitor._run")
     def test_nothing_mounted(self, mock_run, mock_find):
-        sample = json.dumps({"blockdevices": [{"name": "sdb", "mountpoint": None, "fssize": None, "fsavail": None, "fsused": None}]})
+        sample = json.dumps({"blockdevices": [{"name": "sdb", "mountpoint": None, "fstype": None, "fssize": None, "fsavail": None, "fsused": None}]})
         mock_run.return_value = (0, sample, "")
         result = monitor.get_filesystem_usage("/dev/sdb")
         self.assertFalse(result["mounted"])

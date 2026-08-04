@@ -464,6 +464,16 @@ klienta), więc ta separacja jest zamierzona.
       szablon paska (`.usage-bar`) użyty w karcie dysku *i* karcie
       macierzy, kolorowanie progowe (zielony/żółty/czerwony przy 80%/90%)
       tymi samymi tokenami co reszta aplikacji.
+
+    **Poprawka po pierwszym realnym teście**: dysk z kilkoma partycjami
+    (EFI + root + swap + osobna partycja danych - typowy układ na
+    maszynie z systemem, nie dedykowanym NAS-ie) pokazywał pasek dla
+    **pierwszej napotkanej** zamontowanej partycji - w praktyce trafiało
+    to w małą partycję EFI (~1 GB) zamiast w rzeczywiste dane. Naprawione:
+    teraz sumowane są **wszystkie** prawdziwe zamontowane systemy plików
+    pod danym urządzeniem, z pominięciem EFI (`vfat`) i `swap` - które
+    nigdy nie są "danymi" w sensownym znaczeniu tego słowa. Dokładny
+    zgłoszony układ partycji odtworzony jako osobny test.
     - Zweryfikowane przez jsdom: poprawne procenty i kolory progowe na
       obu typach kart, poprawne formatowanie IEC, brak paska gdy nic nie
       jest zamontowane.

@@ -42,20 +42,31 @@ def _human_size(num_bytes: int) -> str:
 
 
 def get_filesystem_usage(device_path: str) -> dict[str, Any]:
-    """Real filesystem usage for whatever's mounted on this device - via
-    lsblk's FS* columns (not a separate `df` call), which works exactly
-    the same way whether device_path is a raw disk (/dev/sda) or a RAID
-    array (/dev/md0): one shared data source for the usage bar wherever
-    it's shown. Walks into partitions too, in case the filesystem lives
-    on a partition rather than directly on the whole device.
+    """Combined usage across every "real" mounted filesystem under this
+    device - via lsblk's FS* columns (not a separate `df` call), which
+    works exactly the same way whether device_path is a raw disk
+    (/dev/sda) or a RAID array (/dev/md0): one shared data source for
+    the usage bar wherever it's shown.
 
-    mounted=False (nothing else populated) covers both "nothing is
-    mounted here yet" and "lsblk/the device isn't available" - the
-    caller doesn't need to distinguish those, there's just no usage bar
-    to show either way."""
+    A single physical disk very often has multiple partitions - an EFI
+    boot partition, swap, an OS root filesystem, maybe a separate data
+    partition - and taking just the first mounted one found could as
+    easily land on a nearly-empty ~1 GiB boot partition as on the actual
+    data (confirmed against a real report: a disk with an EFI/btrfs
+    root/swap/ext4-data layout showed "9 MiB of 974 MiB" - the EFI
+    partition - instead of anything resembling the real ~490 GiB of
+    actual filesystems). EFI/boot (vfat) and swap are excluded outright
+    as never being "data" in a meaningful sense; everything else mounted
+    under this device is summed into one combined total/used/available,
+    on the reasoning that all of it together is "how full is this disk".
+
+    mounted=False (nothing else populated) covers both "nothing here
+    qualifies" and "lsblk/the device isn't available" - the caller
+    doesn't need to distinguish those, there's just no usage bar to show
+    either way."""
     result: dict[str, Any] = {
         "mounted": False,
-        "mountpoint": None,
+        "mountpoints": [],
         "total_bytes": None,
         "used_bytes": None,
         "available_bytes": None,
@@ -65,7 +76,9 @@ def get_filesystem_usage(device_path: str) -> dict[str, Any]:
     if lsblk_path is None:
         return result
 
-    code, out, err = _run([lsblk_path, "-b", "-J", "-o", "NAME,MOUNTPOINT,FSSIZE,FSAVAIL,FSUSED", device_path])
+    code, out, err = _run(
+        [lsblk_path, "-b", "-J", "-o", "NAME,MOUNTPOINT,FSTYPE,FSSIZE,FSAVAIL,FSUSED", device_path]
+    )
     if code != 0 or not out.strip():
         return result
 
@@ -74,25 +87,30 @@ def get_filesystem_usage(device_path: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         return result
 
-    def _find_mounted(devices):
-        for dev in devices:
-            if dev.get("mountpoint") and dev.get("fssize"):
-                return dev
-            found = _find_mounted(dev.get("children") or [])
-            if found:
-                return found
-        return None
+    _excluded_fstypes = {"swap", "vfat"}
 
-    match = _find_mounted(data.get("blockdevices", []))
-    if match is None:
+    def _collect_real_filesystems(devices, found):
+        for dev in devices:
+            mountpoint = dev.get("mountpoint")
+            fstype = (dev.get("fstype") or "").lower()
+            if mountpoint and mountpoint != "[SWAP]" and dev.get("fssize") and fstype not in _excluded_fstypes:
+                found.append(dev)
+            _collect_real_filesystems(dev.get("children") or [], found)
+        return found
+
+    matches = _collect_real_filesystems(data.get("blockdevices", []), [])
+    if not matches:
         return result
 
-    total = int(match["fssize"])
-    avail = int(match.get("fsavail") or 0)
-    used = int(match.get("fsused")) if match.get("fsused") is not None else max(total - avail, 0)
+    total = sum(int(m["fssize"]) for m in matches)
+    avail = sum(int(m.get("fsavail") or 0) for m in matches)
+    if all(m.get("fsused") is not None for m in matches):
+        used = sum(int(m["fsused"]) for m in matches)
+    else:
+        used = max(total - avail, 0)
 
     result["mounted"] = True
-    result["mountpoint"] = match.get("mountpoint")
+    result["mountpoints"] = [m.get("mountpoint") for m in matches]
     result["total_bytes"] = total
     result["used_bytes"] = used
     result["available_bytes"] = avail
