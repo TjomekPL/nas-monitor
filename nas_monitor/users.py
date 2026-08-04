@@ -78,10 +78,26 @@ def list_system_users(min_uid: int = DEFAULT_MIN_UID, max_uid: int = DEFAULT_MAX
 
 
 def list_system_groups(min_gid: int = DEFAULT_MIN_GID) -> list[dict[str, Any]]:
-    """Real (non-system) groups, via the grp database."""
+    """Real (non-system) groups, via the grp database - excludes each
+    user's own auto-created private group (Debian's default useradd
+    scheme: a new group named identically to the user, set as their
+    primary group) and the 'nogroup' placeholder. Both have a GID well
+    above min_gid so the numeric filter alone doesn't catch them, but
+    neither is a group anyone would ever want to manage as a "general"
+    group - a private group has no real members (primary-group
+    membership isn't stored as a member in /etc/group at all, only as
+    the GID field in /etc/passwd), so it would otherwise show up in the
+    Grupy tab looking like an empty, orphaned group for every single
+    user and the sync account."""
+    primary_gids_by_username = {entry.pw_name: entry.pw_gid for entry in pwd.getpwall()}
+
     groups = []
     for entry in grp.getgrall():
         if entry.gr_gid < min_gid:
+            continue
+        if entry.gr_name == "nogroup":
+            continue
+        if primary_gids_by_username.get(entry.gr_name) == entry.gr_gid:
             continue
         groups.append(
             {

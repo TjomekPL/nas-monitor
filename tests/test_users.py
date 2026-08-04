@@ -360,5 +360,63 @@ class TestListSystemUsersAndGroups(unittest.TestCase):
         self.assertIsInstance(result_groups, list)
 
 
+def _fake_grent(name, gid, members=None):
+    import grp
+    return grp.struct_group((name, "x", gid, members or []))
+
+
+def _fake_pwent_with_shell(name, shell, uid=1000, home=None):
+    home = home or f"/home/{name}"
+    return pwd.struct_passwd((name, "x", uid, uid, "", home, shell))
+
+
+class TestListSystemGroupsFiltersPrivateGroups(unittest.TestCase):
+    @mock.patch("nas_monitor.users.grp.getgrall")
+    @mock.patch("nas_monitor.users.pwd.getpwall")
+    def test_excludes_each_users_own_private_group_and_nogroup(self, mock_getpwall, mock_getgrall):
+        # Reproduces a real report: useradd's default "user private group"
+        # scheme creates a same-named group as every user's primary group
+        # (gosia, maliniak, wieslaw, nas-sync below) - these have zero
+        # real members (primary-group membership lives in /etc/passwd's
+        # GID field, never as a member entry in /etc/group), so they'd
+        # otherwise show up in the Grupy tab looking like a pile of
+        # empty, orphaned groups. 'nogroup' is Debian's standard
+        # placeholder (GID 65534, well above the normal min_gid filter).
+        mock_getpwall.return_value = [
+            _fake_pwent_with_shell("gosia", "/usr/sbin/nologin", uid=1001),
+            _fake_pwent_with_shell("maliniak", "/usr/sbin/nologin", uid=1002),
+            _fake_pwent_with_shell("wieslaw", "/usr/sbin/nologin", uid=1003),
+            _fake_pwent_with_shell("nas-sync", "/usr/sbin/nologin", uid=1004),
+            _fake_pwent_with_shell("tomek", "/bin/bash", uid=1000),
+        ]
+        mock_getgrall.return_value = [
+            _fake_grent("gosia", 1001, []),
+            _fake_grent("maliniak", 1002, []),
+            _fake_grent("wieslaw", 1003, []),
+            _fake_grent("nas-sync", 1004, []),
+            _fake_grent("tomek", 1000, ["tomek"]),
+            _fake_grent("nogroup", 65534, []),
+            _fake_grent("test_access", 2000, ["gosia", "wieslaw"]),
+        ]
+        result = users.list_system_groups()
+        self.assertEqual([g["name"] for g in result], ["test_access"])
+
+    @mock.patch("nas_monitor.users.grp.getgrall")
+    @mock.patch("nas_monitor.users.pwd.getpwall")
+    def test_keeps_a_namesake_group_if_no_longer_that_users_actual_primary_gid(self, mock_getpwall, mock_getgrall):
+        # Edge case: a group named "gosia" only counts as gosia's private
+        # group while it's ALSO her current primary GID. If she'd been
+        # reassigned to a different primary group after creation (leaving
+        # the old auto-created "gosia" group orphaned but unclaimed), it's
+        # no longer functioning as anyone's private group and shouldn't
+        # be filtered just because the name still matches a username.
+        mock_getpwall.return_value = [_fake_pwent_with_shell("gosia", "/usr/sbin/nologin", uid=1001)]
+        # her primary gid now points elsewhere (3000), not her own group's gid (1001)
+        mock_getpwall.return_value = [pwd.struct_passwd(("gosia", "x", 1001, 3000, "", "/home/gosia", "/usr/sbin/nologin"))]
+        mock_getgrall.return_value = [_fake_grent("gosia", 1001, [])]
+        result = users.list_system_groups()
+        self.assertEqual([g["name"] for g in result], ["gosia"])
+
+
 if __name__ == "__main__":
     unittest.main()
