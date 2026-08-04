@@ -120,6 +120,7 @@ window.NAS_I18N.en = {
       permRw: "Read & write",
       permSummaryRw: "RW",
       permSummaryRo: "R",
+      permSummaryNa: "NA",
     },
     network: {
       heading: "Network",

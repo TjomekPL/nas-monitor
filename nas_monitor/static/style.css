@@ -378,6 +378,13 @@ h2 {
   font-size: 12px;
   font-weight: 600;
 }
+
+/* Column widths that don't visibly reflow as content changes - e.g.
+   the SMB pill going from "tak"/"yes" to "wyłączone"/"disabled", or the
+   toggle button switching between "Wyłącz"/"Włącz" ("Disable"/"Enable"),
+   which differ just enough in length to shift the whole row otherwise. */
+#users-container .smb-cell { min-width: 110px; }
+#users-container .row-actions { min-width: 200px; }
 .pill-ok { background: var(--ok-bg); color: var(--ok); }
 .pill-warn { background: var(--warn-bg); color: var(--warn); }
 .pill-neutral { background: var(--unknown-bg); color: var(--unknown); }
@@ -415,6 +422,15 @@ h2 {
   border-bottom: 1px dotted var(--text-muted);
   width: fit-content;
 }
+
+.perm-tag {
+  display: inline-block;
+  margin: 0 6px 2px 0;
+  font-size: 12.5px;
+}
+.perm-tag.perm-rw { color: var(--ok); }
+.perm-tag.perm-ro { color: var(--accent); }
+.perm-tag.perm-na { color: var(--crit); }
 .username.sub {
   font-size: 11.5px;
   color: var(--text-muted);

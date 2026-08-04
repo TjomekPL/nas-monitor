@@ -619,6 +619,13 @@ async function loadUsers() {
     renderUsers(lastKnownUsersData);
     lastKnownGroupsData = data.groups || [];
     renderGroupsChecklist(lastKnownGroupsData);
+    // The shares summary lists every known user (see
+    // renderPermissionsSummary) - loadShares() and loadUsers() poll on
+    // independent timers, so whichever finishes first would otherwise
+    // render with a stale/empty user list until its own next 20s cycle.
+    // Re-render shares here too, using whatever share data is already
+    // available, so it's never more than one of these two calls behind.
+    if (lastSharesData.length) renderShares(lastSharesData);
   } catch (err) {
     emptyState(usersContainer, t("msg.loadErrorUsers", { detail: err.message }));
   }
@@ -902,18 +909,52 @@ function permissionLabels() {
 let editingShareName = null;
 let lastSharesData = [];
 
-function formatPermissionsSummary(permissions, groupGrants) {
+function summarizeGrantedAccess(permissions, groupGrants) {
+  const groupEntries = Object.entries(groupGrants || {}).map(
+    ([group, level]) => `@${group} (${level === "rw" ? t("ui.shares.permSummaryRw") : t("ui.shares.permSummaryRo")})`
+  );
   const userEntries = Object.entries(permissions || {}).map(([user, level]) => {
     const u = lastKnownUsersData.find((x) => x.username === user);
     const label = u ? (u.display_name || u.username) : user;
     return `${label} (${level === "rw" ? t("ui.shares.permSummaryRw") : t("ui.shares.permSummaryRo")})`;
   });
-  const groupEntries = Object.entries(groupGrants || {}).map(
-    ([group, level]) => `@${group} (${level === "rw" ? t("ui.shares.permSummaryRw") : t("ui.shares.permSummaryRo")})`
-  );
   const entries = [...groupEntries, ...userEntries];
-  if (!entries.length) return t("ui.shares.noAccess");
-  return entries.join(", ");
+  return entries.length ? entries.join(", ") : t("ui.shares.noAccess");
+}
+
+function renderPermissionsSummary(container, permissions, groupGrants) {
+  container.innerHTML = "";
+  const perms = permissions || {};
+  const grants = groupGrants || {};
+
+  function levelInfo(level) {
+    if (level === "rw") return { text: t("ui.shares.permSummaryRw"), cls: "perm-rw" };
+    if (level === "ro") return { text: t("ui.shares.permSummaryRo"), cls: "perm-ro" };
+    return { text: t("ui.shares.permSummaryNa"), cls: "perm-na" };
+  }
+
+  function appendTag(label, level) {
+    const info = levelInfo(level);
+    const span = document.createElement("span");
+    span.className = `perm-tag ${info.cls}`;
+    span.textContent = `${label} (${info.text})`;
+    container.appendChild(span);
+  }
+
+  for (const [group, level] of Object.entries(grants)) {
+    appendTag(`@${group}`, level);
+  }
+  // Every known user gets a tag, not just the ones with access - RO/RW
+  // are colored to stand out, NA (red) makes it just as visible who's
+  // explicitly excluded, which used to be invisible (removing someone's
+  // access just made them disappear from this list entirely).
+  for (const u of lastKnownUsersData) {
+    appendTag(u.display_name || u.username, perms[u.username]);
+  }
+
+  if (!container.children.length) {
+    container.textContent = t("ui.shares.noAccess");
+  }
 }
 
 function renderShares(sharesList) {
@@ -934,7 +975,7 @@ function renderShares(sharesList) {
     shareNameEl.title = shareLabel;
     row.querySelector(".path").textContent = sh.path;
     row.querySelector(".comment").textContent = sh.comment || "\u2013";
-    row.querySelector(".share-users").textContent = formatPermissionsSummary(sh.permissions, sh.group_grants);
+    renderPermissionsSummary(row.querySelector(".share-users"), sh.permissions, sh.group_grants);
 
     const editBtn = row.querySelector(".edit-btn");
     const deleteBtn = row.querySelector(".delete-btn");
@@ -1117,7 +1158,7 @@ shareForm.addEventListener("submit", async (ev) => {
   const groupGrants = collectShareGroupGrants();
 
   let url, body, confirmMsg;
-  const summary = formatPermissionsSummary(permissions, groupGrants);
+  const summary = summarizeGrantedAccess(permissions, groupGrants);
   if (editingShareName) {
     confirmMsg = t("msg.confirmSaveShare", { name: editingShareName, summary });
     url = `/api/shares/${encodeURIComponent(editingShareName)}/update`;

@@ -120,6 +120,7 @@ window.NAS_I18N.pl = {
       permRw: "Odczyt i zapis",
       permSummaryRw: "RW",
       permSummaryRo: "R",
+      permSummaryNa: "NA",
     },
     network: {
       heading: "Sieć",
