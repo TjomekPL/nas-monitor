@@ -410,6 +410,11 @@ h2 {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+#users-container .display-name {
+  cursor: help;
+  border-bottom: 1px dotted var(--text-muted);
+  width: fit-content;
+}
 .username.sub {
   font-size: 11.5px;
   color: var(--text-muted);

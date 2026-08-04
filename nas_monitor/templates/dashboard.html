@@ -162,6 +162,11 @@
         <div id="share-permissions-list" class="permissions-list"></div>
       </fieldset>
 
+      <fieldset>
+        <legend data-i18n="ui.shareDialog.groupAccessLegend">Grupy</legend>
+        <div id="share-group-grants-list" class="permissions-list"></div>
+      </fieldset>
+
       <p class="form-error" id="share-error"></p>
 
       <div class="dialog-actions">
@@ -411,13 +416,12 @@
     <tr>
       <td>
         <div class="display-name"></div>
-        <div class="mono username sub"></div>
       </td>
       <td class="smb-cell"><span class="pill"></span></td>
       <td class="groups mono"></td>
       <td class="row-actions">
         <button type="button" class="link-btn edit-btn" data-i18n="ui.users.editBtn">Edytuj</button>
-        <button type="button" class="link-btn smb-remove-btn" data-i18n="ui.users.smbRemoveBtn">tylko SMB</button>
+        <button type="button" class="link-btn toggle-active-btn" data-i18n="ui.users.disableBtn">Wyłącz</button>
         <button type="button" class="link-btn danger delete-btn" data-i18n="ui.users.deleteBtn">Usuń</button>
       </td>
     </tr>

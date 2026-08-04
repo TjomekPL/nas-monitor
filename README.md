@@ -477,3 +477,52 @@ klienta), więc ta separacja jest zamierzona.
     - Zweryfikowane przez jsdom: poprawne procenty i kolory progowe na
       obu typach kart, poprawne formatowanie IEC, brak paska gdy nic nie
       jest zamontowane.
+
+15. **Dostęp do udziałów przez grupy ogólne** - ✅ zrobione. Wynikło z
+    dyskusji o tym, po co w ogóle rozdzielać grupy Linuksowe od zwykłych
+    checkboxów per-osoba (ta sama rozmowa co przy architekturze OMV) -
+    dotąd grupy ogólne nie miały żadnego realnego wpływu na cokolwiek w
+    tym narzędziu. Teraz mają: udział można przypisać do **grupy**, nie
+    tylko do pojedynczych osób, jako **żywe powiązanie** (Samba sama
+    rozstrzyga skład grupy przy każdym połączeniu - dopisanie kogoś do
+    grupy później daje mu dostęp bez ponownego zapisywania udziału).
+    - Kluczowy szczegół architektoniczny: samo dopisanie grupy do `valid
+      users` w Sambie **nie wystarcza** - to tylko brama protokołu SMB.
+      Realny zapis/odczyt i tak sprawdza uprawnienia na dysku
+      (`security = user` = smbd podszywa się pod prawdziwe UID), a to
+      rozumie tylko JEDNĄ grupę-właściciela na raz. Dlatego dodatkowo,
+      obok wpisu w `smb.conf`, nakładane jest **ACL** (`setfacl`) na
+      katalog - `-R` na to, co już tam jest, plus `-d` (domyślne ACL) na
+      przyszłość, żeby nowe pliki też dziedziczyły dostęp. Bez tego
+      Samba wpuściłaby połączenie, a system plików i tak odmówiłby
+      zapisu.
+    - `force group` zawsze pozostaje własną, dedykowaną grupą udziału
+      (`<udział>_access`) - to tylko "kto jest właścicielem nowych
+      plików", nie "kto ma dostęp", więc nie koliduje z dowolną liczbą
+      dodatkowo przyznanych grup.
+    - Domyślna grupa `smb_users` - każde nowe konto z hasłem SMB trafia
+      do niej automatycznie (usuwalne później jak każda inna grupa) -
+      dopiero teraz ma to sens, bo można ją jednym kliknięciem przypisać
+      do udziału zamiast zaznaczać wszystkich z osobna.
+    - Po drodze złapany i naprawiony realny błąd: mylenie starej, obcej
+      grupy sprzed tej funkcji (z czasów gdy jeden udział mógł wskazywać
+      na dowolną istniejącą grupę) z nowym, świadomym przyznaniem grupy
+      - zabezpieczone testem na dokładnie tym scenariuszu.
+    - `install.sh` doinstalowuje teraz pakiet `acl` (dostarcza `setfacl`).
+
+16. **Deaktywacja konta zamiast "tylko SMB"** - ✅ zrobione. Stary
+    przycisk usuwał hasło SMB bezpowrotnie (`smbpasswd -x`) - żeby
+    przywrócić dostęp, trzeba było ustawiać nowe hasło. Zastąpiony
+    odwracalnym przełącznikiem Wyłącz/Włącz (`smbpasswd -d`/`-e`) -
+    blokuje logowanie, ale **zachowuje hasło**, więc włączenie z
+    powrotem nic nie wymaga. Status odczytywany bezpiecznie przez
+    `pdbedit -v` (nigdy `-w`, które ujawniałoby hashe haseł w tym samym
+    wyjściu - niepotrzebna ekspozycja dla pojedynczej flagi).
+
+17. **Nazwa konta systemowego jako tooltip** - ✅ zrobione. Wcześniej
+    stała, druga linijka pod imieniem - w praktyce pokazywana zawsze,
+    bo polskie znaki i wielkość liter niemal zawsze różnią nazwę
+    wyświetlaną od nazwy konta. Przeniesione na tooltip po najechaniu
+    (z delikatnym podkreśleniem kropkowanym jako wskazówką) - dostępne
+    kiedy faktycznie potrzebne (SSH, `ls -la`, `smbpasswd`), nie
+    zaśmieca widoku na co dzień.

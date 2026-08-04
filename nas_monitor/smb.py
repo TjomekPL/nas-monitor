@@ -81,6 +81,64 @@ def set_password(username: str, password: str) -> dict[str, Any]:
     return result
 
 
+def get_account_flags(username: str) -> dict[str, Any]:
+    """Whether this account's SMB access is currently disabled - via
+    `pdbedit -v -u <username>`, never `-w` (which would also print
+    password hashes in the same output - unnecessary exposure for
+    something that only needs a single flag). disabled=False also
+    covers "no SMB account at all" - not disabled, just absent, which
+    the caller can already tell from has_smb elsewhere."""
+    result: dict[str, Any] = {"username": username, "disabled": False}
+
+    pdbedit_path = system_tools.find_binary("pdbedit")
+    if pdbedit_path is None:
+        return result
+
+    code, out, err = system_tools.run([pdbedit_path, "-v", "-u", username])
+    if code != 0:
+        return result
+
+    for line in out.splitlines():
+        if line.strip().startswith("Account Flags:"):
+            flags = line.split(":", 1)[1]
+            result["disabled"] = "D" in flags
+            break
+    return result
+
+
+def disable_account(username: str) -> dict[str, Any]:
+    """Blocks SMB access while KEEPING the password hash - unlike
+    remove_user() (smbpasswd -x, which deletes it outright), re-enabling
+    later via enable_account() needs no new password."""
+    result: dict[str, Any] = {"username": username, "success": False}
+
+    smbpasswd_path = system_tools.find_binary("smbpasswd")
+    if smbpasswd_path is None:
+        return errors.tool_missing(result, "smbpasswd")
+
+    code, out, err = system_tools.run([smbpasswd_path, "-d", username])
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "smbpasswd")
+
+    result["success"] = True
+    return result
+
+
+def enable_account(username: str) -> dict[str, Any]:
+    result: dict[str, Any] = {"username": username, "success": False}
+
+    smbpasswd_path = system_tools.find_binary("smbpasswd")
+    if smbpasswd_path is None:
+        return errors.tool_missing(result, "smbpasswd")
+
+    code, out, err = system_tools.run([smbpasswd_path, "-e", username])
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "smbpasswd")
+
+    result["success"] = True
+    return result
+
+
 def remove_user(username: str) -> dict[str, Any]:
     """Remove a user's SMB access only - does not touch the system account."""
     result: dict[str, Any] = {"username": username, "success": False}

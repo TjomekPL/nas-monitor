@@ -67,5 +67,69 @@ class TestSetPassword(unittest.TestCase):
         self.assertIn("Failed to find entry", result["error_context"]["detail"])
 
 
+class TestDisableEnableAccount(unittest.TestCase):
+    @mock.patch("nas_monitor.smb.system_tools.find_binary", return_value="/usr/bin/smbpasswd")
+    @mock.patch("nas_monitor.smb.system_tools.run", return_value=(0, "", ""))
+    def test_disable_uses_dash_d(self, mock_run, mock_find):
+        result = smb.disable_account("gosia")
+        self.assertTrue(result["success"])
+        mock_run.assert_called_once_with(["/usr/bin/smbpasswd", "-d", "gosia"])
+
+    @mock.patch("nas_monitor.smb.system_tools.find_binary", return_value="/usr/bin/smbpasswd")
+    @mock.patch("nas_monitor.smb.system_tools.run", return_value=(0, "", ""))
+    def test_enable_uses_dash_e(self, mock_run, mock_find):
+        result = smb.enable_account("gosia")
+        self.assertTrue(result["success"])
+        mock_run.assert_called_once_with(["/usr/bin/smbpasswd", "-e", "gosia"])
+
+    @mock.patch("nas_monitor.smb.system_tools.find_binary", return_value="/usr/bin/smbpasswd")
+    @mock.patch("nas_monitor.smb.system_tools.run", return_value=(1, "", "Failed to find entry for user."))
+    def test_disable_propagates_failure(self, mock_run, mock_find):
+        result = smb.disable_account("ghost")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+
+    @mock.patch("nas_monitor.smb.system_tools.find_binary", return_value=None)
+    def test_disable_reports_missing_tool(self, mock_find):
+        result = smb.disable_account("gosia")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.tool_missing")
+
+
+class TestGetAccountFlags(unittest.TestCase):
+    @mock.patch("nas_monitor.smb.system_tools.find_binary", return_value="/usr/bin/pdbedit")
+    @mock.patch("nas_monitor.smb.system_tools.run")
+    def test_disabled_account(self, mock_run, mock_find):
+        mock_run.return_value = (0, "username:       gosia\nAccount Flags:  [DU         ]\n", "")
+        result = smb.get_account_flags("gosia")
+        self.assertTrue(result["disabled"])
+
+    @mock.patch("nas_monitor.smb.system_tools.find_binary", return_value="/usr/bin/pdbedit")
+    @mock.patch("nas_monitor.smb.system_tools.run")
+    def test_enabled_account(self, mock_run, mock_find):
+        mock_run.return_value = (0, "username:       gosia\nAccount Flags:  [U          ]\n", "")
+        result = smb.get_account_flags("gosia")
+        self.assertFalse(result["disabled"])
+
+    @mock.patch("nas_monitor.smb.system_tools.find_binary", return_value="/usr/bin/pdbedit")
+    @mock.patch("nas_monitor.smb.system_tools.run")
+    def test_never_requests_password_hashes(self, mock_run, mock_find):
+        mock_run.return_value = (0, "username:       gosia\nAccount Flags:  [U          ]\n", "")
+        smb.get_account_flags("gosia")
+        called_cmd = mock_run.call_args[0][0]
+        self.assertNotIn("-w", called_cmd)
+
+    @mock.patch("nas_monitor.smb.system_tools.find_binary", return_value="/usr/bin/pdbedit")
+    @mock.patch("nas_monitor.smb.system_tools.run", return_value=(1, "", "user not found"))
+    def test_no_smb_account_reports_not_disabled(self, mock_run, mock_find):
+        result = smb.get_account_flags("nosmbuser")
+        self.assertFalse(result["disabled"])
+
+    @mock.patch("nas_monitor.smb.system_tools.find_binary", return_value=None)
+    def test_missing_pdbedit_reports_not_disabled_not_raises(self, mock_find):
+        result = smb.get_account_flags("gosia")
+        self.assertFalse(result["disabled"])
+
+
 if __name__ == "__main__":
     unittest.main()

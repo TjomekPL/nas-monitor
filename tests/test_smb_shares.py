@@ -420,5 +420,187 @@ class TestPrepareShareDirectory(unittest.TestCase):
         self.assertTrue(os.path.isdir(self.path))
 
 
+class TestGroupAcl(unittest.TestCase):
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/bin/setfacl")
+    @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(0, "", ""))
+    def test_set_group_acl_rw_uses_rwx_and_sets_default_too(self, mock_run, mock_find):
+        result = smb_shares._set_group_acl("/srv/rodzina", "rodzina", "rw")
+        self.assertTrue(result["success"])
+        self.assertEqual(mock_run.call_count, 2)
+        mock_run.assert_any_call(["/usr/bin/setfacl", "-R", "-m", "g:rodzina:rwx", "/srv/rodzina"])
+        mock_run.assert_any_call(["/usr/bin/setfacl", "-R", "-d", "-m", "g:rodzina:rwx", "/srv/rodzina"])
+
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/bin/setfacl")
+    @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(0, "", ""))
+    def test_set_group_acl_ro_uses_r_x(self, mock_run, mock_find):
+        smb_shares._set_group_acl("/srv/rodzina", "rodzina", "ro")
+        mock_run.assert_any_call(["/usr/bin/setfacl", "-R", "-m", "g:rodzina:r-x", "/srv/rodzina"])
+
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value=None)
+    def test_set_group_acl_missing_tool_reports_error_not_raises(self, mock_find):
+        result = smb_shares._set_group_acl("/srv/rodzina", "rodzina", "rw")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.tool_missing")
+
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/bin/setfacl")
+    @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(0, "", ""))
+    def test_remove_group_acl_removes_both_regular_and_default(self, mock_run, mock_find):
+        smb_shares._remove_group_acl("/srv/rodzina", "rodzina")
+        mock_run.assert_any_call(["/usr/bin/setfacl", "-R", "-x", "g:rodzina", "/srv/rodzina"])
+        mock_run.assert_any_call(["/usr/bin/setfacl", "-R", "-d", "-x", "g:rodzina", "/srv/rodzina"])
+
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value=None)
+    def test_remove_group_acl_missing_tool_is_not_an_error(self, mock_find):
+        result = smb_shares._remove_group_acl("/srv/rodzina", "rodzina")
+        self.assertTrue(result["success"])
+
+    @mock.patch("nas_monitor.smb_shares._set_group_acl")
+    @mock.patch("nas_monitor.smb_shares._remove_group_acl")
+    def test_sync_removes_ungranted_and_applies_new_or_changed(self, mock_remove, mock_set):
+        mock_set.return_value = {"success": True}
+        result = smb_shares._sync_group_acls(
+            "/srv/x",
+            desired_grants={"rodzina": "rw", "goscie": "ro"},
+            current_grants={"rodzina": "ro", "stara_grupa": "rw"},
+        )
+        self.assertTrue(result["success"])
+        mock_remove.assert_called_once_with("/srv/x", "stara_grupa")
+        self.assertEqual(mock_set.call_count, 2)
+        mock_set.assert_any_call("/srv/x", "rodzina", "rw")
+        mock_set.assert_any_call("/srv/x", "goscie", "ro")
+
+    @mock.patch("nas_monitor.smb_shares._set_group_acl")
+    @mock.patch("nas_monitor.smb_shares._remove_group_acl")
+    def test_sync_skips_unchanged_grants(self, mock_remove, mock_set):
+        smb_shares._sync_group_acls("/srv/x", desired_grants={"rodzina": "rw"}, current_grants={"rodzina": "rw"})
+        mock_set.assert_not_called()
+        mock_remove.assert_not_called()
+
+    @mock.patch("nas_monitor.smb_shares._set_group_acl", return_value={"success": False, "error_code": "system.tool_missing", "error_context": {"detail": "setfacl not found"}})
+    def test_sync_reports_failure_as_warning_not_hard_stop(self, mock_set):
+        result = smb_shares._sync_group_acls("/srv/x", desired_grants={"rodzina": "rw"}, current_grants={})
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertEqual(result["warnings"][0]["context"]["group"], "rodzina")
+
+
+class TestGroupGrantsRoundTrip(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.managed = os.path.join(self.tmpdir, "shares.conf")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_render_then_read_round_trip(self):
+        share = {
+            "name": "wakacje",
+            "path": "/srv/wakacje",
+            "comment": "",
+            "permissions": {"tomek": "rw"},
+            "group_grants": {"rodzina": "rw", "goscie": "ro"},
+            "access_group": "wakacje_access",
+        }
+        content = smb_shares._render_managed_shares([share])
+        self.assertIn("valid users = +wakacje_access +goscie +rodzina", content)
+        self.assertIn("read list = +goscie", content)
+
+        with open(self.managed, "w") as fh:
+            fh.write(content)
+        with mock.patch("nas_monitor.smb_shares._resolve_group_members", side_effect=lambda gs: ["tomek"] if "wakacje_access" in gs else []):
+            result = smb_shares._read_managed_shares(self.managed)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["group_grants"], {"rodzina": "rw", "goscie": "ro"})
+        self.assertEqual(result[0]["access_group"], "wakacje_access")
+
+    def test_group_only_share_still_gets_a_dedicated_access_group_for_force_group(self):
+        share = {
+            "name": "wspolne",
+            "path": "/srv/wspolne",
+            "comment": "",
+            "permissions": {},
+            "group_grants": {"rodzina": "rw"},
+            "access_group": "wspolne_access",
+        }
+        content = smb_shares._render_managed_shares([share])
+        self.assertIn("valid users = +wspolne_access +rodzina", content)
+        self.assertIn("force group = wspolne_access", content)
+
+
+@mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
+class TestCreateShareWithGroupGrants(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.managed = os.path.join(self.tmpdir, "shares.conf")
+        open(self.managed, "a").close()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._sync_group_acls", return_value={"success": True, "warnings": []})
+    @mock.patch("nas_monitor.smb_shares.grp.getgrnam", return_value=object())
+    def test_creates_share_with_only_group_grants(self, mock_getgrnam, mock_sync, mock_dir, mock_apply, mock_smb):
+        result = smb_shares.create_share("wspolne", group_grants={"rodzina": "rw"}, managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        mock_sync.assert_called_once_with(smb_shares.share_path("wspolne"), {"rodzina": "rw"}, {})
+        mock_dir.assert_called_once_with(smb_shares.share_path("wspolne"), "wspolne_access")
+
+    @mock.patch("nas_monitor.smb_shares.grp.getgrnam", side_effect=KeyError)
+    def test_rejects_nonexistent_group(self, mock_getgrnam, mock_smb):
+        result = smb_shares.create_share("wspolne", group_grants={"ghost": "rw"}, managed_conf_path=self.managed)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "shares.group_not_found")
+
+    @mock.patch("nas_monitor.smb_shares.grp.getgrnam", return_value=object())
+    def test_rejects_invalid_permission_level(self, mock_getgrnam, mock_smb):
+        result = smb_shares.create_share("wspolne", group_grants={"rodzina": "admin"}, managed_conf_path=self.managed)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "shares.invalid_permission_level")
+
+
+@mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
+class TestUpdateShareWithGroupGrants(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.managed = os.path.join(self.tmpdir, "shares.conf")
+        self.existing_share = {
+            "name": "wakacje",
+            "path": "/srv/wakacje",
+            "comment": "",
+            "permissions": {},
+            "group_grants": {"rodzina": "rw"},
+            "access_group": "wakacje_access",
+        }
+        with open(self.managed, "w") as fh:
+            fh.write(smb_shares._render_managed_shares([self.existing_share]))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._sync_group_acls", return_value={"success": True, "warnings": []})
+    @mock.patch("nas_monitor.smb_shares.grp.getgrnam", return_value=object())
+    def test_adds_a_new_group_grant(self, mock_getgrnam, mock_sync, mock_dir, mock_apply, mock_smb):
+        with mock.patch("nas_monitor.smb_shares._resolve_group_members", return_value=[]):
+            result = smb_shares.update_share(
+                "wakacje", group_grants={"rodzina": "rw", "goscie": "ro"}, managed_conf_path=self.managed
+            )
+        self.assertTrue(result["success"])
+        mock_sync.assert_called_once_with(
+            "/srv/wakacje", {"rodzina": "rw", "goscie": "ro"}, {"rodzina": "rw"}
+        )
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    def test_permissions_none_leaves_group_grants_untouched(self, mock_apply, mock_smb):
+        with mock.patch("nas_monitor.smb_shares._resolve_group_members", return_value=[]):
+            result = smb_shares.update_share("wakacje", comment="nowy opis", managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        reread = smb_shares._read_managed_shares(self.managed)
+        self.assertEqual(reread[0]["group_grants"], {"rodzina": "rw"})
+
+
 if __name__ == "__main__":
     unittest.main()

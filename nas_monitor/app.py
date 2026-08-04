@@ -18,6 +18,14 @@ from werkzeug.exceptions import HTTPException
 
 from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth
 
+# Every account that gets SMB access lands here by default - removable
+# afterward like any other group (just uncheck it in the edit form).
+# What makes this worth doing at all: general groups can now be granted
+# real share access (see smb_shares.py's group_grants), so "everyone
+# with SMB access" becomes a genuine one-click group to hand a share to,
+# instead of a label nobody ever populates.
+DEFAULT_SMB_GROUP = "smb_users"
+
 app = Flask(__name__)
 app.secret_key = auth.get_or_create_secret_key()
 network_mutate.check_and_recover_on_startup()
@@ -148,6 +156,7 @@ def api_users():
     system_users = [u for u in users.list_system_users() if u["username"] != ssh_keys.SYNC_ACCOUNT_USERNAME]
     for u in system_users:
         u["has_smb"] = u["username"] in samba_set
+        u["smb_disabled"] = smb.get_account_flags(u["username"])["disabled"] if u["has_smb"] else False
 
     return jsonify(
         {
@@ -202,6 +211,8 @@ def api_users_create():
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
     groups = [g.strip() for g in (data.get("groups") or []) if g.strip()]
+    if password and DEFAULT_SMB_GROUP not in groups:
+        groups.append(DEFAULT_SMB_GROUP)
 
     user_result = users.create_user(username, groups=groups, shell=None)
     if not user_result["success"]:
@@ -274,6 +285,26 @@ def api_users_remove_smb(username):
     return jsonify({"success": True})
 
 
+@app.route("/api/users/<username>/disable", methods=["POST"])
+def api_users_disable(username):
+    result = smb.disable_account(username)
+    if not result["success"]:
+        oplog.log_event("users", "disable", "failure", params={"username": username})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("users", "disable", "success", params={"username": username})
+    return jsonify({"success": True})
+
+
+@app.route("/api/users/<username>/enable", methods=["POST"])
+def api_users_enable(username):
+    result = smb.enable_account(username)
+    if not result["success"]:
+        oplog.log_event("users", "enable", "failure", params={"username": username})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("users", "enable", "success", params={"username": username})
+    return jsonify({"success": True})
+
+
 @app.route("/api/users/<username>/delete", methods=["POST"])
 def api_users_delete(username):
     if username == ssh_keys.SYNC_ACCOUNT_USERNAME:
@@ -323,8 +354,13 @@ def api_shares_create():
         for u, level in (data.get("permissions") or {}).items()
         if u.strip() and level in ("rw", "ro")
     }
+    group_grants = {
+        g.strip(): level
+        for g, level in (data.get("group_grants") or {}).items()
+        if g.strip() and level in ("rw", "ro")
+    }
 
-    result = smb_shares.create_share(name, comment=comment, permissions=permissions)
+    result = smb_shares.create_share(name, comment=comment, permissions=permissions, group_grants=group_grants)
     if not result["success"]:
         oplog.log_event("shares", "create", "failure", params={"name": name})
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
@@ -342,11 +378,18 @@ def api_shares_update(name):
         permissions = {
             u.strip(): level for u, level in raw_permissions.items() if u.strip() and level in ("rw", "ro")
         }
+    raw_group_grants = data.get("group_grants")
+    group_grants = None
+    if raw_group_grants is not None:
+        group_grants = {
+            g.strip(): level for g, level in raw_group_grants.items() if g.strip() and level in ("rw", "ro")
+        }
 
     result = smb_shares.update_share(
         name,
         comment=comment,
         permissions=permissions,
+        group_grants=group_grants,
     )
     if not result["success"]:
         oplog.log_event("shares", "update", "failure", params={"name": name})

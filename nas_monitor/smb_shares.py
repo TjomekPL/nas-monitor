@@ -112,14 +112,33 @@ def _read_managed_shares(managed_conf_path: str = MANAGED_CONF_PATH) -> list[dic
     for name in cp.sections():
         section = cp[name]
         valid_users = section.get("valid users", "").split()
-        raw_groups = [_group_ref_name(u) for u in valid_users if _is_group_ref(u)]
-        resolved_users = _resolve_group_members(raw_groups)
+        group_refs = [_group_ref_name(u) for u in valid_users if _is_group_ref(u)]
+        # The share's own dedicated group (<name>_access) is distinct
+        # from any GENERAL group also granted access - the former backs
+        # per-user checkboxes (unchanged from before), the latter is a
+        # separate, explicit grant that doesn't get flattened into
+        # "permissions" the way individual users do.
+        dedicated_group = access_group_name(name)
+        access_group = dedicated_group if dedicated_group in group_refs else None
+        # Only trust OTHER group refs as genuine general-group grants once
+        # the dedicated group itself is recognized - a share whose access
+        # group doesn't match our naming convention at all predates this
+        # feature (see the legacy-migration handling elsewhere in this
+        # module) and its other group refs are equally foreign; sweeping
+        # them into group_grants would let this tool start managing ACLs
+        # on a group it never created and knows nothing about.
+        granted_group_names = [g for g in group_refs if g != dedicated_group] if access_group else []
+
+        resolved_users = _resolve_group_members([access_group]) if access_group else []
 
         read_list_raw = section.get("read list", "").split()
+        read_list_group_refs = [_group_ref_name(g) for g in read_list_raw if _is_group_ref(g)]
         read_only_users = set(u for u in read_list_raw if not _is_group_ref(u))
-        read_only_users |= set(_resolve_group_members([_group_ref_name(g) for g in read_list_raw if _is_group_ref(g)]))
+        if access_group in read_list_group_refs:
+            read_only_users |= set(_resolve_group_members([access_group]))
 
         permissions = {u: ("ro" if u in read_only_users else "rw") for u in resolved_users}
+        group_grants = {g: ("ro" if g in read_list_group_refs else "rw") for g in granted_group_names}
 
         shares.append(
             {
@@ -127,7 +146,8 @@ def _read_managed_shares(managed_conf_path: str = MANAGED_CONF_PATH) -> list[dic
                 "path": section.get("path", ""),
                 "comment": section.get("comment", ""),
                 "permissions": permissions,
-                "access_group": raw_groups[0] if raw_groups else None,
+                "group_grants": group_grants,
+                "access_group": access_group,
                 "managed": True,
             }
         )
@@ -164,6 +184,8 @@ def _render_managed_shares(shares: list[dict[str, Any]]) -> str:
         lines.append("   browseable = yes")
         access_group = s.get("access_group")
         permissions = s.get("permissions") or {}
+        group_grants = s.get("group_grants") or {}
+        valid_users_tokens = []
         if access_group:
             # '+group' checks the UNIX group database only, skipping the
             # NIS-netgroup-first lookup that plain '@group' does - on
@@ -172,13 +194,22 @@ def _render_managed_shares(shares: list[dict[str, Any]]) -> str:
             # NT_STATUS_NO_SUCH_GROUP even though the group genuinely
             # exists and `getent group` finds it fine. Confirmed against
             # a real failure, not theoretical.
-            lines.append(f"   valid users = +{access_group}")
+            valid_users_tokens.append(f"+{access_group}")
+        valid_users_tokens.extend(f"+{g}" for g in sorted(group_grants))
+        if valid_users_tokens:
+            lines.append(f"   valid users = {' '.join(valid_users_tokens)}")
+        if access_group:
             # force group takes a bare group name - no @/+ prefix syntax
             # applies here, there's no user/group ambiguity to resolve.
+            # Always the share's OWN dedicated group, regardless of how
+            # many other groups are ALSO granted access above - this is
+            # just "who owns newly created files", not "who can access
+            # them", so it doesn't need to (and can't) name more than one.
             lines.append(f"   force group = {access_group}")
-        read_only_users = sorted(u for u, level in permissions.items() if level == "ro")
-        if read_only_users:
-            lines.append(f"   read list = {' '.join(read_only_users)}")
+        read_list_tokens = sorted(u for u, level in permissions.items() if level == "ro")
+        read_list_tokens.extend(f"+{g}" for g, level in sorted(group_grants.items()) if level == "ro")
+        if read_list_tokens:
+            lines.append(f"   read list = {' '.join(read_list_tokens)}")
         lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -346,6 +377,7 @@ def list_shares(
                 "path": section.get("path", ""),
                 "comment": section.get("comment", ""),
                 "permissions": permissions,
+                "group_grants": {},
                 "access_group": None,
                 "managed": False,
             }
@@ -389,15 +421,94 @@ def _prepare_share_directory(path: str, group: str | None) -> dict[str, Any]:
     return result
 
 
+def _set_group_acl(path: str, group: str, level: str) -> dict[str, Any]:
+    """Grants a general group real filesystem access to a share
+    directory via POSIX ACLs - on top of the share's own dedicated
+    access group (which owns the directory outright via 'force group').
+
+    Samba's valid users/read list only gates the SMB PROTOCOL
+    connection - the underlying filesystem check still applies
+    (security = user means smbd impersonates the real UID), and that
+    only respects ONE owning group per file (chown/chmod can't express
+    "these two different groups both get write access"). ACLs can.
+
+    -R applies recursively to whatever's already in the directory; a
+    second call with -d sets the DEFAULT ACL too, so files and
+    subdirectories created *after* this runs inherit it automatically -
+    the ACL equivalent of what the setgid bit already does for the
+    dedicated access group."""
+    result: dict[str, Any] = {"success": False}
+
+    setfacl_path = system_tools.find_binary("setfacl")
+    if setfacl_path is None:
+        return errors.tool_missing(result, "setfacl")
+
+    perm = "rwx" if level == "rw" else "r-x"
+    code, out, err = system_tools.run([setfacl_path, "-R", "-m", f"g:{group}:{perm}", path])
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "setfacl")
+
+    code, out, err = system_tools.run([setfacl_path, "-R", "-d", "-m", f"g:{group}:{perm}", path])
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "setfacl")
+
+    result["success"] = True
+    return result
+
+
+def _remove_group_acl(path: str, group: str) -> dict[str, Any]:
+    """Best-effort removal - if the group's ACL entry was never actually
+    set (e.g. setfacl was missing when it was granted), there's nothing
+    to clean up and that's fine, not a failure worth blocking on."""
+    result: dict[str, Any] = {"success": True}
+
+    setfacl_path = system_tools.find_binary("setfacl")
+    if setfacl_path is None:
+        return result
+
+    system_tools.run([setfacl_path, "-R", "-x", f"g:{group}", path])
+    system_tools.run([setfacl_path, "-R", "-d", "-x", f"g:{group}", path])
+    return result
+
+
+def _sync_group_acls(path: str, desired_grants: dict[str, str], current_grants: dict[str, str]) -> dict[str, Any]:
+    """Reconciles filesystem ACLs with the desired group grants for a
+    share: removes groups no longer granted, (re)applies ACLs for
+    groups that are granted or whose level changed. Returns success
+    even if some individual ACL calls failed (each failure becomes a
+    warning, not a hard stop) - a share's core SMB-level access already
+    succeeded by the time this runs, and a missing ACL tool shouldn't
+    undo that; it should be visible as a warning instead."""
+    result: dict[str, Any] = {"success": True, "warnings": []}
+
+    for group in set(current_grants) - set(desired_grants):
+        _remove_group_acl(path, group)
+
+    for group, level in desired_grants.items():
+        if current_grants.get(group) == level:
+            continue
+        acl_result = _set_group_acl(path, group, level)
+        if not acl_result["success"]:
+            result["warnings"].append({"code": "shares.group_acl_failed", "context": {"group": group, "detail": acl_result.get("error_context", {}).get("detail", "")}})
+
+    return result
+
+
 def create_share(
     name: str,
     comment: str = "",
     permissions: dict[str, str] | None = None,
+    group_grants: dict[str, str] | None = None,
     managed_conf_path: str = MANAGED_CONF_PATH,
 ) -> dict[str, Any]:
-    """permissions maps username -> "rw" or "ro". A user not present in
-    the dict has no access at all (not added to the share's access group,
-    so Samba's own valid users check blocks them - not just a UI hide)."""
+    """permissions maps username -> "rw" or "ro" (individual grants, via
+    the share's own dedicated access group). group_grants maps a
+    GENERAL group name -> "rw" or "ro" - a live binding (Samba resolves
+    group membership itself; adding someone to the group later gives
+    them access without touching the share again), backed by both an
+    extra +group entry in valid users (protocol-level) AND a POSIX ACL
+    on the directory (filesystem-level - see _set_group_acl for why
+    both are required)."""
     result: dict[str, Any] = {"name": name, "success": False}
 
     if not is_valid_share_name(name):
@@ -412,7 +523,16 @@ def create_share(
         if level not in ("rw", "ro"):
             return errors.fail(result, "shares.invalid_permission_level", user=u, level=str(level))
 
-    group = access_group_name(name) if permissions else None
+    group_grants = dict(group_grants or {})
+    for g, level in group_grants.items():
+        if level not in ("rw", "ro"):
+            return errors.fail(result, "shares.invalid_permission_level", user=g, level=str(level))
+        try:
+            grp.getgrnam(g)
+        except KeyError:
+            return errors.fail(result, "shares.group_not_found", group=g)
+
+    group = access_group_name(name) if (permissions or group_grants) else None
 
     if group:
         for u in permissions:
@@ -425,11 +545,17 @@ def create_share(
     if not dir_result["success"]:
         return errors.propagate(result, dir_result)
 
+    acl_warnings = []
+    if group_grants:
+        acl_result = _sync_group_acls(path, group_grants, {})
+        acl_warnings = acl_result.get("warnings") or []
+
     new_share = {
         "name": name,
         "path": path,
         "comment": comment,
         "permissions": permissions,
+        "group_grants": group_grants,
         "access_group": group,
     }
     new_content = _render_managed_shares(existing + [new_share])
@@ -440,7 +566,8 @@ def create_share(
     result["success"] = True
     result["path"] = path
     result["permissions"] = permissions
-    warnings = list(apply_result.get("warnings") or [])
+    result["group_grants"] = group_grants
+    warnings = list(apply_result.get("warnings") or []) + acl_warnings
     pw_warning = _missing_smb_password_warning(list(permissions))
     if pw_warning:
         warnings.append(pw_warning)
@@ -453,6 +580,7 @@ def update_share(
     name: str,
     comment: str | None = None,
     permissions: dict[str, str] | None = None,
+    group_grants: dict[str, str] | None = None,
     managed_conf_path: str = MANAGED_CONF_PATH,
 ) -> dict[str, Any]:
     result: dict[str, Any] = {"name": name, "success": False}
@@ -470,6 +598,17 @@ def update_share(
             if level not in ("rw", "ro"):
                 return errors.fail(result, "shares.invalid_permission_level", user=u, level=str(level))
 
+    if group_grants is not None:
+        for g, level in group_grants.items():
+            if level not in ("rw", "ro"):
+                return errors.fail(result, "shares.invalid_permission_level", user=g, level=str(level))
+            try:
+                grp.getgrnam(g)
+            except KeyError:
+                return errors.fail(result, "shares.group_not_found", group=g)
+
+    acl_warnings = []
+    if permissions is not None or group_grants is not None:
         dedicated_group = access_group_name(name)
         existing_group = match.get("access_group")
         if existing_group and existing_group != dedicated_group:
@@ -479,27 +618,38 @@ def update_share(
             # membership against a group we don't own. Migrate forward:
             # start counting membership as empty in our own dedicated
             # group, without touching the old group's membership at all.
-            current_users = set()
+            current_users: set[str] = set()
         else:
             current_users = set(match.get("permissions") or {})
+        current_group_grants = dict(match.get("group_grants") or {})
+
+        desired_users = set(permissions) if permissions is not None else current_users
+        desired_group_grants = group_grants if group_grants is not None else current_group_grants
         group = dedicated_group
-        desired_users = set(permissions)
 
-        for u in desired_users - current_users:
-            add_result = users_mod.add_user_to_group(u, group)
-            if not add_result["success"]:
-                return errors.propagate(result, add_result, user=u, group=group)
-        for u in current_users - desired_users:
-            remove_result = users_mod.remove_user_from_group(u, group)
-            if not remove_result["success"]:
-                return errors.propagate(result, remove_result, user=u, group=group)
+        if permissions is not None:
+            for u in desired_users - current_users:
+                add_result = users_mod.add_user_to_group(u, group)
+                if not add_result["success"]:
+                    return errors.propagate(result, add_result, user=u, group=group)
+            for u in current_users - desired_users:
+                remove_result = users_mod.remove_user_from_group(u, group)
+                if not remove_result["success"]:
+                    return errors.propagate(result, remove_result, user=u, group=group)
+            match["permissions"] = permissions
 
-        match["access_group"] = group if desired_users else None
-        match["permissions"] = permissions
-        if desired_users:
+        has_any_access = bool(desired_users) or bool(desired_group_grants)
+        match["access_group"] = group if has_any_access else None
+
+        if has_any_access:
             dir_result = _prepare_share_directory(match["path"], group)
             if not dir_result["success"]:
                 return errors.propagate(result, dir_result)
+
+        if group_grants is not None:
+            acl_result = _sync_group_acls(match["path"], desired_group_grants, current_group_grants)
+            acl_warnings = acl_result.get("warnings") or []
+            match["group_grants"] = desired_group_grants
 
     new_content = _render_managed_shares(existing)
     apply_result = _validate_and_apply(new_content, managed_conf_path)
@@ -507,7 +657,7 @@ def update_share(
         return errors.propagate(result, apply_result)
 
     result["success"] = True
-    warnings = list(apply_result.get("warnings") or [])
+    warnings = list(apply_result.get("warnings") or []) + acl_warnings
     pw_warning = _missing_smb_password_warning(list(permissions or {}))
     if pw_warning:
         warnings.append(pw_warning)
@@ -542,6 +692,9 @@ def delete_share(
         groupdel_path = system_tools.find_binary("groupdel")
         if groupdel_path is not None:
             system_tools.run([groupdel_path, access_group])  # best-effort, ignore result
+
+    for granted_group in (match.get("group_grants") or {}):
+        _remove_group_acl(match["path"], granted_group)  # best-effort, ignore result
 
     if delete_files:
         import shutil as _shutil

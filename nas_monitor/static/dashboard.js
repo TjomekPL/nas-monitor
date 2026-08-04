@@ -537,28 +537,40 @@ function renderUsers(usersList) {
     const row = userRowTemplate.content.cloneNode(true);
     window.i18n.applyTranslations(row);
     const displayName = u.display_name || u.username;
-    row.querySelector(".display-name").textContent = displayName;
-    row.querySelector(".display-name").title = displayName;
-    const subEl = row.querySelector(".username.sub");
-    if (displayName !== u.username) {
-      subEl.textContent = t("msg.accountLabel", { username: u.username });
-    } else {
-      subEl.remove();
-    }
+    const nameEl = row.querySelector(".display-name");
+    nameEl.textContent = displayName;
+    // The system account name almost always differs from the display
+    // name (Polish characters and capitalization get normalized away),
+    // so showing it as a permanent second line was really "always show
+    // it" in practice - useful when troubleshooting (SSH, file
+    // ownership, smbpasswd), not useful to see on every page load.
+    nameEl.title = t("msg.accountLabel", { username: u.username });
 
     const smbPill = row.querySelector(".smb-cell .pill");
-    smbPill.textContent = u.has_smb ? t("msg.yes") : t("msg.no");
-    smbPill.classList.add(u.has_smb ? "pill-ok" : "pill-neutral");
+    if (!u.has_smb) {
+      smbPill.textContent = t("msg.no");
+      smbPill.classList.add("pill-neutral");
+    } else if (u.smb_disabled) {
+      smbPill.textContent = t("ui.users.smbDisabledPill");
+      smbPill.classList.add("pill-warn");
+    } else {
+      smbPill.textContent = t("msg.yes");
+      smbPill.classList.add("pill-ok");
+    }
 
     row.querySelector(".groups").textContent = u.groups && u.groups.length ? u.groups.join(", ") : "\u2013";
 
     row.querySelector(".edit-btn").addEventListener("click", () => openUserDialog("edit", u));
 
-    const smbRemoveBtn = row.querySelector(".smb-remove-btn");
-    if (u.has_smb) {
-      smbRemoveBtn.addEventListener("click", () => removeSmbAccess(u.username, displayName));
+    const toggleActiveBtn = row.querySelector(".toggle-active-btn");
+    if (!u.has_smb) {
+      toggleActiveBtn.remove();
+    } else if (u.smb_disabled) {
+      toggleActiveBtn.textContent = t("ui.users.enableBtn");
+      toggleActiveBtn.addEventListener("click", () => enableUser(u.username, displayName));
     } else {
-      smbRemoveBtn.remove();
+      toggleActiveBtn.textContent = t("ui.users.disableBtn");
+      toggleActiveBtn.addEventListener("click", () => disableUser(u.username, displayName));
     }
 
     row.querySelector(".delete-btn").addEventListener("click", () => deleteUser(u.username, displayName));
@@ -710,17 +722,30 @@ addUserForm.addEventListener("submit", async (ev) => {
   }
 });
 
-async function removeSmbAccess(username, displayName) {
-  if (!(await confirmDialog(t("msg.confirmRemoveSmb", { name: displayName })))) return;
+async function disableUser(username, displayName) {
+  if (!(await confirmDialog(t("msg.confirmDisableUser", { name: displayName })))) return;
   try {
-    const res = await fetch(`/api/users/${encodeURIComponent(username)}/remove-smb`, { method: "POST" });
+    const res = await fetch(`/api/users/${encodeURIComponent(username)}/disable`, { method: "POST" });
     const data = await res.json();
     if (!res.ok || !data.success) {
       showToast(apiErrorMessage(data, res), true);
       return;
     }
     await loadUsers();
-    await loadSshKeys();
+  } catch (err) {
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
+  }
+}
+
+async function enableUser(username, displayName) {
+  try {
+    const res = await fetch(`/api/users/${encodeURIComponent(username)}/enable`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      showToast(apiErrorMessage(data, res), true);
+      return;
+    }
+    await loadUsers();
   } catch (err) {
     showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
   }
@@ -867,6 +892,7 @@ const shareNameInput = document.getElementById("share-name");
 const sharePathPreview = document.getElementById("share-path-preview");
 const shareCommentInput = document.getElementById("share-comment");
 const sharePermissionsList = document.getElementById("share-permissions-list");
+const shareGroupGrantsList = document.getElementById("share-group-grants-list");
 const shareSubmitBtn = document.getElementById("share-submit");
 
 function permissionLabels() {
@@ -876,16 +902,18 @@ function permissionLabels() {
 let editingShareName = null;
 let lastSharesData = [];
 
-function formatPermissionsSummary(permissions) {
-  const entries = Object.entries(permissions || {});
+function formatPermissionsSummary(permissions, groupGrants) {
+  const userEntries = Object.entries(permissions || {}).map(([user, level]) => {
+    const u = lastKnownUsersData.find((x) => x.username === user);
+    const label = u ? (u.display_name || u.username) : user;
+    return `${label} (${level === "rw" ? t("ui.shares.permSummaryRw") : t("ui.shares.permSummaryRo")})`;
+  });
+  const groupEntries = Object.entries(groupGrants || {}).map(
+    ([group, level]) => `@${group} (${level === "rw" ? t("ui.shares.permSummaryRw") : t("ui.shares.permSummaryRo")})`
+  );
+  const entries = [...groupEntries, ...userEntries];
   if (!entries.length) return t("ui.shares.noAccess");
-  return entries
-    .map(([user, level]) => {
-      const u = lastKnownUsersData.find((x) => x.username === user);
-      const label = u ? (u.display_name || u.username) : user;
-      return `${label} (${level === "rw" ? t("ui.shares.permSummaryRw") : t("ui.shares.permSummaryRo")})`;
-    })
-    .join(", ");
+  return entries.join(", ");
 }
 
 function renderShares(sharesList) {
@@ -906,7 +934,7 @@ function renderShares(sharesList) {
     shareNameEl.title = shareLabel;
     row.querySelector(".path").textContent = sh.path;
     row.querySelector(".comment").textContent = sh.comment || "\u2013";
-    row.querySelector(".share-users").textContent = formatPermissionsSummary(sh.permissions);
+    row.querySelector(".share-users").textContent = formatPermissionsSummary(sh.permissions, sh.group_grants);
 
     const editBtn = row.querySelector(".edit-btn");
     const deleteBtn = row.querySelector(".delete-btn");
@@ -985,6 +1013,54 @@ function collectSharePermissions() {
   return permissions;
 }
 
+function populateShareGroupGrantsList(existingGrants) {
+  const current = existingGrants || {};
+  shareGroupGrantsList.innerHTML = "";
+  if (!lastKnownGroupsData.length) {
+    const p = document.createElement("p");
+    p.className = "empty-state";
+    p.textContent = t("ui.shareDialog.noGroupsHint");
+    shareGroupGrantsList.appendChild(p);
+    return;
+  }
+  for (const g of lastKnownGroupsData) {
+    const row = document.createElement("div");
+    row.className = "permission-row";
+
+    const info = document.createElement("div");
+    info.className = "permission-info";
+    const name = document.createElement("span");
+    name.className = "permission-user mono";
+    name.textContent = g.name;
+    info.appendChild(name);
+    row.appendChild(info);
+
+    const select = document.createElement("select");
+    select.dataset.group = g.name;
+    select.className = "group-grant-select";
+    for (const [value, label] of Object.entries(permissionLabels())) {
+      const opt = document.createElement("option");
+      opt.value = value;
+      opt.textContent = label;
+      select.appendChild(opt);
+    }
+    select.value = current[g.name] || "none";
+    row.appendChild(select);
+
+    shareGroupGrantsList.appendChild(row);
+  }
+}
+
+function collectShareGroupGrants() {
+  const grants = {};
+  shareGroupGrantsList.querySelectorAll(".group-grant-select").forEach((select) => {
+    if (select.value !== "none") {
+      grants[select.dataset.group] = select.value;
+    }
+  });
+  return grants;
+}
+
 async function loadShares() {
   if (shareDialog.open) return;
   try {
@@ -1008,6 +1084,7 @@ function openShareDialog(mode, share) {
   shareForm.reset();
   shareError.textContent = "";
   populateSharePermissionsList(mode === "edit" ? share.permissions : undefined);
+  populateShareGroupGrantsList(mode === "edit" ? share.group_grants : undefined);
 
   if (mode === "edit") {
     editingShareName = share.name;
@@ -1037,18 +1114,19 @@ shareForm.addEventListener("submit", async (ev) => {
 
   const comment = shareCommentInput.value.trim();
   const permissions = collectSharePermissions();
+  const groupGrants = collectShareGroupGrants();
 
   let url, body, confirmMsg;
-  const summary = formatPermissionsSummary(permissions);
+  const summary = formatPermissionsSummary(permissions, groupGrants);
   if (editingShareName) {
     confirmMsg = t("msg.confirmSaveShare", { name: editingShareName, summary });
     url = `/api/shares/${encodeURIComponent(editingShareName)}/update`;
-    body = { comment, permissions };
+    body = { comment, permissions, group_grants: groupGrants };
   } else {
     const name = shareNameInput.value.trim().toLowerCase();
     confirmMsg = t("msg.confirmCreateShare", { name, summary });
     url = "/api/shares/create";
-    body = { name, comment, permissions };
+    body = { name, comment, permissions, group_grants: groupGrants };
   }
   if (!(await confirmDialog(confirmMsg))) return;
 
