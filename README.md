@@ -441,3 +441,29 @@ klienta), więc ta separacja jest zamierzona.
     to wymusi). Obrona w głąb: bezpośrednie wywołanie API nie pozwoli
     skasować grupy dostępu do udziału z pominięciem UI, nawet jeśli ktoś
     poda jej nazwę wprost.
+
+14. **Pasek zajętości (dyski i macierze)** - ✅ zrobione, jako jeden
+    współdzielony komponent zamiast dwóch osobnych implementacji.
+    - Backend: `monitor.get_filesystem_usage(device_path)` czyta realne
+      zajęcie przez kolumny `lsblk` (`FSSIZE`/`FSAVAIL`/`FSUSED`), nie
+      osobne wywołanie `df` - działa identycznie dla surowego dysku i dla
+      macierzy mdadm (`/dev/sda` czy `/dev/md0` to dla `lsblk` to samo,
+      blokowe urządzenie), więc jedno źródło danych obsługuje oba miejsca
+      od razu. Schodzi też w partycje, gdyby system plików był na
+      partycji, a nie bezpośrednio na całym urządzeniu. `mounted: false`
+      (bez paska) jeśli nic tam nie jest zamontowane - normalne dla
+      surowego dysku będącego składnikiem macierzy, którego system
+      plików faktycznie żyje na `/dev/mdX`, nie na nim samym.
+    - Jednostki **IEC** (`KiB`/`MiB`/`GiB`/`TiB`/`PiB`), zgodnie z
+      życzeniem - i przy okazji naprawiona prawdziwa nieścisłość: stara
+      `_human_size()` już liczyła dzieląc przez 1024 na każdym kroku, ale
+      podpisywała wynik jako `KB`/`MB`/`GB` (etykiety systemu dziesiętnego
+      /1000/), czyli matematyka była poprawna (IEC), tylko nazwa jednostki
+      błędna (SI) - teraz jedno i drugie się zgadza.
+    - Front: `renderUsageBar()` w `dashboard.js` - jedna funkcja, jeden
+      szablon paska (`.usage-bar`) użyty w karcie dysku *i* karcie
+      macierzy, kolorowanie progowe (zielony/żółty/czerwony przy 80%/90%)
+      tymi samymi tokenami co reszta aplikacji.
+    - Zweryfikowane przez jsdom: poprawne procenty i kolory progowe na
+      obu typach kart, poprawne formatowanie IEC, brak paska gdy nic nie
+      jest zamontowane.

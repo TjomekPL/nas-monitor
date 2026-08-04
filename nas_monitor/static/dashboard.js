@@ -379,6 +379,39 @@ function fmtHours(h) {
   return t("msg.hoursDays", { hours: h, days });
 }
 
+// IEC binary units (KiB/MiB/GiB/TiB - factor of 1024), matching
+// monitor.py's _human_size() on the backend - both compute the exact
+// same way, this just needs its own implementation since it runs in
+// the browser, not Python.
+function formatBytesIec(bytes) {
+  if (bytes === null || bytes === undefined) return "\u2013";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
+  let size = bytes;
+  let i = 0;
+  while (size >= 1024 && i < units.length - 1) {
+    size /= 1024;
+    i++;
+  }
+  return i === 0 ? `${Math.round(size)} ${units[i]}` : `${size.toFixed(1)} ${units[i]}`;
+}
+
+// One shared usage-bar renderer for both the disk cards and the RAID
+// array cards - same "usage" shape from the backend either way (see
+// monitor.get_filesystem_usage()), so this never needs to know which
+// kind of card it's being used in.
+function renderUsageBar(container, usage) {
+  if (!usage || !usage.mounted || !usage.total_bytes) {
+    container.innerHTML = "";
+    return;
+  }
+  const pct = Math.round((usage.used_bytes / usage.total_bytes) * 100);
+  const level = pct >= 90 ? "critical" : pct >= 80 ? "warning" : "ok";
+  container.innerHTML = `
+    <div class="usage-bar-track"><div class="usage-bar-fill ${level}" style="width:${Math.min(pct, 100)}%"></div></div>
+    <div class="usage-bar-label">${t("ui.usageBar.label", { used: formatBytesIec(usage.used_bytes), total: formatBytesIec(usage.total_bytes), percent: pct })}</div>
+  `;
+}
+
 function emptyState(container, text) {
   container.innerHTML = `<p class="empty-state">${text}</p>`;
 }
@@ -402,6 +435,7 @@ function renderRaid(arrays) {
     node.querySelector(".path").textContent = arr.path;
     const devices = (arr.devices || []).map((d) => d.device).filter(Boolean);
     node.querySelector(".devices").textContent = devices.length ? devices.join(", ") : (arr.num_devices ? t("msg.diskCount", { count: arr.num_devices }) : "\u2013");
+    renderUsageBar(node.querySelector(".usage-bar"), arr.usage);
 
     const progressRow = node.querySelector(".progress-row");
     if (arr.progress_percent !== null && arr.progress_percent !== undefined) {
@@ -433,6 +467,7 @@ function renderDisks(disks) {
     node.querySelector(".model").textContent = disk.model || "";
     node.querySelector(".size").textContent = disk.size;
     node.querySelector(".serial").textContent = disk.serial;
+    renderUsageBar(node.querySelector(".usage-bar"), disk.usage);
 
     const smart = disk.smart || {};
     node.querySelector(".temp").textContent = fmtTemp(smart.temperature_c);

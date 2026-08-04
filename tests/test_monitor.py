@@ -260,5 +260,96 @@ class TestFindBinary(unittest.TestCase):
             self.assertIsNone(monitor._find_binary("nope-does-not-exist"))
 
 
+class TestHumanSizeIec(unittest.TestCase):
+    def test_uses_iec_symbols_not_si(self):
+        # 1 GiB = 1024**3 bytes exactly - this must render as "1.0 GiB",
+        # never "1.0 GB" (which would imply decimal/1000-based math that
+        # was never actually happening here)
+        self.assertEqual(monitor._human_size(1024**3), "1.0 GiB")
+
+    def test_bytes_have_no_decimal(self):
+        self.assertEqual(monitor._human_size(500), "500 B")
+
+    def test_scales_through_all_units(self):
+        self.assertEqual(monitor._human_size(1024), "1.0 KiB")
+        self.assertEqual(monitor._human_size(1024**2), "1.0 MiB")
+        self.assertEqual(monitor._human_size(1024**4), "1.0 TiB")
+        self.assertEqual(monitor._human_size(1024**5), "1.0 PiB")
+
+    def test_very_large_value_still_shows_pib_not_a_new_unit(self):
+        self.assertEqual(monitor._human_size(1024**5 * 3), "3.0 PiB")
+
+
+class TestGetFilesystemUsage(unittest.TestCase):
+    @mock.patch("nas_monitor.monitor._find_binary", return_value="/usr/bin/lsblk")
+    @mock.patch("nas_monitor.monitor._run")
+    def test_filesystem_directly_on_the_device(self, mock_run, mock_find):
+        sample = json.dumps(
+            {
+                "blockdevices": [
+                    {"name": "sda", "mountpoint": "/srv", "fssize": 4000000000000, "fsavail": 1000000000000, "fsused": 3000000000000}
+                ]
+            }
+        )
+        mock_run.return_value = (0, sample, "")
+        result = monitor.get_filesystem_usage("/dev/sda")
+        self.assertTrue(result["mounted"])
+        self.assertEqual(result["mountpoint"], "/srv")
+        self.assertEqual(result["total_bytes"], 4000000000000)
+        self.assertEqual(result["used_bytes"], 3000000000000)
+        self.assertEqual(result["available_bytes"], 1000000000000)
+
+    @mock.patch("nas_monitor.monitor._find_binary", return_value="/usr/bin/lsblk")
+    @mock.patch("nas_monitor.monitor._run")
+    def test_filesystem_on_a_partition_underneath(self, mock_run, mock_find):
+        sample = json.dumps(
+            {
+                "blockdevices": [
+                    {
+                        "name": "sda",
+                        "mountpoint": None,
+                        "fssize": None,
+                        "fsavail": None,
+                        "fsused": None,
+                        "children": [
+                            {"name": "sda1", "mountpoint": "/srv", "fssize": 2000000000000, "fsavail": 500000000000, "fsused": 1500000000000}
+                        ],
+                    }
+                ]
+            }
+        )
+        mock_run.return_value = (0, sample, "")
+        result = monitor.get_filesystem_usage("/dev/sda")
+        self.assertTrue(result["mounted"])
+        self.assertEqual(result["mountpoint"], "/srv")
+        self.assertEqual(result["total_bytes"], 2000000000000)
+
+    @mock.patch("nas_monitor.monitor._find_binary", return_value="/usr/bin/lsblk")
+    @mock.patch("nas_monitor.monitor._run")
+    def test_nothing_mounted(self, mock_run, mock_find):
+        sample = json.dumps({"blockdevices": [{"name": "sdb", "mountpoint": None, "fssize": None, "fsavail": None, "fsused": None}]})
+        mock_run.return_value = (0, sample, "")
+        result = monitor.get_filesystem_usage("/dev/sdb")
+        self.assertFalse(result["mounted"])
+        self.assertIsNone(result["total_bytes"])
+
+    @mock.patch("nas_monitor.monitor._find_binary", return_value=None)
+    def test_missing_lsblk_reports_not_mounted_not_raises(self, mock_find):
+        result = monitor.get_filesystem_usage("/dev/sda")
+        self.assertFalse(result["mounted"])
+
+    @mock.patch("nas_monitor.monitor._find_binary", return_value="/usr/bin/lsblk")
+    @mock.patch("nas_monitor.monitor._run", return_value=(1, "", "device not found"))
+    def test_command_failure_reports_not_mounted_not_raises(self, mock_run, mock_find):
+        result = monitor.get_filesystem_usage("/dev/ghost")
+        self.assertFalse(result["mounted"])
+
+    @mock.patch("nas_monitor.monitor._find_binary", return_value="/usr/bin/lsblk")
+    @mock.patch("nas_monitor.monitor._run", return_value=(0, "not json", ""))
+    def test_garbage_output_reports_not_mounted_not_raises(self, mock_run, mock_find):
+        result = monitor.get_filesystem_usage("/dev/sda")
+        self.assertFalse(result["mounted"])
+
+
 if __name__ == "__main__":
     unittest.main()

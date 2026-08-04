@@ -53,6 +53,9 @@ window.NAS_I18N.en = {
       raidHeading: "RAID arrays",
       disksHeading: "Disks",
     },
+    usageBar: {
+      label: "{used} of {total} used ({percent}%)",
+    },
     raidCard: {
       state: "State",
       device: "Device",

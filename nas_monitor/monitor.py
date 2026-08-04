@@ -29,12 +29,74 @@ def _find_binary(name: str) -> str | None:
 
 
 def _human_size(num_bytes: int) -> str:
+    """IEC binary units (KiB/MiB/GiB/TiB - factor of 1024), not decimal SI
+    units (KB/MB/GB - factor of 1000). The arithmetic here was always
+    base-1024; the old KB/MB/GB labels were simply the wrong symbol for
+    what was actually being computed, not a deliberate choice."""
     size = float(num_bytes)
-    for unit in ("B", "KB", "MB", "GB", "TB", "PB"):
-        if size < 1024 or unit == "PB":
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB", "PiB"):
+        if size < 1024 or unit == "PiB":
             return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
         size /= 1024
-    return f"{size:.1f} PB"
+    return f"{size:.1f} PiB"
+
+
+def get_filesystem_usage(device_path: str) -> dict[str, Any]:
+    """Real filesystem usage for whatever's mounted on this device - via
+    lsblk's FS* columns (not a separate `df` call), which works exactly
+    the same way whether device_path is a raw disk (/dev/sda) or a RAID
+    array (/dev/md0): one shared data source for the usage bar wherever
+    it's shown. Walks into partitions too, in case the filesystem lives
+    on a partition rather than directly on the whole device.
+
+    mounted=False (nothing else populated) covers both "nothing is
+    mounted here yet" and "lsblk/the device isn't available" - the
+    caller doesn't need to distinguish those, there's just no usage bar
+    to show either way."""
+    result: dict[str, Any] = {
+        "mounted": False,
+        "mountpoint": None,
+        "total_bytes": None,
+        "used_bytes": None,
+        "available_bytes": None,
+    }
+
+    lsblk_path = _find_binary("lsblk")
+    if lsblk_path is None:
+        return result
+
+    code, out, err = _run([lsblk_path, "-b", "-J", "-o", "NAME,MOUNTPOINT,FSSIZE,FSAVAIL,FSUSED", device_path])
+    if code != 0 or not out.strip():
+        return result
+
+    try:
+        data = json.loads(out)
+    except json.JSONDecodeError:
+        return result
+
+    def _find_mounted(devices):
+        for dev in devices:
+            if dev.get("mountpoint") and dev.get("fssize"):
+                return dev
+            found = _find_mounted(dev.get("children") or [])
+            if found:
+                return found
+        return None
+
+    match = _find_mounted(data.get("blockdevices", []))
+    if match is None:
+        return result
+
+    total = int(match["fssize"])
+    avail = int(match.get("fsavail") or 0)
+    used = int(match.get("fsused")) if match.get("fsused") is not None else max(total - avail, 0)
+
+    result["mounted"] = True
+    result["mountpoint"] = match.get("mountpoint")
+    result["total_bytes"] = total
+    result["used_bytes"] = used
+    result["available_bytes"] = avail
+    return result
 
 
 # --------------------------------------------------------------------------
@@ -305,8 +367,11 @@ def get_full_status() -> dict[str, Any]:
         smart = get_smart_health(disk["path"])
         disk["smart"] = smart
         disk["health"] = classify_health(smart)
+        disk["usage"] = get_filesystem_usage(disk["path"])
 
     raid = get_raid_arrays()
+    for arr in raid:
+        arr["usage"] = get_filesystem_usage(arr["path"])
 
     return {
         "disks": disks,

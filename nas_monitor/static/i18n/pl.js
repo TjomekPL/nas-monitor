@@ -53,6 +53,9 @@ window.NAS_I18N.pl = {
       raidHeading: "Macierze RAID",
       disksHeading: "Dyski",
     },
+    usageBar: {
+      label: "{used} z {total} zajęte ({percent}%)",
+    },
     raidCard: {
       state: "Stan",
       device: "Urządzenie",

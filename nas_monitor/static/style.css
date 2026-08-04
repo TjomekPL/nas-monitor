@@ -270,6 +270,27 @@ h2 {
 .badge.critical { background: var(--crit); }
 .badge.unknown { background: var(--unknown); }
 
+.usage-bar { margin: 2px 0 10px; }
+.usage-bar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.usage-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.usage-bar-fill.ok { background: var(--ok); }
+.usage-bar-fill.warning { background: var(--warn); }
+.usage-bar-fill.critical { background: var(--crit); }
+.usage-bar-label {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
 .facts {
   display: grid;
   grid-template-columns: auto 1fr;
