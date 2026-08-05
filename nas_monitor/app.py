@@ -15,6 +15,7 @@ from datetime import timedelta
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth, system_stats, update_manager
 
@@ -27,6 +28,15 @@ from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, netw
 DEFAULT_SMB_GROUP = "smb_users"
 
 app = Flask(__name__)
+# nginx (see nginx/nas-monitor.conf) is the only thing gunicorn ever
+# talks to now - it sits at 127.0.0.1, fronted by nginx doing TLS
+# termination. Without this, request.remote_addr would be nginx's own
+# address (127.0.0.1) for every single request, which would make the
+# fail2ban-facing failed-login log (auth.log_failed_login_attempt) and
+# the operations log both useless for telling requests apart by source.
+# x_for=1 / x_proto=1: trust exactly one hop of X-Forwarded-* headers -
+# there's exactly one proxy (nginx) in front of this app, never more.
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1)
 app.secret_key = auth.get_or_create_secret_key()
 # Not Strict: Strict would also drop the cookie on a plain top-level link
 # click into the dashboard from outside it (e.g. a bookmark opened in a
@@ -73,6 +83,7 @@ def login():
 
     if not auth.verify_credentials(username, password):
         auth.record_failed_login(username)
+        auth.log_failed_login_attempt(username, request.remote_addr)
         oplog.log_event("auth", "login", "failure", params={"username": username})
         return jsonify({"success": False, "error_code": "auth.invalid_credentials", "error_context": {}}), 401
 

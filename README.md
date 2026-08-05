@@ -27,9 +27,14 @@ cd nas-monitor
 sudo ./install.sh
 ```
 
-`install.sh` instaluje pakiety systemowe, tworzy virtualenv, kopiuje pliki
-do `/opt/nas-monitor` i uruchamia usługę systemd. Dashboard będzie dostępny
-pod `http://<adres-hosta>:8420`.
+`install.sh` instaluje pakiety systemowe (w tym nginx + fail2ban), tworzy
+virtualenv, klonuje repo do `/opt/nas-monitor`, generuje self-signed
+certyfikat TLS i uruchamia usługę systemd za reverse proxy nginx. Dashboard
+będzie dostępny pod `https://<adres-hosta>` (przeglądarka pokaże ostrzeżenie
+o niezaufanym certyfikacie przy pierwszym wejściu - to oczekiwane, certyfikat
+jest self-signed). Jeśli konfiguracja HTTPS się nie powiedzie z jakiegoś
+powodu, instalator automatycznie zostaje przy zwykłym `http://<adres-hosta>:8420`
+zamiast przerywać całą instalację.
 
 ## Instalacja ręczna (bez install.sh)
 

@@ -1,7 +1,9 @@
 import os
+import re
 import sys
 import tempfile
 import shutil
+import logging
 import unittest
 from unittest import mock
 
@@ -216,6 +218,53 @@ class TestSecretKey(AuthTestCase):
         # is silently running with a key that doesn't match the file.
         on_disk = auth.get_or_create_secret_key()
         self.assertEqual(on_disk, results[0])
+
+
+class TestFailedLoginFileLog(unittest.TestCase):
+    """auth.log_failed_login_attempt - the fail2ban-facing log, entirely
+    separate from the JSON-backed lockout tested above."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.log_file = os.path.join(self.tmpdir, "auth.log")
+        self.dir_patch = mock.patch("nas_monitor.auth.AUTH_LOG_DIR", self.tmpdir)
+        self.file_patch = mock.patch("nas_monitor.auth.AUTH_LOG_FILE", self.log_file)
+        self.logger_patch = mock.patch("nas_monitor.auth._auth_file_logger", None)
+        self.dir_patch.start()
+        self.file_patch.start()
+        self.logger_patch.start()
+
+    def tearDown(self):
+        self.dir_patch.stop()
+        self.file_patch.stop()
+        self.logger_patch.stop()
+        # drop any handler the test opened, or Windows/some filesystems
+        # would refuse to let tearDown remove a file still held open
+        logger = logging.getLogger("nas_monitor.auth_file_log")
+        for handler in list(logger.handlers):
+            handler.close()
+            logger.removeHandler(handler)
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_writes_a_line_fail2bans_filter_can_parse(self):
+        auth.log_failed_login_attempt("admin", "192.168.1.55")
+        with open(self.log_file) as f:
+            content = f.read()
+        pattern = r"^\S+ \S+ Failed login attempt for user 'admin' from (?P<host>\S+)\s*$"
+        match = re.search(pattern, content, re.MULTILINE)
+        self.assertIsNotNone(match, content)
+        self.assertEqual(match.group("host"), "192.168.1.55")
+
+    def test_handles_missing_remote_addr_without_raising(self):
+        auth.log_failed_login_attempt("admin", None)
+        with open(self.log_file) as f:
+            self.assertIn("from unknown", f.read())
+
+    def test_never_raises_when_log_dir_cannot_be_created(self):
+        with mock.patch("nas_monitor.auth.AUTH_LOG_DIR", "/this/path/cannot/exist/on/purpose"), \
+             mock.patch("nas_monitor.auth.AUTH_LOG_FILE", "/this/path/cannot/exist/on/purpose/auth.log"), \
+             mock.patch("nas_monitor.auth._auth_file_logger", None):
+            auth.log_failed_login_attempt("admin", "1.2.3.4")  # must not raise
 
 
 class TestLoginRateLimiting(AuthTestCase):

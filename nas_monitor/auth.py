@@ -32,6 +32,8 @@ around the web login.
 from __future__ import annotations
 
 import json
+import logging
+import logging.handlers
 import os
 import secrets
 import time
@@ -46,6 +48,63 @@ SECRET_KEY_FILE = "auth-secret-key.json"
 LOGIN_ATTEMPTS_FILE = "auth-login-attempts.json"
 
 MIN_PASSWORD_LENGTH = 10
+
+# Failed-login file log, purely for fail2ban (see fail2ban/ in the repo
+# root) - a completely separate concern from the JSON-backed lockout
+# counter below (is_locked_out/record_failed_login), which is what
+# actually enforces anything. Lazily set up on first use (not at import
+# time) and best-effort throughout: on an install where
+# /var/log/nas-monitor doesn't exist yet (nginx+fail2ban setup hasn't
+# been run, or install.sh is an older version, or - in tests - there's
+# no permission to create it at all), logging is silently skipped
+# rather than ever raising and breaking a login attempt over it.
+AUTH_LOG_DIR = "/var/log/nas-monitor"
+AUTH_LOG_FILE = os.path.join(AUTH_LOG_DIR, "auth.log")
+
+_auth_file_logger: logging.Logger | None = None
+
+
+def _get_auth_file_logger() -> logging.Logger | None:
+    global _auth_file_logger
+    if _auth_file_logger is not None:
+        return _auth_file_logger
+    logger = logging.getLogger("nas_monitor.auth_file_log")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+    # Deliberately not gated on `if not logger.handlers` - this named
+    # logger is only ever touched from here, so the module-level
+    # _auth_file_logger cache above is already the single source of
+    # truth for "have we set this up yet". Checking logger.handlers
+    # too seems like reasonable extra caution, but it isn't: anything
+    # else that happens to inspect/instrument this same logger (test
+    # frameworks' log capture is a real example - pytest attaches its
+    # own handler to whatever logger a test touches) would make this
+    # believe setup already happened and skip adding the real handler
+    # entirely, silently dropping every future log line.
+    try:
+        os.makedirs(AUTH_LOG_DIR, exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(AUTH_LOG_FILE, maxBytes=1_000_000, backupCount=3)
+        handler.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+        logger.addHandler(handler)
+    except OSError:
+        return None
+    _auth_file_logger = logger
+    return logger
+
+
+def log_failed_login_attempt(username: str, remote_addr: str | None) -> None:
+    """Writes one line to AUTH_LOG_FILE for fail2ban's nas-monitor jail
+    to watch - see fail2ban/nas-monitor.filter.conf for the exact
+    format this must match. Never raises: a login attempt must never
+    fail (or succeed) differently depending on whether this log write
+    works."""
+    logger = _get_auth_file_logger()
+    if logger is None:
+        return
+    try:
+        logger.info("Failed login attempt for user '%s' from %s", username, remote_addr or "unknown")
+    except OSError:
+        pass
 
 # Login brute-force guard. Keyed by username, not source IP - this tool
 # has exactly one admin account, so limiting guesses against that

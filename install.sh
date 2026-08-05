@@ -36,6 +36,74 @@ echo "==> Tworzenie virtualenv i instalacja zależności Python..."
 python3 -m venv "${APP_DIR}/venv"
 "${APP_DIR}/venv/bin/pip" install -q -r "${APP_DIR}/requirements.txt"
 
+echo "==> Instalowanie nginx i fail2ban (HTTPS + ochrona przed brute-force)..."
+apt-get install -y nginx fail2ban openssl
+
+# self-signed TLS cert - generated once, then reused on every future
+# install.sh run (regenerating it on each update would mean re-accepting
+# the browser warning every single release, for no real benefit).
+TLS_DIR="/etc/nas-monitor/tls"
+CERT_FILE="${TLS_DIR}/nas-monitor.crt"
+KEY_FILE="${TLS_DIR}/nas-monitor.key"
+HTTPS_OK=0
+
+mkdir -p "${TLS_DIR}"
+chmod 700 "${TLS_DIR}"
+
+if [[ ! -f "$CERT_FILE" || ! -f "$KEY_FILE" ]]; then
+  echo "==> Generowanie certyfikatu self-signed..."
+  HOST_CN=$(hostname)
+  HOST_IP=$(hostname -I | awk '{print $1}')
+  openssl req -x509 -nodes -newkey rsa:2048 -days 3650 \
+    -keyout "$KEY_FILE" -out "$CERT_FILE" \
+    -subj "/CN=${HOST_CN}" \
+    -addext "subjectAltName=DNS:${HOST_CN},IP:${HOST_IP}" \
+    2>/dev/null || true
+fi
+chmod 600 "$KEY_FILE" 2>/dev/null || true
+chmod 644 "$CERT_FILE" 2>/dev/null || true
+
+# Everything below is deliberately non-fatal (no bare failing command
+# outside an `if`) - a broken nginx config or a cert that failed to
+# generate must never abort the whole install and leave the dashboard
+# itself not installed. Worst case, HTTPS_OK stays 0 and the service
+# falls back to plain HTTP on 0.0.0.0:8420, same as before this feature
+# existed - see the __BIND_ADDR__ substitution further down.
+if [[ -f "$CERT_FILE" && -f "$KEY_FILE" ]]; then
+  echo "==> Konfiguracja nginx (reverse proxy + TLS)..."
+  sed -e "s#__CERT_PATH__#${CERT_FILE}#" -e "s#__KEY_PATH__#${KEY_FILE}#" \
+    "${APP_DIR}/nginx/nas-monitor.conf" > /etc/nginx/sites-available/nas-monitor
+  ln -sf /etc/nginx/sites-available/nas-monitor /etc/nginx/sites-enabled/nas-monitor
+  rm -f /etc/nginx/sites-enabled/default
+
+  if nginx -t 2>/tmp/nas-monitor-nginx-test.log; then
+    systemctl enable nginx >/dev/null 2>&1 || true
+    if systemctl restart nginx; then
+      HTTPS_OK=1
+    else
+      echo "OSTRZEŻENIE: nginx nie wystartował - zostaję na zwykłym HTTP na porcie 8420." >&2
+    fi
+  else
+    echo "OSTRZEŻENIE: nieprawidłowa konfiguracja nginx - zostaję na zwykłym HTTP na porcie 8420:" >&2
+    cat /tmp/nas-monitor-nginx-test.log >&2
+  fi
+else
+  echo "OSTRZEŻENIE: nie udało się wygenerować certyfikatu TLS - zostaję na zwykłym HTTP na porcie 8420." >&2
+fi
+
+echo "==> Konfiguracja fail2ban..."
+mkdir -p /var/log/nas-monitor
+cp "${APP_DIR}/fail2ban/nas-monitor.filter.conf" /etc/fail2ban/filter.d/nas-monitor.conf
+cp "${APP_DIR}/fail2ban/nas-monitor.jail.conf" /etc/fail2ban/jail.d/nas-monitor.conf
+systemctl enable fail2ban >/dev/null 2>&1 || true
+systemctl restart fail2ban || echo "OSTRZEŻENIE: fail2ban nie wystartował - sprawdź 'sudo systemctl status fail2ban'." >&2
+
+if [[ "$HTTPS_OK" -eq 1 ]]; then
+  BIND_ADDR="127.0.0.1"
+else
+  BIND_ADDR="0.0.0.0"
+fi
+
 STATE_DIR="/etc/nas-monitor"
 CREDENTIALS_FILE="${STATE_DIR}/auth-credentials.json"
 
@@ -87,7 +155,7 @@ else
 fi
 
 echo "==> Instalacja usługi systemd..."
-cp "${APP_DIR}/nas-monitor.service" /etc/systemd/system/
+sed "s#__BIND_ADDR__#${BIND_ADDR}#" "${APP_DIR}/nas-monitor.service" > /etc/systemd/system/nas-monitor.service
 systemctl daemon-reload
 systemctl enable nas-monitor
 # restart (not "enable --now") so re-running this script on an already
@@ -97,10 +165,15 @@ systemctl enable nas-monitor
 systemctl restart nas-monitor
 
 IP=$(hostname -I | awk '{print $1}')
-echo "==> Gotowe. Dashboard: http://${IP}:8420"
+if [[ "$HTTPS_OK" -eq 1 ]]; then
+  echo "==> Gotowe. Dashboard: https://${IP}"
+  echo "    Certyfikat jest self-signed - przeglądarka pokaże ostrzeżenie przy"
+  echo "    pierwszym wejściu, zaakceptuj je raz (\"Zaawansowane\" -> \"Przejdź dalej\")."
+else
+  echo "==> Gotowe. Dashboard: http://${IP}:8420"
+fi
 if [[ -n "$ADMIN_USERNAME" ]]; then
   echo "    Konto administratora: ${ADMIN_USERNAME}"
-  echo "    Zaloguj się pod: http://${IP}:8420/login"
 fi
 
 if ! systemctl is-active --quiet NetworkManager; then

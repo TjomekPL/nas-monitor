@@ -13,7 +13,13 @@ Environment=PATH=/opt/nas-monitor/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/s
 # to bypass dashboard login entirely (e.g. while testing). Deliberately
 # requires SSH/root access to change, not anything reachable from the web UI.
 #Environment=AUTH_ENABLED=0
-ExecStart=/opt/nas-monitor/venv/bin/gunicorn -w 2 -b 0.0.0.0:8420 nas_monitor.app:app
+# __BIND_ADDR__ is substituted by install.sh: 127.0.0.1 when the nginx+TLS
+# reverse proxy (see nginx/nas-monitor.conf) is up and reachable, so
+# gunicorn is never directly exposed on the LAN - or 0.0.0.0 as a fallback
+# if HTTPS setup didn't succeed, so a broken nginx config can never lock
+# you out of the dashboard entirely (this file gets regenerated from the
+# checked-in template on every install.sh run, so it isn't hand-edited).
+ExecStart=/opt/nas-monitor/venv/bin/gunicorn -w 2 -b __BIND_ADDR__:8420 nas_monitor.app:app
 Restart=on-failure
 RestartSec=5
 
