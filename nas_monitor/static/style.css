@@ -280,8 +280,7 @@ main {
 }
 
 .statusbar-stats {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  display: flex;
 }
 
 .statusbar-seg {
@@ -292,6 +291,19 @@ main {
   border-right: 1px solid var(--border);
   color: var(--text-muted);
   overflow: hidden;
+}
+.statusbar-stats .statusbar-seg {
+  /* Fixed pixel basis, no grow/shrink - the earlier CSS-grid version
+     (minmax(150px, 1fr)) still let column width depend on content,
+     because a grid's fr tracks only stay stable when the grid itself
+     has a definite width, and .statusbar-stats (a flex child with no
+     explicit width) doesn't have one - its size was still following
+     the longest current value, so the whole row kept reflowing as
+     numbers changed length. A flat flex-basis in px has no such
+     dependency: every segment is exactly this wide, always, and
+     overflow:hidden below quietly clips the rare value too long to
+     fit instead of pushing its neighbors. */
+  flex: 0 0 168px;
 }
 .statusbar-stats .statusbar-seg:first-child { padding-left: 0; }
 .statusbar-seg svg { width: 16px; height: 16px; flex-shrink: 0; }
@@ -354,6 +366,7 @@ main {
 @media (max-width: 640px) {
   .statusbar-inner { padding: 0 12px; overflow-x: auto; }
   .statusbar-seg { padding: 7px 12px; }
+  .statusbar-stats .statusbar-seg { flex-basis: 140px; }
   .statusbar-live { display: none; }
 }
 
