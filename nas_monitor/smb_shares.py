@@ -45,6 +45,41 @@ def is_valid_share_name(name: str) -> bool:
     return bool(_VALID_SHARE_NAME_RE.match(name)) and name not in _RESERVED_NAMES
 
 
+def compute_effective_permission(username: str, permissions: dict[str, str], group_grants: dict[str, str], user_groups: list[str]) -> str:
+    """What a user actually ends up with, computed by US rather than
+    inferred from Samba's own precedence rules for mixing individual and
+    group-sourced permissions - deliberately not relied on for anything
+    security-relevant here, since Samba's docs are unambiguous about
+    "invalid users always wins" but genuinely vague about what happens
+    when an individual read-list/write-list entry and a group's differ.
+    Rather than guess, this function IS the authority: _render_managed_shares
+    renders exactly what this function says (blocked users go in
+    invalid users, which is unambiguous), and the frontend uses the same
+    priority order to show when a user's own choice isn't what they'll
+    actually get - so the two can never disagree.
+
+    Priority, most to least restrictive (his call, matching fail-safe
+    defaults - deny should never happen by accident, but neither should
+    a stated restriction get silently loosened by a group):
+    1. "blocked" (explicit individual override - always wins)
+    2. "ro" (from either the individual entry or any of their groups)
+    3. "rw" (from either the individual entry or any of their groups)
+    4. "na" (no access from any source)
+    """
+    individual = permissions.get(username)
+    if individual == "blocked":
+        return "blocked"
+
+    candidates = [individual] if individual in ("rw", "ro") else []
+    candidates.extend(group_grants.get(g) for g in user_groups if g in group_grants)
+
+    if "ro" in candidates:
+        return "ro"
+    if "rw" in candidates:
+        return "rw"
+    return "na"
+
+
 def access_group_name(share_name: str) -> str:
     """Name of the group this module auto-manages for one share's access.
     Access is granted per-user in the UI/API - this group is the plumbing
@@ -140,6 +175,17 @@ def _read_managed_shares(managed_conf_path: str = MANAGED_CONF_PATH) -> list[dic
         permissions = {u: ("ro" if u in read_only_users else "rw") for u in resolved_users}
         group_grants = {g: ("ro" if g in read_list_group_refs else "rw") for g in granted_group_names}
 
+        # "blocked" users are never in the access group at all (see
+        # create_share/update_share), so they'd never show up via
+        # resolved_users above - they're tracked purely through invalid
+        # users. Only plain usernames are ever written there by this
+        # tool (never group refs), so anything group-shaped here is
+        # foreign and left alone rather than guessed at.
+        invalid_users_raw = section.get("invalid users", "").split()
+        for u in invalid_users_raw:
+            if not _is_group_ref(u):
+                permissions[u] = "blocked"
+
         shares.append(
             {
                 "name": name,
@@ -210,6 +256,15 @@ def _render_managed_shares(shares: list[dict[str, Any]]) -> str:
         read_list_tokens.extend(f"+{g}" for g, level in sorted(group_grants.items()) if level == "ro")
         if read_list_tokens:
             lines.append(f"   read list = {' '.join(read_list_tokens)}")
+        # invalid users always wins over valid users/group membership,
+        # confirmed in Samba's own docs - "In the event that a user or
+        # group appears in both lists, the invalid users option takes
+        # precedence". This is the ONLY way to genuinely exclude someone
+        # who'd otherwise get in through a group - a plain absence from
+        # permissions does NOT do this (see compute_effective_permission).
+        blocked_tokens = sorted(u for u, level in permissions.items() if level == "blocked")
+        if blocked_tokens:
+            lines.append(f"   invalid users = {' '.join(blocked_tokens)}")
         lines.append("")
     return "\n".join(lines) + "\n"
 
@@ -520,7 +575,7 @@ def create_share(
 
     permissions = dict(permissions or {})
     for u, level in permissions.items():
-        if level not in ("rw", "ro"):
+        if level not in ("rw", "ro", "blocked"):
             return errors.fail(result, "shares.invalid_permission_level", user=u, level=str(level))
 
     group_grants = dict(group_grants or {})
@@ -535,7 +590,12 @@ def create_share(
     group = access_group_name(name) if (permissions or group_grants) else None
 
     if group:
-        for u in permissions:
+        # "blocked" users never join the access group - they get no
+        # individual grant at all, on top of being explicitly denied via
+        # invalid users in _render_managed_shares.
+        for u, level in permissions.items():
+            if level == "blocked":
+                continue
             add_result = users_mod.add_user_to_group(u, group)
             if not add_result["success"]:
                 return errors.propagate(result, add_result, user=u, group=group)
@@ -568,7 +628,7 @@ def create_share(
     result["permissions"] = permissions
     result["group_grants"] = group_grants
     warnings = list(apply_result.get("warnings") or []) + acl_warnings
-    pw_warning = _missing_smb_password_warning(list(permissions))
+    pw_warning = _missing_smb_password_warning([u for u, level in permissions.items() if level != "blocked"])
     if pw_warning:
         warnings.append(pw_warning)
     if warnings:
@@ -595,7 +655,7 @@ def update_share(
 
     if permissions is not None:
         for u, level in permissions.items():
-            if level not in ("rw", "ro"):
+            if level not in ("rw", "ro", "blocked"):
                 return errors.fail(result, "shares.invalid_permission_level", user=u, level=str(level))
 
     if group_grants is not None:
@@ -620,10 +680,15 @@ def update_share(
             # group, without touching the old group's membership at all.
             current_users: set[str] = set()
         else:
-            current_users = set(match.get("permissions") or {})
+            # Only rw/ro count as actual access-group membership -
+            # "blocked" users were never added to it in the first place,
+            # so including them here would make the diff below think
+            # they're already members and skip adding them if their
+            # level later changes to rw/ro.
+            current_users = {u for u, level in (match.get("permissions") or {}).items() if level != "blocked"}
         current_group_grants = dict(match.get("group_grants") or {})
 
-        desired_users = set(permissions) if permissions is not None else current_users
+        desired_users = {u for u, level in permissions.items() if level != "blocked"} if permissions is not None else current_users
         desired_group_grants = group_grants if group_grants is not None else current_group_grants
         group = dedicated_group
 
@@ -658,7 +723,7 @@ def update_share(
 
     result["success"] = True
     warnings = list(apply_result.get("warnings") or []) + acl_warnings
-    pw_warning = _missing_smb_password_warning(list(permissions or {}))
+    pw_warning = _missing_smb_password_warning([u for u, level in (permissions or {}).items() if level != "blocked"])
     if pw_warning:
         warnings.append(pw_warning)
     if warnings:

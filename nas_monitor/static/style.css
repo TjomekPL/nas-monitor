@@ -431,6 +431,10 @@ h2 {
 .perm-tag.perm-rw { color: var(--ok); }
 .perm-tag.perm-ro { color: var(--accent); }
 .perm-tag.perm-na { color: var(--crit); }
+.perm-tag.perm-overridden {
+  opacity: 0.55;
+  cursor: help;
+}
 .username.sub {
   font-size: 11.5px;
   color: var(--text-muted);

@@ -118,9 +118,12 @@ window.NAS_I18N.en = {
       permNone: "No access",
       permRo: "Read only",
       permRw: "Read & write",
+      permBlocked: "Blocked (even through a group)",
       permSummaryRw: "RW",
       permSummaryRo: "R",
       permSummaryNa: "NA",
+      permSummaryBlocked: "blocked",
+      permOverriddenHint: "This user's own setting is being ignored here - effective access comes from somewhere else (e.g. a group).",
     },
     network: {
       heading: "Network",

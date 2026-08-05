@@ -602,5 +602,112 @@ class TestUpdateShareWithGroupGrants(unittest.TestCase):
         self.assertEqual(reread[0]["group_grants"], {"rodzina": "rw"})
 
 
+class TestComputeEffectivePermission(unittest.TestCase):
+    def test_no_access_from_any_source(self):
+        self.assertEqual(smb_shares.compute_effective_permission("gosia", {}, {}, ["rodzina"]), "na")
+
+    def test_individual_rw_no_group(self):
+        self.assertEqual(smb_shares.compute_effective_permission("gosia", {"gosia": "rw"}, {}, []), "rw")
+
+    def test_group_only_access(self):
+        self.assertEqual(
+            smb_shares.compute_effective_permission("gosia", {}, {"rodzina": "rw"}, ["rodzina"]), "rw"
+        )
+
+    def test_ro_beats_rw_regardless_of_source_individual_ro_group_rw(self):
+        self.assertEqual(
+            smb_shares.compute_effective_permission("gosia", {"gosia": "ro"}, {"rodzina": "rw"}, ["rodzina"]), "ro"
+        )
+
+    def test_ro_beats_rw_regardless_of_source_group_ro_individual_rw(self):
+        self.assertEqual(
+            smb_shares.compute_effective_permission("gosia", {"gosia": "rw"}, {"rodzina": "ro"}, ["rodzina"]), "ro"
+        )
+
+    def test_blocked_wins_over_group_rw(self):
+        self.assertEqual(
+            smb_shares.compute_effective_permission("gosia", {"gosia": "blocked"}, {"rodzina": "rw"}, ["rodzina"]),
+            "blocked",
+        )
+
+    def test_no_individual_entry_does_not_block_group_access(self):
+        self.assertEqual(
+            smb_shares.compute_effective_permission("gosia", {}, {"rodzina": "rw"}, ["rodzina"]), "rw"
+        )
+
+    def test_group_not_a_member_of_is_irrelevant(self):
+        self.assertEqual(
+            smb_shares.compute_effective_permission("gosia", {}, {"rodzina": "rw"}, ["innaGrupa"]), "na"
+        )
+
+
+@mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
+class TestBlockedUsers(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.managed = os.path.join(self.tmpdir, "shares.conf")
+        open(self.managed, "a").close()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares.users_mod.add_user_to_group")
+    def test_blocked_user_never_joins_access_group(self, mock_add, mock_dir, mock_apply, mock_smb):
+        result = smb_shares.create_share("wakacje", permissions={"gosia": "blocked", "tomek": "rw"}, managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        mock_add.assert_called_once_with("tomek", "wakacje_access")
+
+    def test_render_includes_invalid_users_line(self, mock_smb):
+        share = {
+            "name": "wakacje", "path": "/srv/wakacje", "comment": "",
+            "permissions": {"gosia": "blocked", "tomek": "rw"}, "group_grants": {}, "access_group": "wakacje_access",
+        }
+        content = smb_shares._render_managed_shares([share])
+        self.assertIn("invalid users = gosia", content)
+
+    def test_round_trip_reads_blocked_back(self, mock_smb):
+        share = {
+            "name": "wakacje",
+            "path": "/srv/wakacje",
+            "comment": "",
+            "permissions": {"tomek": "rw", "gosia": "blocked"},
+            "group_grants": {},
+            "access_group": "wakacje_access",
+        }
+        content = smb_shares._render_managed_shares([share])
+        with open(self.managed, "w") as fh:
+            fh.write(content)
+        with mock.patch("nas_monitor.smb_shares._resolve_group_members", return_value=["tomek"]):
+            result = smb_shares._read_managed_shares(self.managed)
+        self.assertEqual(result[0]["permissions"]["gosia"], "blocked")
+        self.assertEqual(result[0]["permissions"]["tomek"], "rw")
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares.users_mod.add_user_to_group", return_value={"success": True})
+    def test_blocked_user_does_not_trigger_missing_password_warning(self, mock_add, mock_dir, mock_apply, mock_smb):
+        result = smb_shares.create_share("wakacje", permissions={"gosia": "blocked"}, managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        self.assertNotIn("warnings", result)
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares.users_mod.add_user_to_group", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares.users_mod.remove_user_from_group", return_value={"success": True})
+    def test_changing_from_blocked_to_rw_adds_group_membership(self, mock_remove, mock_add, mock_dir, mock_apply, mock_smb):
+        existing_share = {
+            "name": "wakacje", "path": "/srv/wakacje", "comment": "",
+            "permissions": {"gosia": "blocked"}, "group_grants": {}, "access_group": "wakacje_access",
+        }
+        with open(self.managed, "w") as fh:
+            fh.write(smb_shares._render_managed_shares([existing_share]))
+        with mock.patch("nas_monitor.smb_shares._resolve_group_members", return_value=[]):
+            result = smb_shares.update_share("wakacje", permissions={"gosia": "rw"}, managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        mock_add.assert_called_once_with("gosia", "wakacje_access")
+
+
 if __name__ == "__main__":
     unittest.main()
