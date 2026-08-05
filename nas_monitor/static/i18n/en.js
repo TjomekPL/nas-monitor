@@ -11,6 +11,13 @@ window.NAS_I18N.en = {
       accountToggle: "Admin account",
       logoutBtn: "Log out",
     },
+    statusbar: {
+      cpu: "CPU",
+      disk: "Disk R/W",
+      net: "Network",
+      live: "live",
+      unavailable: "unavailable",
+    },
     login: {
       usernameLabel: "Username",
       passwordLabel: "Password",

@@ -16,7 +16,7 @@ from datetime import timedelta
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
 
-from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth
+from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth, system_stats
 
 # Every account that gets SMB access lands here by default - removable
 # afterward like any other group (just uncheck it in the edit form).
@@ -131,6 +131,15 @@ def dashboard():
 @app.route("/api/status")
 def api_status():
     return jsonify(monitor.get_full_status())
+
+
+@app.route("/api/system-stats")
+def api_system_stats():
+    # Deliberately not logged to the operations log - this is a
+    # read-only poll firing every couple of seconds for the statusbar,
+    # not a user-initiated action, and would drown out everything else
+    # in the Log tab.
+    return jsonify(system_stats.get_live_stats())
 
 
 def _general_groups():

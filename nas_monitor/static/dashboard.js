@@ -1,4 +1,5 @@
 const REFRESH_MS = 20000;
+const STATUSBAR_REFRESH_MS = 2000;
 const t = (key, params) => window.i18n.t(key, params);
 const localeForLang = () => (window.i18n.currentLanguage() === "pl" ? "pl-PL" : "en-US");
 
@@ -1913,6 +1914,41 @@ function rerenderEverything() {
   renderLog(lastLogEvents);
 }
 
+// --------------------------------------------------------------------
+// Statusbar - CPU/disk/network, polled independently of everything
+// else above (much shorter interval) since it lives outside <main> and
+// stays visible across every tab.
+// --------------------------------------------------------------------
+
+function formatRate(rate) {
+  if (!rate) return "\u2013";
+  const val = Number.isInteger(rate.value) ? rate.value : rate.value.toFixed(1);
+  return `${val} <span class="unit">${rate.unit}</span>`;
+}
+
+async function loadStatusbar() {
+  const dot = document.getElementById("statusbar-dot");
+  try {
+    const res = await fetch("/api/system-stats");
+    const data = await res.json();
+    if (!data.available) {
+      document.getElementById("stat-cpu-val").textContent = t("ui.statusbar.unavailable");
+      document.getElementById("stat-disk-val").textContent = t("ui.statusbar.unavailable");
+      document.getElementById("stat-net-val").textContent = t("ui.statusbar.unavailable");
+      if (dot) dot.style.background = "var(--crit)";
+      return;
+    }
+    document.getElementById("stat-cpu-val").textContent = `${data.cpu_percent.toFixed(1)}%`;
+    document.getElementById("stat-disk-val").innerHTML =
+      `<span class="up">R ${formatRate(data.disk_read)}</span><span class="sep">/</span><span class="down">W ${formatRate(data.disk_write)}</span>`;
+    document.getElementById("stat-net-val").innerHTML =
+      `<span class="up">\u2191 ${formatRate(data.net_up)}</span><span class="sep">/</span><span class="down">\u2193 ${formatRate(data.net_down)}</span>`;
+    if (dot) dot.style.background = "var(--ok)";
+  } catch (err) {
+    if (dot) dot.style.background = "var(--crit)";
+  }
+}
+
 // Kick off polling now that everything above is declared.
 loadUsers();
 setInterval(loadUsers, REFRESH_MS);
@@ -1920,3 +1956,5 @@ loadSshKeys();
 setInterval(loadSshKeys, REFRESH_MS);
 refresh();
 setInterval(refresh, REFRESH_MS);
+loadStatusbar();
+setInterval(loadStatusbar, STATUSBAR_REFRESH_MS);

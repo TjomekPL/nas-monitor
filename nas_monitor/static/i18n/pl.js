@@ -11,6 +11,13 @@ window.NAS_I18N.pl = {
       accountToggle: "Konto administratora",
       logoutBtn: "Wyloguj",
     },
+    statusbar: {
+      cpu: "CPU",
+      disk: "Dysk R/W",
+      net: "Sieć",
+      live: "na żywo",
+      unavailable: "niedostępne",
+    },
     login: {
       usernameLabel: "Nazwa użytkownika",
       passwordLabel: "Hasło",
