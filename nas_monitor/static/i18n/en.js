@@ -13,10 +13,12 @@ window.NAS_I18N.en = {
     },
     statusbar: {
       cpu: "CPU",
+      mem: "Memory",
       disk: "Disk R/W",
       net: "Network",
       live: "live",
       unavailable: "unavailable",
+      updateAvailable: "update",
     },
     login: {
       usernameLabel: "Username",
@@ -43,6 +45,16 @@ window.NAS_I18N.en = {
       sessionDurationCustomLabel: "Custom (hours)",
       saveSessionDurationBtn: "Save",
       closeBtn: "Close",
+      updateHeading: "Version",
+      checkUpdateBtn: "Check for updates",
+      applyUpdateBtn: "Install update {version}",
+      currentVersion: "Version: {version}",
+      checkingUpdate: "Checking...",
+      upToDate: "You're on the latest version.",
+      updateAvailableStatus: "Update available: {version}",
+      notGitManaged: "This install isn't git-managed yet - run sudo ./install.sh once manually to enable updates from this panel.",
+      applyingUpdate: "Installing the update and restarting the service... this'll take a few seconds.",
+      applySuccess: "Updated to {version}. The page will refresh automatically.",
       passwordMismatch: "The new passwords don't match",
       passwordChanged: "Password changed.",
       sessionDurationSaved: "Session duration saved.",
@@ -297,6 +309,12 @@ window.NAS_I18N.en = {
       wrong_current_password: "The current password is incorrect",
       invalid_session_duration: "Invalid session duration",
     },
+    update: {
+      fetch_failed: "Couldn't reach GitHub to check for updates",
+      apply_failed: "Couldn't apply the update (git reset failed)",
+      deps_failed: "Update downloaded, but dependency install (pip) failed",
+      not_git_managed: "This install isn't git-managed yet - run sudo ./install.sh once manually to enable it",
+    },
     system: {
       tool_missing: "Missing required tool: {tool}",
       command_failed: "System command failed: {detail}",
@@ -407,6 +425,9 @@ window.NAS_I18N.en = {
       deploy: { success: "Deployed {username}'s key to {target}", failure: "Failed to deploy {username}'s key to {target}" },
       delete: { success: "Deleted the SSH key for {username}", failure: "Failed to delete the SSH key for {username}" },
       remove_deployment: { success: "Removed {username}'s key from {target}", failure: "Failed to remove {username}'s key from {target}" },
+    },
+    update: {
+      apply: { success: "Installed update ({version})", failure: "Failed to install the update" },
     },
   },
 

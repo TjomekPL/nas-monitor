@@ -255,6 +255,7 @@ async function openAccountDialog() {
     // forms below will just surface their own errors on submit
   }
   accountDialog.showModal();
+  checkForUpdate();
 }
 
 accountToggleBtn.addEventListener("click", openAccountDialog);
@@ -1912,6 +1913,7 @@ function rerenderEverything() {
   renderSshKeys(lastSshKeysData);
   if (lastNetworkData) renderNetwork(lastNetworkData);
   renderLog(lastLogEvents);
+  if (lastUpdateCheck) renderUpdateInfo(lastUpdateCheck);
 }
 
 // --------------------------------------------------------------------
@@ -1933,12 +1935,16 @@ async function loadStatusbar() {
     const data = await res.json();
     if (!data.available) {
       document.getElementById("stat-cpu-val").textContent = t("ui.statusbar.unavailable");
+      document.getElementById("stat-mem-val").textContent = t("ui.statusbar.unavailable");
       document.getElementById("stat-disk-val").textContent = t("ui.statusbar.unavailable");
       document.getElementById("stat-net-val").textContent = t("ui.statusbar.unavailable");
       if (dot) dot.style.background = "var(--crit)";
       return;
     }
     document.getElementById("stat-cpu-val").textContent = `${data.cpu_percent.toFixed(1)}%`;
+    const memEl = document.getElementById("stat-mem-val");
+    memEl.textContent = `${data.mem_percent.toFixed(1)}%`;
+    memEl.title = `${data.mem_used_gib} / ${data.mem_total_gib} GiB`;
     document.getElementById("stat-disk-val").innerHTML =
       `<span class="up">R ${formatRate(data.disk_read)}</span><span class="sep">/</span><span class="down">W ${formatRate(data.disk_write)}</span>`;
     document.getElementById("stat-net-val").innerHTML =
@@ -1949,6 +1955,119 @@ async function loadStatusbar() {
   }
 }
 
+// --------------------------------------------------------------------
+// Update check/apply - version shown in the statusbar, checked once on
+// load; the account dialog's "Sprawdź aktualizacje" button re-checks
+// on demand. Each check does a real `git fetch` against GitHub on the
+// backend, so - unlike the rest of the statusbar - this isn't polled
+// continuously.
+// --------------------------------------------------------------------
+
+const updateCurrentVersionEl = document.getElementById("update-current-version");
+const updateStatusEl = document.getElementById("update-status");
+const updateErrorEl = document.getElementById("update-error");
+const updateCheckBtn = document.getElementById("update-check-btn");
+const updateApplyBtn = document.getElementById("update-apply-btn");
+const statusbarVersionBtn = document.getElementById("statusbar-version-btn");
+const statusbarVersionVal = document.getElementById("statusbar-version-val");
+const statusbarUpdateBadge = document.getElementById("statusbar-update-badge");
+
+let lastUpdateCheck = null;
+
+function renderUpdateInfo(data) {
+  lastUpdateCheck = data;
+  if (!data.git_managed) {
+    statusbarVersionVal.textContent = "\u2013";
+    statusbarUpdateBadge.style.display = "none";
+    updateCurrentVersionEl.textContent = t("ui.accountDialog.notGitManaged");
+    updateStatusEl.style.display = "none";
+    updateApplyBtn.style.display = "none";
+    return;
+  }
+
+  statusbarVersionVal.textContent = data.current_version || "\u2013";
+  updateCurrentVersionEl.textContent = t("ui.accountDialog.currentVersion", { version: data.current_version || "?" });
+
+  if (data.error_code) {
+    statusbarUpdateBadge.style.display = "none";
+    updateStatusEl.style.display = "none";
+    updateErrorEl.textContent = window.i18n.errorText(data.error_code);
+    updateApplyBtn.style.display = "none";
+    return;
+  }
+  updateErrorEl.textContent = "";
+
+  if (data.update_available) {
+    statusbarUpdateBadge.style.display = "inline-block";
+    updateStatusEl.style.display = "block";
+    updateStatusEl.textContent = t("ui.accountDialog.updateAvailableStatus", { version: data.latest_version || "?" });
+    updateApplyBtn.style.display = "inline-block";
+    updateApplyBtn.textContent = t("ui.accountDialog.applyUpdateBtn", { version: data.latest_version || "?" });
+    updateApplyBtn.disabled = false;
+  } else {
+    statusbarUpdateBadge.style.display = "none";
+    updateStatusEl.style.display = "block";
+    updateStatusEl.textContent = t("ui.accountDialog.upToDate");
+    updateApplyBtn.style.display = "none";
+  }
+}
+
+async function checkForUpdate() {
+  updateStatusEl.style.display = "block";
+  updateStatusEl.textContent = t("ui.accountDialog.checkingUpdate");
+  updateErrorEl.textContent = "";
+  updateApplyBtn.style.display = "none";
+  try {
+    const res = await fetch("/api/update/check");
+    const data = await res.json();
+    renderUpdateInfo(data);
+  } catch (err) {
+    updateStatusEl.style.display = "none";
+    updateErrorEl.textContent = t("err._unknown");
+  }
+}
+
+function waitForRestartThenReload() {
+  // The service restarts ~1s after apply_update() returns (see
+  // update_manager.py's comment on why) - poll until it answers again,
+  // then reload so every open tab picks up the new frontend code
+  // instead of running stale JS against an already-updated backend.
+  const poll = () => {
+    fetch("/api/auth/status")
+      .then(() => window.location.reload())
+      .catch(() => setTimeout(poll, 1500));
+  };
+  setTimeout(poll, 2500);
+}
+
+async function applyUpdate() {
+  updateApplyBtn.disabled = true;
+  updateCheckBtn.disabled = true;
+  updateErrorEl.textContent = "";
+  updateStatusEl.style.display = "block";
+  updateStatusEl.textContent = t("ui.accountDialog.applyingUpdate");
+  try {
+    const res = await fetch("/api/update/apply", { method: "POST" });
+    const data = await res.json();
+    if (!data.success) {
+      updateErrorEl.textContent = window.i18n.errorText(data.error_code);
+      updateApplyBtn.disabled = false;
+      updateCheckBtn.disabled = false;
+      return;
+    }
+    updateStatusEl.textContent = t("ui.accountDialog.applySuccess", { version: data.version || "?" });
+    waitForRestartThenReload();
+  } catch (err) {
+    updateErrorEl.textContent = t("err._unknown");
+    updateApplyBtn.disabled = false;
+    updateCheckBtn.disabled = false;
+  }
+}
+
+updateCheckBtn.addEventListener("click", checkForUpdate);
+updateApplyBtn.addEventListener("click", applyUpdate);
+statusbarVersionBtn.addEventListener("click", openAccountDialog);
+
 // Kick off polling now that everything above is declared.
 loadUsers();
 setInterval(loadUsers, REFRESH_MS);
@@ -1958,3 +2077,4 @@ refresh();
 setInterval(refresh, REFRESH_MS);
 loadStatusbar();
 setInterval(loadStatusbar, STATUSBAR_REFRESH_MS);
+checkForUpdate();

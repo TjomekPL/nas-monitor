@@ -22,16 +22,25 @@ def test_get_live_stats_computes_rate_from_two_samples():
     after_net = _counters()
     after_net.bytes_sent, after_net.bytes_recv = 4096, 8192
 
+    fake_mem = MagicMock()
+    fake_mem.percent = 45.6
+    fake_mem.used = 4 * 1024 ** 3
+    fake_mem.total = 16 * 1024 ** 3
+
     fake_psutil = MagicMock()
     fake_psutil.disk_io_counters.side_effect = [before_disk, after_disk]
     fake_psutil.net_io_counters.side_effect = [before_net, after_net]
     fake_psutil.cpu_percent.return_value = 12.3
+    fake_psutil.virtual_memory.return_value = fake_mem
 
     with patch.object(system_stats, "psutil", fake_psutil):
         result = system_stats.get_live_stats(sample_ms=1000)
 
     assert result["available"] is True
     assert result["cpu_percent"] == 12.3
+    assert result["mem_percent"] == 45.6
+    assert result["mem_used_gib"] == 4.0
+    assert result["mem_total_gib"] == 16.0
     assert result["disk_read"] == {"value": 2.0, "unit": "KiB/s"}
     assert result["disk_write"] == {"value": 1.0, "unit": "KiB/s"}
     assert result["net_up"] == {"value": 4.0, "unit": "KiB/s"}

@@ -16,7 +16,7 @@ from datetime import timedelta
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
 
-from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth, system_stats
+from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth, system_stats, update_manager
 
 # Every account that gets SMB access lands here by default - removable
 # afterward like any other group (just uncheck it in the edit form).
@@ -140,6 +140,21 @@ def api_system_stats():
     # not a user-initiated action, and would drown out everything else
     # in the Log tab.
     return jsonify(system_stats.get_live_stats())
+
+
+@app.route("/api/update/check")
+def api_update_check():
+    return jsonify(update_manager.check_for_update())
+
+
+@app.route("/api/update/apply", methods=["POST"])
+def api_update_apply():
+    result = update_manager.apply_update()
+    if not result.get("success"):
+        oplog.log_event("update", "apply", "failure", params={})
+        return jsonify(result), 400
+    oplog.log_event("update", "apply", "success", params={"version": result.get("version") or "?"})
+    return jsonify(result)
 
 
 def _general_groups():

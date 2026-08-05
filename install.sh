@@ -9,14 +9,28 @@ if [[ $EUID -ne 0 ]]; then
 fi
 
 APP_DIR="/opt/nas-monitor"
+REPO_URL="https://github.com/TjomekPL/nas-monitor.git"
 
-echo "==> Instalowanie pakietów systemowych (smartmontools, mdadm, samba, sshpass, python3-venv)..."
+echo "==> Instalowanie pakietów systemowych (smartmontools, mdadm, samba, sshpass, python3-venv, git)..."
 apt-get update -qq
-apt-get install -y smartmontools mdadm samba sshpass openssh-client python3-venv acl
+apt-get install -y smartmontools mdadm samba sshpass openssh-client python3-venv acl git
 
-echo "==> Kopiowanie plików do ${APP_DIR}..."
-mkdir -p "${APP_DIR}"
-cp -r nas_monitor requirements.txt "${APP_DIR}/"
+# ${APP_DIR} is now a real git checkout, not a plain file copy - that's
+# what lets the "Zainstaluj aktualizację" button in the dashboard later
+# do a plain `git fetch` + `git reset --hard` instead of re-downloading
+# the whole project. An install from before this existed left ${APP_DIR}
+# as a directory with no .git in it; that one-time case is handled below
+# by just re-cloning fresh (nothing under ${APP_DIR} is ever real state -
+# credentials/session data live in /etc/nas-monitor, untouched by this).
+if [[ -d "${APP_DIR}/.git" ]]; then
+  echo "==> ${APP_DIR} już jest repozytorium git - pobieram najnowszą wersję..."
+  git -C "${APP_DIR}" fetch --tags --quiet origin
+  git -C "${APP_DIR}" reset --hard --quiet origin/main
+else
+  echo "==> Klonowanie repozytorium do ${APP_DIR}..."
+  rm -rf "${APP_DIR}"
+  git clone --quiet "${REPO_URL}" "${APP_DIR}"
+fi
 
 echo "==> Tworzenie virtualenv i instalacja zależności Python..."
 python3 -m venv "${APP_DIR}/venv"
@@ -73,7 +87,7 @@ else
 fi
 
 echo "==> Instalacja usługi systemd..."
-cp nas-monitor.service /etc/systemd/system/
+cp "${APP_DIR}/nas-monitor.service" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable nas-monitor
 # restart (not "enable --now") so re-running this script on an already

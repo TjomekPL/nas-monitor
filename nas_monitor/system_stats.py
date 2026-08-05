@@ -1,8 +1,8 @@
 """
 nas_monitor.system_stats
 --------------------------
-Live CPU / disk-throughput / network-throughput readout for the
-statusbar. Read-only, like nas_monitor.monitor - nothing here ever
+Live CPU / memory / disk-throughput / network-throughput readout for
+the statusbar. Read-only, like nas_monitor.monitor - nothing here ever
 writes to disk or touches system config.
 
 Disk and network counters exposed by the OS (psutil.disk_io_counters,
@@ -42,8 +42,9 @@ def _human_rate(bytes_per_sec: float) -> dict[str, Any]:
 
 
 def get_live_stats(sample_ms: int = 200) -> dict[str, Any]:
-    """CPU percent + aggregate disk read/write and network up/down
-    throughput, sampled over a `sample_ms` window. Returns
+    """CPU percent, memory percent/used/total, and aggregate disk
+    read/write and network up/down throughput, sampled over a
+    `sample_ms` window. Returns
     {"available": False, "error_code": ...} if psutil isn't installed
     or a counter genuinely isn't available on this system (e.g. no
     disk_io_counters permission in some containers) - callers show
@@ -57,10 +58,11 @@ def get_live_stats(sample_ms: int = 200) -> dict[str, Any]:
         cpu_percent = psutil.cpu_percent(interval=sample_ms / 1000)
         disk_after = psutil.disk_io_counters()
         net_after = psutil.net_io_counters()
+        mem = psutil.virtual_memory()
     except Exception:
         return {"available": False, "error_code": "statusbar.read_failed"}
 
-    if disk_before is None or disk_after is None or net_before is None or net_after is None:
+    if disk_before is None or disk_after is None or net_before is None or net_after is None or mem is None:
         return {"available": False, "error_code": "statusbar.read_failed"}
 
     elapsed = max(sample_ms / 1000, 0.001)
@@ -72,6 +74,9 @@ def get_live_stats(sample_ms: int = 200) -> dict[str, Any]:
     return {
         "available": True,
         "cpu_percent": round(cpu_percent, 1),
+        "mem_percent": round(mem.percent, 1),
+        "mem_used_gib": round(mem.used / (1024 ** 3), 1),
+        "mem_total_gib": round(mem.total / (1024 ** 3), 1),
         "disk_read": _human_rate(max(read_rate, 0)),
         "disk_write": _human_rate(max(write_rate, 0)),
         "net_up": _human_rate(max(up_rate, 0)),

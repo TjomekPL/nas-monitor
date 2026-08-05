@@ -13,10 +13,12 @@ window.NAS_I18N.pl = {
     },
     statusbar: {
       cpu: "CPU",
+      mem: "Pamięć",
       disk: "Dysk R/W",
       net: "Sieć",
       live: "na żywo",
       unavailable: "niedostępne",
+      updateAvailable: "aktualizacja",
     },
     login: {
       usernameLabel: "Nazwa użytkownika",
@@ -43,6 +45,16 @@ window.NAS_I18N.pl = {
       sessionDurationCustomLabel: "Inny (godziny)",
       saveSessionDurationBtn: "Zapisz",
       closeBtn: "Zamknij",
+      updateHeading: "Wersja",
+      checkUpdateBtn: "Sprawdź aktualizacje",
+      applyUpdateBtn: "Zainstaluj aktualizację {version}",
+      currentVersion: "Wersja: {version}",
+      checkingUpdate: "Sprawdzanie...",
+      upToDate: "Masz najnowszą wersję.",
+      updateAvailableStatus: "Dostępna aktualizacja: {version}",
+      notGitManaged: "Ta instalacja nie jest jeszcze zarządzana przez git - uruchom raz ręcznie sudo ./install.sh, żeby włączyć aktualizacje z panelu.",
+      applyingUpdate: "Instaluję aktualizację i restartuję usługę... to potrwa kilka-kilkanaście sekund.",
+      applySuccess: "Zaktualizowano do {version}. Strona odświeży się automatycznie.",
       passwordMismatch: "Nowe hasła nie są takie same",
       passwordChanged: "Hasło zmienione.",
       sessionDurationSaved: "Zapisano czas trwania sesji.",
@@ -297,6 +309,12 @@ window.NAS_I18N.pl = {
       wrong_current_password: "Obecne hasło jest nieprawidłowe",
       invalid_session_duration: "Nieprawidłowy czas trwania sesji",
     },
+    update: {
+      fetch_failed: "Nie udało się połączyć z GitHub, żeby sprawdzić aktualizacje",
+      apply_failed: "Nie udało się zastosować aktualizacji (git reset nie powiódł się)",
+      deps_failed: "Aktualizacja pobrana, ale instalacja zależności (pip) nie powiodła się",
+      not_git_managed: "Ta instalacja nie jest jeszcze zarządzana przez git - uruchom raz ręcznie sudo ./install.sh, żeby to włączyć",
+    },
     system: {
       tool_missing: "Brak wymaganego narzędzia: {tool}",
       command_failed: "Polecenie systemowe nie powiodło się: {detail}",
@@ -407,6 +425,9 @@ window.NAS_I18N.pl = {
       deploy: { success: "Wysłano klucz {username} na {target}", failure: "Nie udało się wysłać klucza {username} na {target}" },
       delete: { success: "Usunięto klucz SSH dla {username}", failure: "Nie udało się usunąć klucza SSH dla {username}" },
       remove_deployment: { success: "Usunięto klucz {username} z {target}", failure: "Nie udało się usunąć klucza {username} z {target}" },
+    },
+    update: {
+      apply: { success: "Zainstalowano aktualizację ({version})", failure: "Nie udało się zainstalować aktualizacji" },
     },
   },
 

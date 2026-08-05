@@ -143,28 +143,41 @@
 
   <footer class="statusbar" id="statusbar">
     <div class="statusbar-inner">
-      <div class="statusbar-seg" id="stat-cpu">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
-        <div class="statusbar-text">
-          <span class="statusbar-label" data-i18n="ui.statusbar.cpu">CPU</span>
-          <span class="statusbar-value mono" id="stat-cpu-val">&ndash;</span>
+      <div class="statusbar-stats">
+        <div class="statusbar-seg" id="stat-cpu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+          <div class="statusbar-text">
+            <span class="statusbar-label" data-i18n="ui.statusbar.cpu">CPU</span>
+            <span class="statusbar-value mono" id="stat-cpu-val">&ndash;</span>
+          </div>
         </div>
-      </div>
-      <div class="statusbar-seg" id="stat-disk">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>
-        <div class="statusbar-text">
-          <span class="statusbar-label" data-i18n="ui.statusbar.disk">Dysk R/W</span>
-          <span class="statusbar-value mono" id="stat-disk-val">&ndash;</span>
+        <div class="statusbar-seg" id="stat-mem">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="10" rx="1"/><path d="M8 7V4M12 7V4M16 7V4M8 20v-3M12 20v-3M16 20v-3"/></svg>
+          <div class="statusbar-text">
+            <span class="statusbar-label" data-i18n="ui.statusbar.mem">Pamięć</span>
+            <span class="statusbar-value mono" id="stat-mem-val">&ndash;</span>
+          </div>
         </div>
-      </div>
-      <div class="statusbar-seg" id="stat-net">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 17V7M8 7l-3 3M8 7l3 3M16 7v10M16 17l3-3M16 17l-3-3"/></svg>
-        <div class="statusbar-text">
-          <span class="statusbar-label" data-i18n="ui.statusbar.net">Sieć</span>
-          <span class="statusbar-value mono" id="stat-net-val">&ndash;</span>
+        <div class="statusbar-seg" id="stat-disk">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>
+          <div class="statusbar-text">
+            <span class="statusbar-label" data-i18n="ui.statusbar.disk">Dysk R/W</span>
+            <span class="statusbar-value mono" id="stat-disk-val">&ndash;</span>
+          </div>
+        </div>
+        <div class="statusbar-seg" id="stat-net">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 17V7M8 7l-3 3M8 7l3 3M16 7v10M16 17l3-3M16 17l-3-3"/></svg>
+          <div class="statusbar-text">
+            <span class="statusbar-label" data-i18n="ui.statusbar.net">Sieć</span>
+            <span class="statusbar-value mono" id="stat-net-val">&ndash;</span>
+          </div>
         </div>
       </div>
       <div class="statusbar-spacer"></div>
+      <button type="button" class="statusbar-seg statusbar-version" id="statusbar-version-btn" title="">
+        <span id="statusbar-version-val" class="mono">&ndash;</span>
+        <span class="pill pill-warn" id="statusbar-update-badge" style="display:none;" data-i18n="ui.statusbar.updateAvailable">aktualizacja</span>
+      </button>
       <div class="statusbar-seg statusbar-live">
         <span class="dot" id="statusbar-dot"></span>
         <span data-i18n="ui.statusbar.live">na żywo</span>
@@ -384,6 +397,17 @@
         <button type="submit" class="btn-primary" data-i18n="ui.accountDialog.saveSessionDurationBtn">Zapisz</button>
       </div>
     </form>
+
+    <div class="account-section" id="update-section">
+      <h4 data-i18n="ui.accountDialog.updateHeading">Wersja</h4>
+      <p class="field-hint" id="update-current-version">&ndash;</p>
+      <p class="field-hint" id="update-status" style="display:none;"></p>
+      <p class="form-error" id="update-error"></p>
+      <div class="dialog-actions">
+        <button type="button" id="update-check-btn" class="link-btn" data-i18n="ui.accountDialog.checkUpdateBtn">Sprawdź aktualizacje</button>
+        <button type="button" id="update-apply-btn" class="btn-primary" style="display:none;"></button>
+      </div>
+    </div>
 
     <div class="dialog-actions">
       <button type="button" id="logout-btn" class="link-btn danger" data-i18n="ui.header.logoutBtn">Wyloguj</button>
