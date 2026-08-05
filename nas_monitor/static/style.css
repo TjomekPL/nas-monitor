@@ -318,6 +318,13 @@ main {
   font-variant-numeric: tabular-nums;
   display: inline-block; /* min-width below only applies to a box, not
     an inline span - without this the reserved width is ignored */
+  /* .mono (applied in the HTML for the monospace digits) also carries a
+     pill look - background/padding/rounded corners - meant for inline
+     code snippets elsewhere in the app. Cancel that here: keep the
+     monospace font only, no pill background behind every number. */
+  background: none;
+  padding: 0;
+  border-radius: 0;
 }
 /* Each value gets a reserved width sized for its own worst case, in ch
    (they're all .mono, so 1ch = 1 fixed-width monospace digit) - not one
@@ -355,6 +362,11 @@ main {
   cursor: pointer;
   font-size: 12px;
   padding: 7px 14px;
+  justify-content: flex-end; /* the box is fixed-width to reserve room
+    for the "update available" pill (see comment on flex-basis below),
+    so with no pill shown the version text would otherwise sit alone at
+    the box's left edge, "floating" in the middle of the bar instead of
+    reading as anchored to the live indicator next to it */
   flex: 0 0 150px; /* reserves room for the version tag plus the "update
     available" pill, which toggles on/off - fixed so that toggle doesn't
     shift the live indicator next to it */
