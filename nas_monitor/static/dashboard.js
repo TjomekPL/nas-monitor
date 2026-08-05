@@ -1934,20 +1934,31 @@ async function loadStatusbar() {
     const res = await fetch("/api/system-stats");
     const data = await res.json();
     if (!data.available) {
-      document.getElementById("stat-cpu-val").textContent = t("ui.statusbar.unavailable");
-      document.getElementById("stat-mem-val").textContent = t("ui.statusbar.unavailable");
-      document.getElementById("stat-disk-val").textContent = t("ui.statusbar.unavailable");
-      document.getElementById("stat-net-val").textContent = t("ui.statusbar.unavailable");
+      // Keep the plain "unavailable" text in all four value boxes - they
+      // have fixed reserved widths (see CSS) sized for short numbers, so
+      // splicing the longer error detail into one of them would just get
+      // clipped. The detail goes in a title tooltip instead.
+      const detail = data.error_code ? window.i18n.errorText(data.error_code) : "";
+      for (const id of ["stat-cpu-val", "stat-mem-val", "stat-disk-val", "stat-net-val"]) {
+        const el = document.getElementById(id);
+        el.textContent = t("ui.statusbar.unavailable");
+        el.title = detail;
+      }
       if (dot) dot.style.background = "var(--crit)";
       return;
     }
     document.getElementById("stat-cpu-val").textContent = `${data.cpu_percent.toFixed(1)}%`;
+    document.getElementById("stat-cpu-val").title = "";
     const memEl = document.getElementById("stat-mem-val");
     memEl.textContent = `${data.mem_percent.toFixed(1)}%`;
     memEl.title = `${data.mem_used_gib} / ${data.mem_total_gib} GiB`;
-    document.getElementById("stat-disk-val").innerHTML =
+    const diskEl = document.getElementById("stat-disk-val");
+    diskEl.title = "";
+    diskEl.innerHTML =
       `<span class="up">R ${formatRate(data.disk_read)}</span><span class="sep">/</span><span class="down">W ${formatRate(data.disk_write)}</span>`;
-    document.getElementById("stat-net-val").innerHTML =
+    const netEl = document.getElementById("stat-net-val");
+    netEl.title = "";
+    netEl.innerHTML =
       `<span class="up">\u2191 ${formatRate(data.net_up)}</span><span class="sep">/</span><span class="down">\u2193 ${formatRate(data.net_down)}</span>`;
     if (dot) dot.style.background = "var(--ok)";
   } catch (err) {

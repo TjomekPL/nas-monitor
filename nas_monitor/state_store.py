@@ -35,13 +35,19 @@ def load(filename: str, default: Any = None) -> Any:
 
 
 def save(filename: str, data: Any) -> dict[str, Any]:
-    """Write a JSON file to STATE_DIR, creating the directory if needed."""
+    """Write a JSON file to STATE_DIR, creating the directory if needed.
+    Restricted to owner-only (0600) - most of what lives here is either
+    a credential (password hash, session-signing key) or otherwise not
+    meant for any other local account to read. The directory itself is
+    already 0700 (root-only), so this is defense in depth rather than
+    the only thing standing in the way."""
     result = {"success": False, "error": None}
     path = os.path.join(STATE_DIR, filename)
     try:
         os.makedirs(STATE_DIR, mode=0o700, exist_ok=True)
         tmp_path = path + ".tmp"
-        with open(tmp_path, "w") as fh:
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as fh:
             json.dump(data, fh, indent=2)
         os.replace(tmp_path, path)  # atomic - never leaves a half-written file
     except OSError as exc:

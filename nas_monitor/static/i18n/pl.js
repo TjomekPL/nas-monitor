@@ -298,8 +298,13 @@ window.NAS_I18N.pl = {
 
   err: {
     _unknown: "Wystąpił nieoczekiwany błąd.",
+    statusbar: {
+      psutil_missing: "biblioteka psutil nie jest zainstalowana",
+      read_failed: "nie udało się odczytać danych systemowych",
+    },
     auth: {
       invalid_credentials: "Nieprawidłowa nazwa użytkownika lub hasło",
+      locked_out: "Zbyt wiele nieudanych prób logowania - spróbuj ponownie za {seconds} s",
       login_required: "Wymagane zalogowanie",
       password_too_short: "Hasło musi mieć co najmniej {min_length} znaków",
       password_needs_letter: "Hasło musi zawierać przynajmniej jedną literę",
@@ -352,7 +357,6 @@ window.NAS_I18N.pl = {
       main_conf_parse_failed: "Nie udało się sparsować {path}: {detail}",
     },
     ssh_keys: {
-      login_disabled: "To konto ma wyłączone logowanie (nologin) - klucz SSH nic by nie dał. Włącz logowanie/SSH przy edycji użytkownika, jeśli to konto ma używać rsync przez SSH.",
       already_exists: "Klucz dla '{username}' już istnieje - usuń go najpierw, jeśli chcesz wygenerować nowy",
       empty_remote_password: "Puste hasło zdalnego konta",
       invalid_remote_host: "Nieprawidłowa nazwa/adres zdalnego hosta",

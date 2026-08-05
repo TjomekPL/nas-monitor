@@ -218,5 +218,69 @@ class TestSecretKey(AuthTestCase):
         self.assertEqual(on_disk, results[0])
 
 
+class TestLoginRateLimiting(AuthTestCase):
+    def test_not_locked_out_with_no_history(self):
+        locked, remaining = auth.is_locked_out("admin")
+        self.assertFalse(locked)
+        self.assertEqual(remaining, 0)
+
+    def test_not_locked_out_below_threshold(self):
+        for _ in range(auth.MAX_LOGIN_ATTEMPTS - 1):
+            auth.record_failed_login("admin")
+        locked, _ = auth.is_locked_out("admin")
+        self.assertFalse(locked)
+
+    def test_locks_out_at_threshold(self):
+        for _ in range(auth.MAX_LOGIN_ATTEMPTS):
+            auth.record_failed_login("admin")
+        locked, remaining = auth.is_locked_out("admin")
+        self.assertTrue(locked)
+        self.assertGreater(remaining, 0)
+        self.assertLessEqual(remaining, auth.LOGIN_LOCKOUT_SECONDS)
+
+    def test_lockout_is_per_username_not_global(self):
+        for _ in range(auth.MAX_LOGIN_ATTEMPTS):
+            auth.record_failed_login("admin")
+        locked, _ = auth.is_locked_out("someone-else")
+        self.assertFalse(locked, "a lockout on one username must not affect another")
+
+    def test_successful_login_clears_history(self):
+        for _ in range(auth.MAX_LOGIN_ATTEMPTS - 1):
+            auth.record_failed_login("admin")
+        auth.clear_login_attempts("admin")
+        for _ in range(auth.MAX_LOGIN_ATTEMPTS - 1):
+            auth.record_failed_login("admin")
+        # needed the full threshold again after clearing - the earlier
+        # near-miss attempts must not carry over
+        locked, _ = auth.is_locked_out("admin")
+        self.assertFalse(locked)
+
+    def test_lockout_expires_after_lockout_window(self):
+        with mock.patch("nas_monitor.auth.time.time") as mock_time:
+            mock_time.return_value = 1000.0
+            for _ in range(auth.MAX_LOGIN_ATTEMPTS):
+                auth.record_failed_login("admin")
+            locked, _ = auth.is_locked_out("admin")
+            self.assertTrue(locked)
+
+            mock_time.return_value = 1000.0 + auth.LOGIN_LOCKOUT_SECONDS + 1
+            locked, remaining = auth.is_locked_out("admin")
+            self.assertFalse(locked)
+            self.assertEqual(remaining, 0)
+
+    def test_old_failures_outside_window_do_not_accumulate(self):
+        with mock.patch("nas_monitor.auth.time.time") as mock_time:
+            mock_time.return_value = 1000.0
+            for _ in range(auth.MAX_LOGIN_ATTEMPTS - 1):
+                auth.record_failed_login("admin")
+
+            # a single stale failure long after the window shouldn't add
+            # to the earlier near-miss count
+            mock_time.return_value = 1000.0 + auth.LOGIN_ATTEMPT_WINDOW_SECONDS + 60
+            auth.record_failed_login("admin")
+            locked, _ = auth.is_locked_out("admin")
+            self.assertFalse(locked)
+
+
 if __name__ == "__main__":
     unittest.main()

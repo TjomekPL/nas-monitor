@@ -785,8 +785,7 @@ form legend {
   color: var(--text-muted);
   padding: 0 4px;
 }
-form label.inline,
-form label.checkbox-row {
+form label.inline {
   display: flex;
   align-items: center;
   gap: 6px;

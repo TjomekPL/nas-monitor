@@ -208,18 +208,6 @@ class TestDetectBackend(unittest.TestCase):
         self.assertEqual(network.detect_backend(), "unknown")
 
 
-class TestGetDnsServers(unittest.TestCase):
-    @mock.patch("nas_monitor.network.os.path.isfile", return_value=True)
-    def test_parses_nameserver_lines(self, mock_isfile):
-        content = "nameserver 8.8.8.8\nnameserver 1.1.1.1\nsearch example.com\n"
-        with mock.patch("builtins.open", mock.mock_open(read_data=content)):
-            self.assertEqual(network.get_dns_servers(), ["8.8.8.8", "1.1.1.1"])
-
-    @mock.patch("nas_monitor.network.os.path.isfile", return_value=False)
-    def test_missing_resolv_conf(self, mock_isfile):
-        self.assertEqual(network.get_dns_servers(), [])
-
-
 class TestInterfaceDnsServers(unittest.TestCase):
     """Per-connection DNS via nmcli - deliberately NOT /etc/resolv.conf,
     which reflects one merged system-wide resolver (whichever interface/

@@ -28,6 +28,14 @@ DEFAULT_SMB_GROUP = "smb_users"
 
 app = Flask(__name__)
 app.secret_key = auth.get_or_create_secret_key()
+# Not Strict: Strict would also drop the cookie on a plain top-level link
+# click into the dashboard from outside it (e.g. a bookmark opened in a
+# new tab counts as "cross-site" to some browsers' Strict handling),
+# which would just look like a random extra login prompt for no reason.
+# Lax still blocks the case that actually matters here - a cross-site
+# POST (the only way any state-changing endpoint in this app is ever
+# reached) - since Lax only forwards cookies on top-level GET navigation.
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 network_mutate.check_and_recover_on_startup()
 
 
@@ -58,10 +66,17 @@ def login():
     username = (data.get("username") or "").strip()
     password = data.get("password") or ""
 
+    locked, seconds_remaining = auth.is_locked_out(username)
+    if locked:
+        oplog.log_event("auth", "login", "failure", params={"username": username, "reason": "locked_out"})
+        return jsonify({"success": False, "error_code": "auth.locked_out", "error_context": {"seconds": seconds_remaining}}), 429
+
     if not auth.verify_credentials(username, password):
+        auth.record_failed_login(username)
         oplog.log_event("auth", "login", "failure", params={"username": username})
         return jsonify({"success": False, "error_code": "auth.invalid_credentials", "error_context": {}}), 401
 
+    auth.clear_login_attempts(username)
     session.clear()
     session["authenticated"] = True
     session["username"] = username

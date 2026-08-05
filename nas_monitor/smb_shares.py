@@ -73,10 +73,6 @@ def _missing_smb_password_warning(usernames: list[str]) -> dict[str, Any] | None
     return {"code": "shares.missing_smb_password", "context": {"usernames": ", ".join(missing)}}
 
 
-def is_installed() -> bool:
-    return os.path.isfile(MAIN_SMB_CONF)
-
-
 def _is_group_ref(token: str) -> bool:
     """Samba treats a leading '@' or '+' as marking a group reference in
     valid users / read list / write list (see _render_managed_shares for

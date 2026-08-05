@@ -19,10 +19,6 @@ from typing import Any
 from nas_monitor import system_tools, errors
 
 
-def is_installed() -> bool:
-    return system_tools.find_binary("smbpasswd") is not None
-
-
 def list_samba_users() -> dict[str, Any]:
     """Usernames with SMB access configured, via pdbedit -L.
 

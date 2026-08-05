@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import time
 from typing import Any
 
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -42,9 +43,22 @@ from nas_monitor import state_store, errors
 
 CREDENTIALS_FILE = "auth-credentials.json"
 SECRET_KEY_FILE = "auth-secret-key.json"
+LOGIN_ATTEMPTS_FILE = "auth-login-attempts.json"
 
 MIN_PASSWORD_LENGTH = 10
-DEFAULT_USERNAME = "admin"
+
+# Login brute-force guard. Keyed by username, not source IP - this tool
+# has exactly one admin account, so limiting guesses against that
+# username is what actually matters (an IP-based limit would be easy to
+# sidestep on a LAN behind NAT, and adds nothing here). Persisted via
+# state_store like everything else that needs to survive across
+# gunicorn's worker processes (see get_or_create_secret_key's docstring
+# for the same multi-worker concern) - an in-memory counter would reset
+# per-worker and let an attacker get MAX_ATTEMPTS tries per worker
+# instead of in total.
+MAX_LOGIN_ATTEMPTS = 5
+LOGIN_ATTEMPT_WINDOW_SECONDS = 300
+LOGIN_LOCKOUT_SECONDS = 300
 
 
 def auth_enabled() -> bool:
@@ -118,6 +132,49 @@ def verify_credentials(username: str, password: str) -> bool:
     if username != data.get("username"):
         return False
     return check_password_hash(data.get("password_hash", ""), password)
+
+
+def is_locked_out(username: str) -> tuple[bool, int]:
+    """(locked, seconds_remaining). Called before verify_credentials so a
+    lockout skips the password check entirely - not that checking it
+    would be expensive, but there's no reason to do it at all once a
+    username is locked."""
+    attempts = state_store.load(LOGIN_ATTEMPTS_FILE, default={})
+    entry = attempts.get(username)
+    if not entry:
+        return False, 0
+    remaining = entry.get("locked_until", 0) - time.time()
+    return (remaining > 0, int(remaining) + 1 if remaining > 0 else 0)
+
+
+def record_failed_login(username: str) -> None:
+    """Bump the failure count for username, resetting it first if the
+    last failure was outside the rolling window (so a handful of typos
+    weeks apart never accumulates into a lockout). Hitting the threshold
+    sets locked_until and starts the count fresh for whenever the
+    lockout expires."""
+    attempts = state_store.load(LOGIN_ATTEMPTS_FILE, default={})
+    now = time.time()
+    entry = attempts.get(username) or {"count": 0, "window_start": now}
+    if now - entry.get("window_start", now) > LOGIN_ATTEMPT_WINDOW_SECONDS:
+        entry = {"count": 0, "window_start": now}
+    entry["count"] += 1
+    if entry["count"] >= MAX_LOGIN_ATTEMPTS:
+        entry["locked_until"] = now + LOGIN_LOCKOUT_SECONDS
+        entry["count"] = 0
+        entry["window_start"] = now
+    attempts[username] = entry
+    state_store.save(LOGIN_ATTEMPTS_FILE, attempts)
+
+
+def clear_login_attempts(username: str) -> None:
+    """Called on a successful login - a legitimate login is the clearest
+    possible signal that whatever failures preceded it weren't an
+    attack in progress."""
+    attempts = state_store.load(LOGIN_ATTEMPTS_FILE, default={})
+    if username in attempts:
+        del attempts[username]
+        state_store.save(LOGIN_ATTEMPTS_FILE, attempts)
 
 
 def change_password(current_password: str, new_password: str) -> dict[str, Any]:
@@ -200,6 +257,7 @@ def get_or_create_secret_key() -> str:
 
     with open(tmp_path, "w") as f:
         json.dump({"key": secrets.token_hex(32)}, f)
+    os.chmod(tmp_path, 0o600)
     try:
         os.link(tmp_path, final_path)
     except FileExistsError:

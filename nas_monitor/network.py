@@ -23,7 +23,6 @@ from typing import Any
 
 from nas_monitor import system_tools, errors
 
-RESOLV_CONF = "/etc/resolv.conf"
 HOSTNAME_FILE = "/etc/hostname"
 
 
@@ -218,25 +217,6 @@ def _default_gateways() -> dict[str, str]:
     except json.JSONDecodeError:
         return {}
     return {r["dev"]: r["gateway"] for r in routes if "dev" in r and "gateway" in r}
-
-
-def get_dns_servers() -> list[str]:
-    """Parse /etc/resolv.conf - works whether it's hand-written, written by
-    a DHCP client, or a symlink to systemd-resolved's generated file."""
-    if not os.path.isfile(RESOLV_CONF):
-        return []
-    servers = []
-    try:
-        with open(RESOLV_CONF, "r") as fh:
-            for line in fh:
-                line = line.strip()
-                if line.startswith("nameserver"):
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        servers.append(parts[1])
-    except OSError:
-        pass
-    return servers
 
 
 def get_status() -> dict[str, Any]:

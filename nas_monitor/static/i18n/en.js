@@ -298,8 +298,13 @@ window.NAS_I18N.en = {
 
   err: {
     _unknown: "An unexpected error occurred.",
+    statusbar: {
+      psutil_missing: "the psutil library isn't installed",
+      read_failed: "failed to read system stats",
+    },
     auth: {
       invalid_credentials: "Invalid username or password",
+      locked_out: "Too many failed login attempts - try again in {seconds}s",
       login_required: "Login required",
       password_too_short: "Password must be at least {min_length} characters",
       password_needs_letter: "Password must contain at least one letter",
@@ -352,7 +357,6 @@ window.NAS_I18N.en = {
       main_conf_parse_failed: "Couldn't parse {path}: {detail}",
     },
     ssh_keys: {
-      login_disabled: "This account has login disabled (nologin) - an SSH key wouldn't do anything. Enable login/SSH in the user's edit screen if this account needs to use rsync over SSH.",
       already_exists: "A key for '{username}' already exists - remove it first if you want to generate a new one",
       empty_remote_password: "Empty remote account password",
       invalid_remote_host: "Invalid remote host name/address",
