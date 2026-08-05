@@ -431,6 +431,19 @@
     </form>
   </dialog>
 
+  <dialog id="group-members-dialog">
+    <form id="group-members-form" method="dialog">
+      <h3 data-i18n="ui.groupMembersDialog.title">Członkowie grupy</h3>
+      <p class="field-hint" id="group-members-group-name"></p>
+      <div class="groups-checklist" id="group-members-checklist"></div>
+      <p class="form-error" id="group-members-error"></p>
+      <div class="dialog-actions">
+        <button type="button" id="group-members-cancel" data-i18n="ui.groupMembersDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="group-members-submit" class="btn-primary" data-i18n="ui.groupMembersDialog.saveBtn">Zapisz</button>
+      </div>
+    </form>
+  </dialog>
+
   <template id="raid-card-template">
     <article class="card">
       <div class="card-head">
@@ -487,6 +500,7 @@
       <td class="display-name mono"></td>
       <td class="members"></td>
       <td class="row-actions">
+        <button type="button" class="link-btn edit-members-btn" data-i18n="ui.groups.editMembersBtn">Edytuj</button>
         <button type="button" class="link-btn danger delete-btn" data-i18n="ui.groups.deleteBtn">Usuń</button>
       </td>
     </tr>

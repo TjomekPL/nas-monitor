@@ -821,6 +821,15 @@ const groupError = document.getElementById("group-error");
 const groupNameInput = document.getElementById("new-group-dialog-name");
 const groupSubmitBtn = document.getElementById("group-submit");
 
+const groupMembersDialog = document.getElementById("group-members-dialog");
+const groupMembersForm = document.getElementById("group-members-form");
+const groupMembersCancel = document.getElementById("group-members-cancel");
+const groupMembersError = document.getElementById("group-members-error");
+const groupMembersGroupName = document.getElementById("group-members-group-name");
+const groupMembersChecklist = document.getElementById("group-members-checklist");
+const groupMembersSubmitBtn = document.getElementById("group-members-submit");
+let editingGroupName = null;
+
 function renderGroups(groupsList) {
   groupsContainer.innerHTML = "";
   if (!groupsList.length) {
@@ -835,6 +844,7 @@ function renderGroups(groupsList) {
     window.i18n.applyTranslations(row);
     row.querySelector(".display-name").textContent = g.name;
     row.querySelector(".members").textContent = g.members && g.members.length ? g.members.join(", ") : t("ui.groups.noMembers");
+    row.querySelector(".edit-members-btn").addEventListener("click", () => openGroupMembersDialog(g));
     row.querySelector(".delete-btn").addEventListener("click", () => deleteGroup(g.name));
     tbody.appendChild(row);
   }
@@ -843,7 +853,7 @@ function renderGroups(groupsList) {
 }
 
 async function loadGroups() {
-  if (groupDialog.open) return;
+  if (groupDialog.open || groupMembersDialog.open) return;
   try {
     const res = await fetch("/api/groups");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -905,6 +915,63 @@ async function deleteGroup(name) {
     showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
   }
 }
+
+function openGroupMembersDialog(group) {
+  editingGroupName = group.name;
+  groupMembersError.textContent = "";
+  groupMembersGroupName.textContent = group.name;
+  const currentMembers = new Set(group.members || []);
+  groupMembersChecklist.innerHTML = "";
+  if (!lastKnownUsersData.length) {
+    const p = document.createElement("p");
+    p.className = "empty-state";
+    p.textContent = t("ui.groupMembersDialog.noUsersHint");
+    groupMembersChecklist.appendChild(p);
+  } else {
+    for (const u of lastKnownUsersData) {
+      const label = document.createElement("label");
+      label.className = "inline";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = u.username;
+      cb.name = "member";
+      cb.checked = currentMembers.has(u.username);
+      label.appendChild(cb);
+      label.append(` ${u.display_name || u.username}`);
+      groupMembersChecklist.appendChild(label);
+    }
+  }
+  groupMembersDialog.showModal();
+}
+
+groupMembersCancel.addEventListener("click", () => groupMembersDialog.close());
+
+groupMembersForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  groupMembersError.textContent = "";
+  const usernames = Array.from(groupMembersChecklist.querySelectorAll('input[name="member"]:checked')).map((cb) => cb.value);
+
+  groupMembersSubmitBtn.disabled = true;
+  try {
+    const res = await fetch(`/api/groups/${encodeURIComponent(editingGroupName)}/members`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ usernames }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      groupMembersError.textContent = apiErrorMessage(data, res);
+      return;
+    }
+    groupMembersDialog.close();
+    await loadGroups();
+    await loadUsers();
+  } catch (err) {
+    groupMembersError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
+  } finally {
+    groupMembersSubmitBtn.disabled = false;
+  }
+});
 
 loadGroups();
 setInterval(loadGroups, REFRESH_MS);

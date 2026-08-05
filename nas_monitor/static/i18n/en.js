@@ -105,8 +105,15 @@ window.NAS_I18N.en = {
       addBtn: "+ Add group",
       colName: "Name",
       colMembers: "Members",
+      editMembersBtn: "Edit",
       deleteBtn: "Delete",
       noMembers: "\u2013 (none)",
+    },
+    groupMembersDialog: {
+      title: "Group members",
+      cancelBtn: "Cancel",
+      saveBtn: "Save",
+      noUsersHint: "No users available to add.",
     },
     certs: {
       heading: "Certificates (SSH keys)",
@@ -413,6 +420,7 @@ window.NAS_I18N.en = {
     groups: {
       create: { success: "Created group {name}", failure: "Failed to create group {name}" },
       delete: { success: "Deleted group {name}", failure: "Failed to delete group {name}" },
+      update_members: { success: "Updated members of {name}", failure: "Failed to update members of {name} ({username})" },
     },
     users: {
       create: { success: "Created user {username}", failure: "Failed to create user {username}" },

@@ -255,6 +255,48 @@ def api_groups_delete(name):
     return jsonify({"success": True})
 
 
+@app.route("/api/groups/<name>/members", methods=["POST"])
+def api_groups_set_members(name):
+    # Same guard as delete - this tab must never touch a share's own
+    # auto-managed access group, direct API call or not.
+    share_access_groups = {
+        s["access_group"] for s in smb_shares.list_shares().get("shares", []) if s.get("access_group")
+    }
+    if name in share_access_groups:
+        return jsonify({"success": False, "error_code": "groups.is_share_access_group", "error_context": {"group": name}}), 400
+
+    existing = {g["name"]: g for g in users.list_system_groups()}
+    if name not in existing:
+        return jsonify({"success": False, "error_code": "users.group_not_found", "error_context": {"group": name}}), 404
+
+    data = request.get_json(force=True, silent=True) or {}
+    desired = {u.strip() for u in (data.get("usernames") or []) if u.strip()}
+    current = set(existing[name]["members"])
+
+    # add_user_to_group/remove_user_from_group each touch exactly one
+    # membership without disturbing the rest of that user's groups (see
+    # their docstrings) - applying only the actual diff, rather than
+    # e.g. removing everyone and re-adding the desired set, means a
+    # failure partway through still leaves every untouched membership
+    # exactly as it was.
+    for username in sorted(desired - current):
+        result = users.add_user_to_group(username, name)
+        if not result["success"]:
+            oplog.log_event("groups", "update_members", "failure", params={"name": name, "username": username})
+            return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    for username in sorted(current - desired):
+        result = users.remove_user_from_group(username, name)
+        if not result["success"]:
+            oplog.log_event("groups", "update_members", "failure", params={"name": name, "username": username})
+            return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+
+    oplog.log_event(
+        "groups", "update_members", "success",
+        params={"name": name, "added": sorted(desired - current), "removed": sorted(current - desired)},
+    )
+    return jsonify({"success": True})
+
+
 @app.route("/api/users/create", methods=["POST"])
 def api_users_create():
     data = request.get_json(force=True, silent=True) or {}
