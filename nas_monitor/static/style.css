@@ -1,0 +1,1053 @@
+/* ---------------------------------------------------------------------
+   Design tokens
+   Light: soft graphite off-white, never stark #fff for the page bg.
+   Dark: deep graphite, never pure #000 - both stay a touch cool/neutral
+   rather than warm, fitting a technical control-panel subject. Accent is
+   a steel-blue, deliberately distinct from the ok/warn/crit traffic-light
+   trio used for health status, so "primary action" never reads as
+   "everything is fine".
+   ------------------------------------------------------------------- */
+
+:root,
+:root[data-theme="light"] {
+  --bg: #f0f2f1;
+  --surface: #ffffff;
+  --surface-2: #f6f7f6;
+  --border: #dce1de;
+  --text: #191d1b;
+  --text-muted: #5c645e;
+  --mono-bg: #eaece9;
+  --shadow: 0 1px 2px rgba(25, 29, 27, 0.04), 0 4px 14px rgba(25, 29, 27, 0.06);
+
+  --accent: #3a6ea5;
+  --accent-contrast: #ffffff;
+
+  --ok: #1f7a4d;
+  --ok-bg: #e5f4ec;
+  --warn: #92600a;
+  --warn-bg: #fbf0dc;
+  --crit: #a2312a;
+  --crit-bg: #fbe8e6;
+  --unknown: #6a6d68;
+  --unknown-bg: #ececea;
+}
+
+:root[data-theme="dark"] {
+  --bg: #14171a;
+  --surface: #1b1f23;
+  --surface-2: #22262a;
+  --border: #2e3338;
+  --text: #e7e9e6;
+  --text-muted: #9aa09b;
+  --mono-bg: #202428;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 6px 20px rgba(0, 0, 0, 0.28);
+
+  --accent: #7fa8d6;
+  --accent-contrast: #0e1418;
+
+  --ok: #5fcf93;
+  --ok-bg: #172922;
+  --warn: #e0ac47;
+  --warn-bg: #2b2312;
+  --crit: #e8756d;
+  --crit-bg: #2c1815;
+  --unknown: #a3a69c;
+  --unknown-bg: #23251d;
+}
+
+/* Falls back to the OS preference only until the person picks explicitly
+   (see dashboard.js) - data-theme above always wins once set. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14171a;
+    --surface: #1b1f23;
+    --surface-2: #22262a;
+    --border: #2e3338;
+    --text: #e7e9e6;
+    --text-muted: #9aa09b;
+    --mono-bg: #202428;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 6px 20px rgba(0, 0, 0, 0.28);
+    --accent: #7fa8d6;
+    --accent-contrast: #0e1418;
+    --ok: #5fcf93;
+    --ok-bg: #172922;
+    --warn: #e0ac47;
+    --warn-bg: #2b2312;
+    --crit: #e8756d;
+    --crit-bg: #2c1815;
+    --unknown: #a3a69c;
+    --unknown-bg: #23251d;
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { color-scheme: light dark; }
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  line-height: 1.45;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.mono {
+  font-family: "SF Mono", "Cascadia Code", Consolas, monospace;
+  background: var(--mono-bg);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+/* ---------------------------------------------------------------------
+   Shell - centered column, header spans full width above it
+   ------------------------------------------------------------------- */
+
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 22px max(24px, calc((100% - 1080px) / 2));
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  position: relative;
+  overflow: hidden;
+  /* Photo background + a fixed dark gradient scrim on top - the gradient
+     is deliberately NOT theme-dependent (always dark) because it exists
+     purely to guarantee the always-light header text stays readable
+     against whatever part of the photo shows through, in both themes.
+     background-size:cover + a left-weighted position keeps the lit
+     drive bay in frame at any viewport width, since a wide/short header
+     strip only ever shows a horizontal slice of the source photo. */
+  background-image:
+    linear-gradient(100deg, rgba(8, 12, 18, 0.86) 0%, rgba(8, 12, 18, 0.62) 45%, rgba(8, 12, 18, 0.78) 100%),
+    url("img/header-bg.jpg");
+  background-size: cover;
+  background-position: left 30%;
+  background-repeat: no-repeat;
+  color: #f2f4f6;
+}
+
+.top h1,
+.top .subtitle,
+.top .refresh-info,
+.top .lang-toggle,
+.top .theme-toggle {
+  color: #f2f4f6;
+}
+.top .subtitle,
+.top .refresh-info { color: rgba(242, 244, 246, 0.75); }
+.top .lang-toggle,
+.top .theme-toggle {
+  border-color: rgba(242, 244, 246, 0.35);
+  background: rgba(20, 24, 30, 0.35);
+}
+.top .lang-toggle:hover,
+.top .theme-toggle:hover {
+  background: rgba(242, 244, 246, 0.14);
+  border-color: rgba(242, 244, 246, 0.6);
+}
+
+h1 { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: -0.01em; }
+.subtitle { margin: 4px 0 0; color: var(--text-muted); font-size: 13.5px; }
+
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.refresh-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  font-family: "SF Mono", Consolas, monospace;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  flex-shrink: 0;
+  animation: breathe 3s ease-in-out infinite;
+}
+.dot.stale { background: var(--crit); animation: none; }
+
+@keyframes breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.theme-toggle:hover { border-color: var(--accent); }
+.theme-toggle svg { width: 16px; height: 16px; }
+
+.lang-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.lang-toggle:hover { border-color: var(--accent); }
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 max(24px, calc((100% - 1080px) / 2));
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.tab-btn {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 12px 14px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
+
+main {
+  max-width: 1080px;
+  margin: 0 auto;
+  /* bottom padding leaves room for the fixed statusbar so the last card
+     row never sits under it */
+  padding: 8px 24px 92px;
+}
+
+/* ---------------------------------------------------------------------
+   Statusbar - fixed footer, live CPU/disk/network readout, visible on
+   every tab (it lives outside <main>, not inside any .tab-panel, so
+   switching tabs never remounts or interrupts it)
+   ------------------------------------------------------------------- */
+
+.statusbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  box-shadow: 0 -1px 3px rgba(0, 0, 0, 0.06);
+}
+
+.statusbar-inner {
+  display: flex;
+  align-items: stretch;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+.statusbar-stats {
+  display: flex;
+}
+
+.statusbar-seg {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 18px;
+  border-right: 1px solid var(--border);
+  color: var(--text-muted);
+  overflow: hidden;
+}
+.statusbar-stats .statusbar-seg:first-child { padding-left: 0; }
+.statusbar-stats .statusbar-seg { flex-shrink: 0; } /* never squeeze below
+  the value's reserved ch width - if it doesn't fit, the breakpoints
+  below remove a whole segment instead of letting this one get squashed */
+.statusbar-seg svg { width: 16px; height: 16px; flex-shrink: 0; }
+
+.statusbar-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+}
+.statusbar-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+.statusbar-value {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+  display: inline-block; /* min-width below only applies to a box, not
+    an inline span - without this the reserved width is ignored */
+  /* .mono (applied in the HTML for the monospace digits) also carries a
+     pill look - background/padding/rounded corners - meant for inline
+     code snippets elsewhere in the app. Cancel that here: keep the
+     monospace font only, no pill background behind every number. */
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+/* Each value gets a reserved width sized for its own worst case, in ch
+   (they're all .mono, so 1ch = 1 fixed-width monospace digit) - not one
+   shared number for every segment. CPU/Memory can only ever say
+   "100.0%" (6 chars); Disk/Network can say up to
+   "R 999.9 GiB/s/W 999.9 GiB/s" (~27 chars), so they get their own,
+   larger reservation. This is what actually stops reflow - the earlier
+   fixed-flex-basis-on-the-segment attempt was sized by guesswork and
+   too narrow for the disk/network worst case, which is why real values
+   were getting clipped instead of the columns just staying put. */
+#stat-cpu-val, #stat-mem-val { min-width: 6ch; }
+#stat-disk-val, #stat-net-val { min-width: 27ch; }
+
+.statusbar-value .up,
+.statusbar-value .down {
+  /* "R"/"W" and "↑"/"↓" are two independent numbers sharing one line -
+     the outer span's reserved width (below) only pins the *total* box,
+     it does nothing for where "/" and the second number sit inside it.
+     Without their own reserved width, a short "R 0 B/s" left the "/W..."
+     sitting right up against it, while a long "R 128.4 MiB/s" pushed
+     "/W..." further right - exactly the left-right jitter reported.
+     Each half now reserves its own fixed width instead, so "/" (and
+     the second number after it) always starts at the same spot
+     regardless of what the first number says. */
+  display: inline-block;
+  min-width: 13ch; /* "R 999.9 GiB/s" / "↑ 999.9 GiB/s" - longest realistic case */
+}
+.statusbar-value .up { color: var(--ok); }
+.statusbar-value .down { color: var(--warn); }
+.statusbar-value .sep { color: var(--text-muted); font-weight: 400; padding: 0 2px; }
+.statusbar-value .unit { color: var(--text-muted); font-weight: 400; }
+
+.statusbar-spacer { flex: 1; }
+
+.statusbar-live {
+  border-right: none;
+  padding-right: 0;
+  font-size: 11px;
+  font-family: "SF Mono", Consolas, monospace;
+  flex: 0 0 90px; /* static text (dot + "na żywo"/"live") that never
+    changes at runtime, but PL/EN differ in length - fixed so switching
+    language doesn't nudge anything else in the bar */
+}
+.statusbar-version {
+  font: inherit;
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 12px;
+  padding: 7px 14px;
+  justify-content: flex-end; /* the box is fixed-width to reserve room
+    for the "update available" pill (see comment on flex-basis below),
+    so with no pill shown the version text would otherwise sit alone at
+    the box's left edge, "floating" in the middle of the bar instead of
+    reading as anchored to the live indicator next to it */
+  flex: 0 0 150px; /* reserves room for the version tag plus the "update
+    available" pill, which toggles on/off - fixed so that toggle doesn't
+    shift the live indicator next to it */
+}
+.statusbar-version:hover { color: var(--text); }
+.statusbar-version .pill { font-size: 10px; padding: 1px 7px; }
+.statusbar-live .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  display: inline-block;
+}
+/* statusbar-live's own dot is a plain live indicator, not the connection
+   dot's blink animation - stays solid so it doesn't compete visually
+   with three numbers updating every couple seconds right next to it */
+
+/* ---------------------------------------------------------------------
+   Progressive hide as the window narrows - network throughput and the
+   live indicator matter most on a NAS dashboard and are never hidden;
+   everything else drops in this order as space runs out: version,
+   then memory, then CPU, then disk. Each breakpoint is sized so the
+   remaining segments still fit within max-width:1080's padded width
+   without triggering the overflow-x scroll below.
+   ------------------------------------------------------------------- */
+@media (max-width: 1040px) {
+  .statusbar-version { display: none; }
+}
+@media (max-width: 900px) {
+  #stat-mem { display: none; }
+}
+@media (max-width: 760px) {
+  #stat-cpu { display: none; }
+}
+@media (max-width: 620px) {
+  #stat-disk { display: none; }
+}
+
+@media (max-width: 640px) {
+  .statusbar-inner { padding: 0 12px; overflow-x: auto; }
+  .statusbar-seg { padding: 7px 12px; }
+}
+
+h2 {
+  font-size: 14px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin: 32px 0 14px;
+}
+
+/* ---------------------------------------------------------------------
+   Cards
+   ------------------------------------------------------------------- */
+
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 14px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px;
+  box-shadow: var(--shadow);
+}
+
+.card-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.card-head .name { font-weight: 600; font-size: 15px; }
+.card-head .level,
+.card-head .model {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-left: auto;
+}
+
+.badge {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.badge.ok { background: var(--ok); }
+.badge.warning { background: var(--warn); }
+.badge.critical { background: var(--crit); }
+.badge.unknown { background: var(--unknown); }
+
+.usage-bar { margin: 2px 0 10px; }
+.usage-bar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+.usage-bar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.3s ease;
+}
+.usage-bar-fill.ok { background: var(--ok); }
+.usage-bar-fill.warning { background: var(--warn); }
+.usage-bar-fill.critical { background: var(--crit); }
+.usage-bar-label {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  row-gap: 6px;
+  column-gap: 12px;
+  margin: 0;
+  font-size: 13px;
+}
+.facts > div { display: contents; }
+.facts dt { color: var(--text-muted); }
+.facts dd { margin: 0; text-align: right; }
+
+.progress-row { display: none; }
+.progress-row.visible { display: contents; }
+
+.error {
+  margin: 10px 0 0;
+  font-size: 12.5px;
+  color: var(--crit);
+  display: none;
+}
+.error.visible { display: block; }
+
+.empty-state {
+  color: var(--text-muted);
+  font-size: 14px;
+  padding: 20px 0;
+}
+
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 32px 0 14px;
+}
+.section-head h2 { margin: 0; }
+
+.btn-primary {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-primary:hover { filter: brightness(1.08); }
+.btn-primary:disabled { opacity: 0.6; cursor: default; }
+.btn-primary.danger { background: var(--crit); }
+
+/* ---------------------------------------------------------------------
+   Tables (users, shares)
+   ------------------------------------------------------------------- */
+
+.user-table table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+  font-size: 13.5px;
+  box-shadow: var(--shadow);
+}
+.user-table th {
+  text-align: left;
+  padding: 10px 14px;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-weight: 650;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.user-table td {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.pill {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+/* Column widths that don't visibly reflow as content changes - e.g.
+   the SMB pill going from "tak"/"yes" to "wyłączone"/"disabled", or the
+   toggle button switching between "Wyłącz"/"Włącz" ("Disable"/"Enable"),
+   which differ just enough in length to shift the whole row otherwise. */
+#users-container .smb-cell { min-width: 110px; }
+#users-container .row-actions { min-width: 200px; }
+.pill-ok { background: var(--ok-bg); color: var(--ok); }
+.pill-warn { background: var(--warn-bg); color: var(--warn); }
+.pill-neutral { background: var(--unknown-bg); color: var(--unknown); }
+.pill-crit { background: var(--crit-bg); color: var(--crit); }
+
+.row-actions { white-space: nowrap; text-align: right; }
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font-size: 12.5px;
+  cursor: pointer;
+  padding: 2px 6px;
+  font-weight: 600;
+  border-radius: 4px;
+}
+.link-btn:hover { text-decoration: underline; }
+.link-btn.danger { color: var(--crit); }
+.link-btn:disabled {
+  color: var(--text-muted);
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.link-btn:disabled:hover { text-decoration: none; }
+
+.display-name {
+  font-weight: 600;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#users-container .display-name {
+  cursor: help;
+  border-bottom: 1px dotted var(--text-muted);
+  width: fit-content;
+}
+
+.perm-tag {
+  display: inline-block;
+  margin: 0 6px 2px 0;
+  font-size: 12.5px;
+}
+.perm-tag.perm-rw { color: var(--ok); }
+.perm-tag.perm-ro { color: var(--accent); }
+.perm-tag.perm-na { color: var(--crit); }
+.username.sub {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ---------------------------------------------------------------------
+   Dialogs
+   ------------------------------------------------------------------- */
+
+dialog {
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 22px 24px;
+  background: var(--surface);
+  color: var(--text);
+  width: min(420px, 90vw);
+  box-shadow: var(--shadow);
+}
+dialog::backdrop { background: rgba(10, 12, 11, 0.45); }
+dialog h3 { margin: 0 0 16px; font-size: 17px; }
+
+.account-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+.account-section h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.deployments-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.deployment-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 4px 2px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+}
+.deployment-pill.current { background: var(--ok-bg); color: var(--ok); }
+.deployment-pill.stale { background: var(--crit-bg); color: var(--crit); }
+.deployment-pill button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 50%;
+  opacity: 0.7;
+}
+.deployment-pill button:hover { opacity: 1; background: rgba(0, 0, 0, 0.08); }
+
+.permissions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  overflow-x: visible; /* explicit, so overflow-y:auto doesn't implicitly
+    force overflow-x to "auto" too (a CSS quirk: setting only one axis to
+    a scrolling value computes the other to auto as well) - that was
+    clipping the focus outline / native option-list highlight on the
+    permission <select> elements at the row's right edge */
+  padding-right: 2px; /* room for the focus outline itself */
+}
+.permission-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.permission-info {
+  flex: 1;
+  min-width: 0; /* required for text-overflow:ellipsis to work inside a flex child */
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.permission-user {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.permission-select {
+  flex-shrink: 0;
+  width: auto !important;
+  margin-top: 0 !important;
+  font-size: 12.5px !important;
+  padding: 4px 6px !important;
+}
+
+.groups-checklist,
+#share-users-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 8px;
+  max-height: 160px;
+  overflow-y: auto;
+}
+
+form label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+form input[type="text"],
+form input[type="password"],
+form select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 14px;
+  box-sizing: border-box;
+}
+form fieldset {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+}
+form legend {
+  font-size: 12px;
+  color: var(--text-muted);
+  padding: 0 4px;
+}
+form label.inline,
+form label.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+.label-text { display: inline-block; }
+
+.field-hint {
+  display: block;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-weight: normal;
+  margin-top: 3px;
+  min-height: 14px;
+}
+
+.form-error {
+  color: var(--crit);
+  font-size: 13px;
+  min-height: 18px;
+  margin: 4px 0 8px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+}
+.dialog-actions button[type="button"] {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 14px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+/* ---------------------------------------------------------------------
+   Toasts
+   ------------------------------------------------------------------- */
+
+#toast-container {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  z-index: 1000;
+  max-width: 340px;
+}
+
+.toast {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--ok);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 13.5px;
+  box-shadow: var(--shadow);
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.toast.visible { opacity: 1; transform: translateY(0); }
+.toast-error { border-left-color: var(--crit); }
+
+/* ---------------------------------------------------------------------
+   Operations log
+   Collapsed by default - a short "what happened" header + status pill,
+   not a wall of raw output. Full detail (error text, command output)
+   only appears once a row is expanded, and can be copied from there.
+   ------------------------------------------------------------------- */
+
+.log-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 14px;
+  margin: 0 0 16px;
+  padding: 14px 16px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+.log-toolbar-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+}
+.log-toolbar-field .label-text { color: var(--text-muted); font-size: 11.5px; }
+.log-toolbar-field input {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+.log-max-field input { width: 90px; }
+
+.log-list { display: flex; flex-direction: column; gap: 8px; }
+
+.log-entry {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.log-entry-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--text);
+}
+.log-entry-head:hover { background: var(--surface-2); }
+
+.log-summary { flex: 1; font-size: 13.5px; }
+.log-time { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
+.log-chevron {
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+  font-size: 11px;
+}
+.log-entry.expanded .log-chevron { transform: rotate(-180deg); }
+
+.log-entry-body {
+  display: none;
+  padding: 0 14px 14px;
+  border-top: 1px solid var(--border);
+}
+.log-entry.expanded .log-entry-body { display: block; padding-top: 12px; }
+
+.log-message {
+  background: var(--mono-bg);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0 0 8px;
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* ---------------------------------------------------------------------
+   Pending network-change confirm banner
+   ------------------------------------------------------------------- */
+
+.pending-change-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--warn-bg);
+  color: var(--warn);
+  border: 1px solid var(--warn);
+  border-radius: 10px;
+  padding: 10px 14px;
+  margin: 0 0 16px;
+  font-size: 13.5px;
+}
+.pending-change-banner button { margin-left: auto; }
+
+.confirm-message {
+  white-space: pre-line;
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0 0 4px;
+}
+
+/* ---------------------------------------------------------------------
+   Login page
+   ------------------------------------------------------------------- */
+
+.login-wrap {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  box-sizing: border-box;
+}
+.login-card {
+  position: relative;
+  width: 100%;
+  max-width: 340px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 28px 26px;
+  box-shadow: var(--shadow);
+}
+.login-card h1 {
+  margin: 0 0 22px;
+  font-size: 22px;
+  text-align: center;
+}
+.login-card .btn-primary { width: 100%; margin-top: 6px; }
+
+#login-blade {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 56px;
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, transparent, #fff6ea 20%, #fff6ea 80%, transparent);
+  box-shadow: 0 0 8px #fff6ea, 0 0 20px #ffa030, 0 0 40px #ff8c1a, 0 0 65px #ff6a00, 0 0 95px #ff5500;
+  offset-anchor: 50% 50%;
+  offset-rotate: auto;
+  offset-distance: 0%;
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---------------------------------------------------------------------
+   Quality floor: focus visibility, reduced motion, small screens
+   ------------------------------------------------------------------- */
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dot { animation: none; }
+  body, .btn-primary, .link-btn { transition: none; }
+  .toast { transition: none; }
+}
+
+@media (max-width: 640px) {
+  .top {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 18px 16px;
+    /* taller header on mobile (stacked) shows more vertical slice of the
+       photo - shift the anchor up so the darkest corner (best text
+       contrast) stays behind the title instead of the brighter mid-photo
+       glow drifting into view */
+    background-position: left top;
+  }
+  main { padding: 8px 16px 76px; }
+  .tabs { padding: 0 8px; }
+  .groups-checklist, #share-users-checklist { max-height: 120px; }
+  .log-toolbar { flex-direction: column; align-items: stretch; }
+  .log-time { display: none; }
+}
