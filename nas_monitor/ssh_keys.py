@@ -1,0 +1,362 @@
+"""
+nas_monitor.ssh_keys
+----------------------
+SSH keypair management for the dedicated sync service account (see
+SYNC_ACCOUNT_USERNAME below) - the piece that was missing for the "sync
+files with another NAS via rsync" workflow: an SMB password (see smb.py)
+does nothing for SSH auth. Deliberately NOT tied to any particular human
+user account - a personal login account (his own desktop user, say) can
+already have its own real SSH keys for entirely separate purposes, and
+generating one here used to risk colliding with those. One dedicated,
+hidden account sidesteps that class of problem entirely, and matches how
+automation credentials are normally kept separate from personal ones.
+
+This module only ever touches ~/.ssh for that one account. The private
+key never leaves this machine; "deploying" a key means installing the
+PUBLIC half into a remote host's authorized_keys, using a one-time
+password that is never written to disk or logged (passed via an env var
+to sshpass, not argv - argv is visible to anyone on the box via `ps`).
+"""
+
+from __future__ import annotations
+
+import os
+import pwd
+import re
+import shlex
+from datetime import datetime, timezone
+from typing import Any
+
+from nas_monitor import system_tools, errors
+from nas_monitor import users as users_mod
+from nas_monitor import state_store
+
+KEY_COMMENT_SUFFIX = "@nas-monitor"
+_HOST_RE = re.compile(r"^[a-zA-Z0-9_.-]{1,255}$")
+_DEPLOYMENTS_FILE = "ssh-deployments.json"
+
+# The dedicated, hidden service account certificates belong to. Not a
+# stand-in for any particular person - a single, always-present identity
+# for outbound automation (rsync/SSH to another NAS), decoupled entirely
+# from whichever human accounts happen to exist for SMB access. nologin
+# on purpose: nobody should be able to log INTO this box as this account
+# interactively (SSH password, console, su without -c) - that has nothing
+# to do with whether a scheduled job running AS this account can use its
+# key to connect OUT to somewhere else, which needs no shell at all.
+SYNC_ACCOUNT_USERNAME = "nas-sync"
+
+
+def ensure_sync_account_exists() -> dict[str, Any]:
+    """Idempotent - creates the dedicated sync account if it doesn't
+    exist yet, does nothing if it already does. Called before any
+    Certyfikaty-tab read or action, so the account is always there
+    without needing its own separate setup step."""
+    result: dict[str, Any] = {"success": True, "username": SYNC_ACCOUNT_USERNAME}
+    if users_mod.user_exists(SYNC_ACCOUNT_USERNAME):
+        return result
+    create_result = users_mod.create_user(SYNC_ACCOUNT_USERNAME, groups=[], shell=None, create_home=True)
+    if not create_result["success"]:
+        return errors.propagate(result, create_result)
+    return result
+
+
+def _ssh_dir(username: str) -> str:
+    return os.path.join(pwd.getpwnam(username).pw_dir, ".ssh")
+
+
+def _key_paths(username: str) -> tuple[str, str]:
+    ssh_dir = _ssh_dir(username)
+    return os.path.join(ssh_dir, "id_ed25519"), os.path.join(ssh_dir, "id_ed25519.pub")
+
+
+def _load_deployments() -> dict[str, list[dict[str, Any]]]:
+    return state_store.load(_DEPLOYMENTS_FILE, default={}) or {}
+
+
+def _save_deployments(data: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+    return state_store.save(_DEPLOYMENTS_FILE, data)
+
+
+def _record_deployment(
+    username: str, host: str, remote_user: str, public_key: str, display_name: str | None = None
+) -> None:
+    data = _load_deployments()
+    entries = data.setdefault(username, [])
+    entries[:] = [e for e in entries if not (e["host"] == host and e["remote_user"] == remote_user)]
+    entries.append(
+        {
+            "host": host,
+            "remote_user": remote_user,
+            "public_key": public_key,
+            "display_name": (display_name or "").strip() or None,
+            "deployed_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        }
+    )
+    _save_deployments(data)
+
+
+def forget_user(username: str) -> None:
+    """Drop all deployment records for username. Called when the local
+    account (and its key, via delete_key()) is being removed entirely -
+    there's no key left locally for those records to be current/stale
+    against, so keeping them around would just be confusing leftover
+    bookkeeping. Does NOT touch anything on the remote hosts themselves -
+    a deployed public key stays in each remote authorized_keys file
+    until explicitly revoked there (remove_deployment(), which needs
+    that host's password) or removed by hand."""
+    data = _load_deployments()
+    if username in data:
+        del data[username]
+        _save_deployments(data)
+
+
+def get_deployments(username: str) -> list[dict[str, Any]]:
+    """Every remote host this key has ever been deployed to, each flagged
+    is_current: True if that deployment's public key still matches what's
+    currently on disk for this user - False means the key was regenerated
+    since (see generate_key) and that device now has a stale entry."""
+    data = _load_deployments()
+    entries = data.get(username, [])
+
+    current_pub = None
+    _, pub_path = _key_paths(username)
+    if os.path.isfile(pub_path):
+        try:
+            with open(pub_path, "r") as fh:
+                current_pub = fh.read().strip()
+        except OSError:
+            pass
+
+    result = []
+    for e in sorted(entries, key=lambda e: e.get("deployed_at", "")):
+        result.append(
+            {
+                "host": e["host"],
+                "remote_user": e["remote_user"],
+                "display_name": e.get("display_name") or e["host"],
+                "deployed_at": e.get("deployed_at"),
+                "is_current": current_pub is not None and e.get("public_key") == current_pub,
+            }
+        )
+    return result
+
+
+def get_key_status(username: str) -> dict[str, Any]:
+    """Whether this user has a keypair here, and their public key text if
+    so - never returns anything about the private key's content. This is a
+    read-only status query (no "success" field, unlike the mutations
+    below), so a read error is recorded but doesn't stop the rest of the
+    status from being filled in."""
+    result: dict[str, Any] = {"username": username, "has_key": False, "public_key": None}
+
+    try:
+        pw = pwd.getpwnam(username)
+    except KeyError:
+        result["error_code"] = "users.not_found"
+        result["error_context"] = {"username": username}
+        return result
+
+    _, pub_path = _key_paths(username)
+    if os.path.isfile(pub_path):
+        try:
+            with open(pub_path, "r") as fh:
+                result["public_key"] = fh.read().strip()
+            result["has_key"] = True
+        except OSError as exc:
+            result["error_code"] = "system.io_failed"
+            result["error_context"] = {"path": pub_path, "detail": str(exc)}
+
+    result["can_login"] = pw.pw_shell not in ("/usr/sbin/nologin", "/sbin/nologin", "/bin/false", "/usr/bin/false", "")
+    result["deployments"] = get_deployments(username)
+    return result
+
+
+def generate_key(username: str) -> dict[str, Any]:
+    """Generate a new ed25519 keypair for username's own ~/.ssh, owned by
+    that user with correct (private-key-only-readable) permissions."""
+    result: dict[str, Any] = {"username": username, "success": False}
+
+    try:
+        pw = pwd.getpwnam(username)
+    except KeyError:
+        return errors.fail(result, "users.not_found", username=username)
+
+    priv_path, pub_path = _key_paths(username)
+    if os.path.isfile(priv_path):
+        return errors.fail(result, "ssh_keys.already_exists", username=username)
+
+    ssh_dir = _ssh_dir(username)
+    try:
+        os.makedirs(ssh_dir, mode=0o700, exist_ok=True)
+        os.chown(ssh_dir, pw.pw_uid, pw.pw_gid)
+        os.chmod(ssh_dir, 0o700)
+    except OSError as exc:
+        return errors.io_failed(result, exc, ssh_dir)
+
+    keygen_path = system_tools.find_binary("ssh-keygen")
+    if keygen_path is None:
+        return errors.tool_missing(result, "ssh-keygen")
+
+    code, out, err = system_tools.run(
+        [
+            keygen_path,
+            "-t", "ed25519",
+            "-f", priv_path,
+            "-N", "",  # no passphrase - this key is meant for unattended rsync
+            "-C", f"{username}{KEY_COMMENT_SUFFIX}",
+        ],
+        timeout=15,
+    )
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "ssh-keygen")
+
+    try:
+        os.chown(priv_path, pw.pw_uid, pw.pw_gid)
+        os.chmod(priv_path, 0o600)
+        os.chown(pub_path, pw.pw_uid, pw.pw_gid)
+        os.chmod(pub_path, 0o644)
+    except OSError as exc:
+        # The key itself WAS generated - only the permission fixup failed -
+        # worth a distinct code so the UI can say so, rather than implying
+        # nothing happened.
+        return errors.fail(result, "ssh_keys.permission_fix_failed", path=priv_path, detail=str(exc))
+
+    with open(pub_path, "r") as fh:
+        result["public_key"] = fh.read().strip()
+    result["success"] = True
+    return result
+
+
+def delete_key(username: str) -> dict[str, Any]:
+    result: dict[str, Any] = {"username": username, "success": False}
+    try:
+        pwd.getpwnam(username)
+    except KeyError:
+        return errors.fail(result, "users.not_found", username=username)
+
+    priv_path, pub_path = _key_paths(username)
+    try:
+        for p in (priv_path, pub_path):
+            if os.path.isfile(p):
+                os.remove(p)
+    except OSError as exc:
+        return errors.io_failed(result, exc, priv_path)
+
+    result["success"] = True
+    return result
+
+
+def deploy_key_to_remote(
+    username: str, remote_host: str, remote_user: str, remote_password: str, display_name: str | None = None
+) -> dict[str, Any]:
+    """Install username's PUBLIC key into remote_user@remote_host's
+    authorized_keys, using remote_password exactly once (an env var, not
+    an argv - never written to disk, never logged, never touches argv
+    where `ps` could see it). display_name is a purely cosmetic label for
+    the deployments list (e.g. "vOMV") - reverse DNS on a typical home
+    LAN is unreliable, so this is asked for explicitly instead of guessed."""
+    result: dict[str, Any] = {"username": username, "success": False}
+
+    if not remote_password:
+        return errors.fail(result, "ssh_keys.empty_remote_password")
+    if not _HOST_RE.match(remote_host):
+        return errors.fail(result, "ssh_keys.invalid_remote_host")
+    if not users_mod.is_valid_username(remote_user):
+        return errors.fail(result, "ssh_keys.invalid_remote_username")
+
+    status = get_key_status(username)
+    if not status.get("has_key"):
+        return errors.fail(result, "ssh_keys.no_key_yet", username=username)
+
+    sshpass_path = system_tools.find_binary("sshpass")
+    if sshpass_path is None:
+        return errors.tool_missing(result, "sshpass")
+    ssh_copy_id_path = system_tools.find_binary("ssh-copy-id")
+    if ssh_copy_id_path is None:
+        return errors.tool_missing(result, "ssh-copy-id")
+
+    _, pub_path = _key_paths(username)
+    cmd = [
+        sshpass_path, "-e",
+        ssh_copy_id_path,
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ConnectTimeout=10",
+        "-i", pub_path,
+        f"{remote_user}@{remote_host}",
+    ]
+    code, out, err = system_tools.run(cmd, timeout=20, extra_env={"SSHPASS": remote_password})
+    if code != 0:
+        failed = errors.command_failed(result, err, out, code, "ssh-copy-id")
+        failed["error_context"]["detail"] = failed["error_context"]["detail"][:400]
+        return failed
+
+    with open(pub_path, "r") as fh:
+        pub_content = fh.read().strip()
+    _record_deployment(username, remote_host, remote_user, pub_content, display_name=display_name)
+
+    result["success"] = True
+    return result
+
+
+def remove_deployment(
+    username: str, remote_host: str, remote_user: str, remote_password: str
+) -> dict[str, Any]:
+    """Remove this key from a remote host's authorized_keys (using the
+    PUBLIC KEY TEXT recorded at deploy time, not the current local key -
+    matters for a stale entry, where the current local key is a different
+    one entirely) and drop the local tracking record. Needs the remote
+    password again - there's no other way to reliably reach a host whose
+    key might already be stale/replaced."""
+    result: dict[str, Any] = {"success": False}
+
+    if not remote_password:
+        return errors.fail(result, "ssh_keys.empty_remote_password")
+
+    data = _load_deployments()
+    entries = data.get(username, [])
+    match = next((e for e in entries if e["host"] == remote_host and e["remote_user"] == remote_user), None)
+    if match is None:
+        return errors.fail(result, "ssh_keys.deployment_not_found")
+
+    sshpass_path = system_tools.find_binary("sshpass")
+    ssh_path = system_tools.find_binary("ssh")
+    if sshpass_path is None or ssh_path is None:
+        return errors.tool_missing(result, "sshpass/ssh")
+
+    # Fixed-string grep -v removes exactly the one recorded line, leaving
+    # any other authorized_keys entries (from this tool or elsewhere)
+    # untouched. The pubkey text is shell-quoted HERE, locally, and sent
+    # as a single already-escaped command string - env vars do NOT
+    # propagate through SSH to the remote shell by default, so passing
+    # the value that way would leave $VAR empty on the other end and
+    # turn `grep -vF ""` into "match everything", wiping the whole file.
+    quoted_pubkey = shlex.quote(match["public_key"])
+    remote_script = (
+        f"f=~/.ssh/authorized_keys; "
+        f"if [ -f \"$f\" ]; then "
+        f"grep -vF -- {quoted_pubkey} \"$f\" > \"$f.tmp\" || true; "
+        f"mv \"$f.tmp\" \"$f\"; "
+        f"fi"
+    )
+    cmd = [
+        sshpass_path, "-e",
+        ssh_path,
+        "-o", "StrictHostKeyChecking=accept-new",
+        "-o", "ConnectTimeout=10",
+        f"{remote_user}@{remote_host}",
+        remote_script,
+    ]
+    code, out, err = system_tools.run(cmd, timeout=20, extra_env={"SSHPASS": remote_password})
+    if code != 0:
+        failed = errors.command_failed(result, err, out, code)
+        failed["error_context"]["detail"] = failed["error_context"]["detail"][:400]
+        return failed
+
+    entries[:] = [e for e in entries if not (e["host"] == remote_host and e["remote_user"] == remote_user)]
+    data[username] = entries
+    save_result = _save_deployments(data)
+    if not save_result["success"]:
+        return errors.fail(result, "ssh_keys.deployment_save_failed", detail=save_result.get("error") or "")
+
+    result["success"] = True
+    return result

@@ -1,0 +1,543 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>NAS monitor</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script>
+    // Runs before first paint so there's no flash of the wrong theme.
+    (function () {
+      var saved = localStorage.getItem("nas-monitor-theme");
+      if (saved === "light" || saved === "dark") {
+        document.documentElement.setAttribute("data-theme", saved);
+      }
+    })();
+  </script>
+</head>
+<body>
+  <header class="top">
+    <div>
+      <h1 id="app-title">NAS monitor</h1>
+      <p class="subtitle" data-i18n="ui.app.subtitle">Monitoring, użytkownicy i udziały Samby</p>
+    </div>
+    <div class="header-right">
+      <div class="refresh-info">
+        <span id="last-updated">&ndash;</span>
+        <span class="dot" id="conn-dot" data-i18n-title="ui.header.connStatus" title="Status połączenia"></span>
+      </div>
+      <button type="button" class="lang-toggle" id="lang-toggle" data-i18n-title="ui.header.langToggle" title="Zmień język / Change language">PL</button>
+      <button type="button" class="theme-toggle" id="account-toggle" data-i18n-title="ui.header.accountToggle" title="Konto administratora" aria-label="Konto administratora">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+      </button>
+      <button type="button" class="theme-toggle" id="theme-toggle" data-i18n-title="ui.header.themeToggle" title="Przełącz jasny/ciemny" aria-label="Przełącz motyw"></button>
+    </div>
+  </header>
+
+  <nav class="tabs" id="tabs" role="tablist">
+    <button type="button" class="tab-btn" data-tab="disks" role="tab" data-i18n="ui.tabs.disks">Dyski i macierze</button>
+    <button type="button" class="tab-btn" data-tab="users" role="tab" data-i18n="ui.tabs.users">Użytkownicy</button>
+    <button type="button" class="tab-btn" data-tab="groups" role="tab" data-i18n="ui.tabs.groups">Grupy</button>
+    <button type="button" class="tab-btn" data-tab="shares" role="tab" data-i18n="ui.tabs.shares">Udziały</button>
+    <button type="button" class="tab-btn" data-tab="certs" role="tab" data-i18n="ui.tabs.certs">Certyfikaty</button>
+    <button type="button" class="tab-btn" data-tab="network" role="tab" data-i18n="ui.tabs.network">Sieć</button>
+    <button type="button" class="tab-btn" data-tab="log" role="tab" data-i18n="ui.tabs.log">Log</button>
+  </nav>
+
+  <main>
+    <div class="tab-panel" data-tab="disks">
+      <section>
+        <h2 data-i18n="ui.disks.raidHeading">Macierze RAID</h2>
+        <div id="raid-container" class="cards"></div>
+      </section>
+
+      <section>
+        <h2 data-i18n="ui.disks.disksHeading">Dyski</h2>
+        <div id="disks-container" class="cards"></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-tab="users">
+      <section>
+        <div class="section-head">
+          <h2 data-i18n="ui.users.heading">Użytkownicy</h2>
+          <button id="add-user-btn" class="btn-primary" type="button" data-i18n="ui.users.addBtn">+ Dodaj użytkownika</button>
+        </div>
+        <div id="users-container" class="user-table"></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-tab="groups">
+      <section>
+        <div class="section-head">
+          <h2 data-i18n="ui.groups.heading">Grupy</h2>
+          <button id="add-group-btn" class="btn-primary" type="button" data-i18n="ui.groups.addBtn">+ Dodaj grupę</button>
+        </div>
+        <p class="subtitle" data-i18n="ui.groups.subtitle">Ogólne grupy systemowe - niezależne od grup dostępu do udziałów, które są zarządzane automatycznie z poziomu zakładki Udziały.</p>
+        <div id="groups-container" class="user-table"></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-tab="shares">
+      <section>
+        <div class="section-head">
+          <h2 data-i18n="ui.shares.heading">Udziały</h2>
+          <button id="add-share-btn" class="btn-primary" type="button" data-i18n="ui.shares.addBtn">+ Dodaj udział</button>
+        </div>
+        <div id="shares-container" class="user-table"></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-tab="certs">
+      <section>
+        <h2 data-i18n="ui.certs.heading">Certyfikaty (klucze SSH)</h2>
+        <p class="subtitle" data-i18n="ui.certs.subtitle">Do logowania/synchronizacji (np. rsync) na inne maszyny bez hasła - niezależne od hasła SMB.</p>
+        <div id="ssh-keys-container" class="user-table"></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-tab="network">
+      <section>
+        <h2 data-i18n="ui.network.heading">Sieć</h2>
+        <p class="subtitle" data-i18n="ui.network.subtitle">
+          Zmiana adresu IP/bramy/DNS jest dostępna tylko z NetworkManagerem i wymaga
+          potwierdzenia w ciągu 30s - inaczej wraca automatycznie do poprzednich ustawień.
+        </p>
+        <div id="network-pending-banner" style="display:none;" class="pending-change-banner">
+          <span data-i18n="ui.networkEditDialog.pendingText">Zmiana ustawień sieci czeka na potwierdzenie</span>
+          (<span id="network-pending-countdown">30</span>s)
+          <button type="button" id="network-pending-confirm-btn" class="btn-primary" data-i18n="ui.networkEditDialog.confirmBtn">Potwierdź</button>
+        </div>
+        <div id="network-container"></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-tab="log">
+      <section>
+        <div class="section-head">
+          <h2 data-i18n="ui.log.heading">Log operacji</h2>
+          <button id="log-clear-btn" class="link-btn danger" type="button" data-i18n="ui.log.clearBtn">Wyczyść log</button>
+        </div>
+        <p class="subtitle" data-i18n="ui.log.subtitle">Historia zmian wprowadzonych przez to narzędzie (użytkownicy, udziały, klucze SSH).</p>
+
+        <div class="log-toolbar">
+          <label class="log-toolbar-field">
+            <span class="label-text" data-i18n="ui.log.filterSince">Od</span>
+            <input type="datetime-local" id="log-filter-since">
+          </label>
+          <label class="log-toolbar-field">
+            <span class="label-text" data-i18n="ui.log.filterUntil">Do</span>
+            <input type="datetime-local" id="log-filter-until">
+          </label>
+          <button id="log-filter-clear-btn" class="link-btn" type="button" data-i18n="ui.log.filterClearBtn">Wyczyść filtr</button>
+          <label class="log-toolbar-field log-max-field">
+            <span class="label-text" data-i18n="ui.log.maxEntriesLabel">Maks. liczba wpisów</span>
+            <input type="number" id="log-max-entries" min="10" max="1000" step="1">
+          </label>
+        </div>
+
+        <div id="log-container" class="log-list"></div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="statusbar" id="statusbar">
+    <div class="statusbar-inner">
+      <div class="statusbar-stats">
+        <div class="statusbar-seg" id="stat-cpu">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="1"/><path d="M9 2v3M15 2v3M9 19v3M15 19v3M2 9h3M2 15h3M19 9h3M19 15h3"/></svg>
+          <div class="statusbar-text">
+            <span class="statusbar-label" data-i18n="ui.statusbar.cpu">CPU</span>
+            <span class="statusbar-value mono" id="stat-cpu-val">&ndash;</span>
+          </div>
+        </div>
+        <div class="statusbar-seg" id="stat-mem">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="7" width="16" height="10" rx="1"/><path d="M8 7V4M12 7V4M16 7V4M8 20v-3M12 20v-3M16 20v-3"/></svg>
+          <div class="statusbar-text">
+            <span class="statusbar-label" data-i18n="ui.statusbar.mem">Pamięć</span>
+            <span class="statusbar-value mono" id="stat-mem-val">&ndash;</span>
+          </div>
+        </div>
+        <div class="statusbar-seg" id="stat-disk">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.66 3.58 3 8 3s8-1.34 8-3V5M4 11v6c0 1.66 3.58 3 8 3s8-1.34 8-3v-6"/></svg>
+          <div class="statusbar-text">
+            <span class="statusbar-label" data-i18n="ui.statusbar.disk">Dysk R/W</span>
+            <span class="statusbar-value mono" id="stat-disk-val">&ndash;</span>
+          </div>
+        </div>
+        <div class="statusbar-seg" id="stat-net">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 17V7M8 7l-3 3M8 7l3 3M16 7v10M16 17l3-3M16 17l-3-3"/></svg>
+          <div class="statusbar-text">
+            <span class="statusbar-label" data-i18n="ui.statusbar.net">Sieć</span>
+            <span class="statusbar-value mono" id="stat-net-val">&ndash;</span>
+          </div>
+        </div>
+      </div>
+      <div class="statusbar-spacer"></div>
+      <button type="button" class="statusbar-seg statusbar-version" id="statusbar-version-btn" title="">
+        <span id="statusbar-version-val" class="mono">&ndash;</span>
+        <span class="pill pill-warn" id="statusbar-update-badge" style="display:none;" data-i18n="ui.statusbar.updateAvailable">aktualizacja</span>
+      </button>
+      <div class="statusbar-seg statusbar-live">
+        <span class="dot" id="statusbar-dot"></span>
+        <span data-i18n="ui.statusbar.live">na żywo</span>
+      </div>
+    </div>
+  </footer>
+
+  <dialog id="share-dialog">
+    <form id="share-form" method="dialog">
+      <h3 id="share-dialog-title" data-i18n="ui.shareDialog.titleNew">Nowy udział</h3>
+
+      <label id="share-name-label">
+        <span class="label-text" data-i18n="ui.shareDialog.nameLabel">Nazwa udziału</span>
+        <input type="text" id="share-name" pattern="[a-z][a-z0-9_-]{0,31}" required
+               data-i18n-placeholder="ui.shareDialog.namePlaceholder" placeholder="np. dane" autocomplete="off">
+        <span class="field-hint" id="share-path-preview"></span>
+      </label>
+
+      <label>
+        <span class="label-text" data-i18n="ui.shareDialog.commentLabel">Komentarz (opcjonalnie)</span>
+        <input type="text" id="share-comment" autocomplete="off">
+      </label>
+
+      <fieldset>
+        <legend data-i18n="ui.shareDialog.accessLegend">Dostęp</legend>
+        <div id="share-permissions-list" class="permissions-list"></div>
+      </fieldset>
+
+      <fieldset>
+        <legend data-i18n="ui.shareDialog.groupAccessLegend">Grupy</legend>
+        <div id="share-group-grants-list" class="permissions-list"></div>
+      </fieldset>
+
+      <p class="form-error" id="share-error"></p>
+
+      <div class="dialog-actions">
+        <button type="button" id="share-cancel" data-i18n="ui.shareDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="share-submit" class="btn-primary" data-i18n="ui.shareDialog.createBtn">Utwórz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="remove-deployment-dialog">
+    <form id="remove-deployment-form" method="dialog">
+      <h3 id="remove-deployment-title" data-i18n="ui.removeDeploymentDialog.title">Usuń klucz z urządzenia</h3>
+
+      <label>
+        <span class="label-text" data-i18n="ui.removeDeploymentDialog.passwordLabel">Hasło zdalnego konta (użyte tylko raz)</span>
+        <input type="password" id="remove-deployment-password" required autocomplete="off">
+      </label>
+
+      <p class="form-error" id="remove-deployment-error"></p>
+
+      <div class="dialog-actions">
+        <button type="button" id="remove-deployment-cancel" data-i18n="ui.removeDeploymentDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="remove-deployment-submit" class="btn-primary" data-i18n="ui.removeDeploymentDialog.removeBtn">Usuń</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="deploy-key-dialog">
+    <form id="deploy-key-form" method="dialog">
+      <h3 id="deploy-key-title" data-i18n="ui.deployKeyDialog.title">Wyślij klucz na zdalne urządzenie</h3>
+
+      <label>
+        <span class="label-text" data-i18n="ui.deployKeyDialog.hostLabel">Adres/nazwa zdalnego hosta</span>
+        <input type="text" id="deploy-host" required data-i18n-placeholder="ui.deployKeyDialog.hostPlaceholder" placeholder="np. 192.168.0.20" autocomplete="off">
+      </label>
+
+      <label>
+        <span class="label-text" data-i18n="ui.deployKeyDialog.displayNameLabel">Przyjazna nazwa (opcjonalnie, np. "vOMV")</span>
+        <input type="text" id="deploy-display-name" data-i18n-placeholder="ui.deployKeyDialog.displayNamePlaceholder" placeholder="domyślnie: adres powyżej" autocomplete="off">
+      </label>
+
+      <label>
+        <span class="label-text" data-i18n="ui.deployKeyDialog.remoteUserLabel">Użytkownik na zdalnym urządzeniu</span>
+        <input type="text" id="deploy-remote-user" required data-i18n-placeholder="ui.deployKeyDialog.remoteUserPlaceholder" placeholder="np. wieslaw" autocomplete="off">
+      </label>
+
+      <label>
+        <span class="label-text" data-i18n="ui.deployKeyDialog.passwordLabel">Hasło zdalnego konta (użyte tylko raz, nigdzie niezapisywane)</span>
+        <input type="password" id="deploy-password" required autocomplete="off">
+      </label>
+
+      <p class="form-error" id="deploy-key-error"></p>
+
+      <div class="dialog-actions">
+        <button type="button" id="deploy-key-cancel" data-i18n="ui.deployKeyDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="deploy-key-submit" class="btn-primary" data-i18n="ui.deployKeyDialog.sendBtn">Wyślij</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="add-user-dialog">
+    <form id="add-user-form" method="dialog">
+      <h3 id="user-dialog-title" data-i18n="ui.addUserDialog.titleNew">Nowy użytkownik</h3>
+
+      <label id="username-label">
+        <span class="label-text" data-i18n="ui.addUserDialog.usernameLabelNew">Nazwa użytkownika</span>
+        <input type="text" id="new-username" pattern="[A-Za-z_][A-Za-z0-9_-]{0,31}" required
+               data-i18n-placeholder="ui.addUserDialog.usernamePlaceholder" placeholder="np. Tomek" autocomplete="off">
+        <span class="field-hint" id="username-preview"></span>
+      </label>
+
+      <label id="password-label">
+        <span class="label-text" data-i18n="ui.addUserDialog.passwordLabelNew">Hasło SMB</span>
+        <input type="password" id="new-password" required autocomplete="new-password">
+      </label>
+
+      <fieldset>
+        <legend data-i18n="ui.addUserDialog.groupsLegend">Grupy</legend>
+        <div id="groups-checklist" class="groups-checklist"></div>
+        <label class="inline">
+          <input type="text" id="new-group-name" data-i18n-placeholder="ui.addUserDialog.newGroupPlaceholder" placeholder="nowa grupa (opcjonalnie)"
+                 pattern="[a-z_][a-z0-9_-]{0,31}" autocomplete="off">
+        </label>
+      </fieldset>
+
+      <p class="form-error" id="add-user-error"></p>
+
+      <div class="dialog-actions">
+        <button type="button" id="add-user-cancel" data-i18n="ui.addUserDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="add-user-submit" class="btn-primary" data-i18n="ui.addUserDialog.createBtn">Utwórz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="network-edit-dialog">
+    <form id="network-edit-form" method="dialog">
+      <h3 id="network-edit-title" data-i18n="ui.networkEditDialog.title">Edytuj ustawienia sieci</h3>
+
+      <label>
+        <span class="label-text" data-i18n="ui.network.ip">Adres IP</span>
+        <input type="text" id="network-edit-ip" required autocomplete="off">
+      </label>
+
+      <label>
+        <span class="label-text" data-i18n="ui.networkEditDialog.prefixLabel">Prefiks (0-32)</span>
+        <input type="number" id="network-edit-prefix" min="0" max="32" required autocomplete="off">
+      </label>
+
+      <label>
+        <span class="label-text" data-i18n="ui.network.gateway">Brama</span>
+        <input type="text" id="network-edit-gateway" required autocomplete="off">
+      </label>
+
+      <label>
+        <span class="label-text" data-i18n="ui.networkEditDialog.dnsLabel">Serwery DNS (oddziel przecinkiem)</span>
+        <input type="text" id="network-edit-dns" autocomplete="off">
+      </label>
+
+      <p class="field-hint" data-i18n="ui.networkEditDialog.revertHint">Zmiana będzie wymagała potwierdzenia w ciągu 30s, inaczej wróci automatycznie do poprzednich ustawień.</p>
+
+      <p class="form-error" id="network-edit-error"></p>
+
+      <div class="dialog-actions">
+        <button type="button" id="network-edit-cancel" data-i18n="ui.networkEditDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="network-edit-submit" class="btn-primary" data-i18n="ui.networkEditDialog.applyBtn">Zastosuj</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog">
+    <form id="confirm-form" method="dialog">
+      <p id="confirm-message" class="confirm-message"></p>
+      <div class="dialog-actions">
+        <button type="button" id="confirm-cancel" data-i18n="ui.confirmDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="confirm-ok" class="btn-primary" data-i18n="ui.confirmDialog.okBtn">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="account-dialog">
+    <h3 data-i18n="ui.accountDialog.title">Konto administratora</h3>
+    <p class="field-hint" id="account-logged-in-as"></p>
+
+    <form id="change-password-form">
+      <label>
+        <span class="label-text" data-i18n="ui.accountDialog.currentPasswordLabel">Obecne hasło</span>
+        <input type="password" id="current-password" required autocomplete="current-password">
+      </label>
+      <label>
+        <span class="label-text" data-i18n="ui.accountDialog.newPasswordLabel">Nowe hasło</span>
+        <input type="password" id="new-password" required autocomplete="new-password">
+      </label>
+      <label>
+        <span class="label-text" data-i18n="ui.accountDialog.confirmPasswordLabel">Powtórz nowe hasło</span>
+        <input type="password" id="new-password-confirm" required autocomplete="new-password">
+      </label>
+      <p class="field-hint" data-i18n="ui.accountDialog.passwordHint">Min. 10 znaków, przynajmniej jedna litera i jedna cyfra. Wielkie litery i znaki specjalne dozwolone, ale nieobowiązkowe.</p>
+      <p class="form-error" id="change-password-error"></p>
+      <div class="dialog-actions">
+        <button type="submit" class="btn-primary" data-i18n="ui.accountDialog.changePasswordBtn">Zmień hasło</button>
+      </div>
+    </form>
+
+    <form id="session-duration-form">
+      <label>
+        <span class="label-text" data-i18n="ui.accountDialog.sessionDurationLabel">Czas trwania sesji</span>
+        <select id="session-duration-select">
+          <option value="" data-i18n="ui.accountDialog.sessionDurationUntilClose">Do zamknięcia przeglądarki</option>
+          <option value="5" data-i18n="ui.accountDialog.sessionDuration5min">5 min</option>
+          <option value="15" data-i18n="ui.accountDialog.sessionDuration15min">15 min</option>
+          <option value="30" data-i18n="ui.accountDialog.sessionDuration30min">30 min</option>
+          <option value="60" data-i18n="ui.accountDialog.sessionDuration1h">1 godz.</option>
+          <option value="720" data-i18n="ui.accountDialog.sessionDuration12h">12 godz.</option>
+          <option value="1440" data-i18n="ui.accountDialog.sessionDuration24h">24 godz.</option>
+          <option value="10080" data-i18n="ui.accountDialog.sessionDuration7days">7 dni</option>
+          <option value="custom" data-i18n="ui.accountDialog.sessionDurationCustomLabel">Inny (godziny)</option>
+        </select>
+      </label>
+      <label id="session-duration-custom-label" style="display:none;">
+        <input type="number" id="session-duration-custom" min="1" max="720">
+      </label>
+      <p class="form-error" id="session-duration-error"></p>
+      <div class="dialog-actions">
+        <button type="submit" class="btn-primary" data-i18n="ui.accountDialog.saveSessionDurationBtn">Zapisz</button>
+      </div>
+    </form>
+
+    <div class="account-section" id="update-section">
+      <h4 data-i18n="ui.accountDialog.updateHeading">Wersja</h4>
+      <p class="field-hint" id="update-current-version">&ndash;</p>
+      <p class="field-hint" id="update-status" style="display:none;"></p>
+      <p class="form-error" id="update-error"></p>
+      <div class="dialog-actions">
+        <button type="button" id="update-check-btn" class="link-btn" data-i18n="ui.accountDialog.checkUpdateBtn">Sprawdź aktualizacje</button>
+        <button type="button" id="update-apply-btn" class="btn-primary" style="display:none;"></button>
+      </div>
+    </div>
+
+    <div class="dialog-actions">
+      <button type="button" id="logout-btn" class="link-btn danger" data-i18n="ui.header.logoutBtn">Wyloguj</button>
+      <button type="button" id="account-dialog-close" data-i18n="ui.accountDialog.closeBtn">Zamknij</button>
+    </div>
+  </dialog>
+
+  <dialog id="group-dialog">
+    <form id="group-form" method="dialog">
+      <h3 data-i18n="ui.groupDialog.title">Nowa grupa</h3>
+      <label>
+        <span class="label-text" data-i18n="ui.groupDialog.nameLabel">Nazwa grupy</span>
+        <input type="text" id="new-group-dialog-name" pattern="[a-z_][a-z0-9_-]{0,31}" required
+               data-i18n-placeholder="ui.groupDialog.namePlaceholder" placeholder="np. rodzina" autocomplete="off">
+      </label>
+      <p class="form-error" id="group-error"></p>
+      <div class="dialog-actions">
+        <button type="button" id="group-cancel" data-i18n="ui.groupDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="group-submit" class="btn-primary" data-i18n="ui.groupDialog.createBtn">Utwórz</button>
+      </div>
+    </form>
+  </dialog>
+
+  <template id="raid-card-template">
+    <article class="card">
+      <div class="card-head">
+        <span class="badge"></span>
+        <span class="name"></span>
+        <span class="level"></span>
+      </div>
+      <div class="usage-bar"></div>
+      <dl class="facts">
+        <div><dt data-i18n="ui.raidCard.state">Stan</dt><dd class="state"></dd></div>
+        <div><dt data-i18n="ui.raidCard.device">Urządzenie</dt><dd class="path mono"></dd></div>
+        <div><dt data-i18n="ui.raidCard.disks">Dyski</dt><dd class="devices mono"></dd></div>
+        <div class="progress-row"><dt data-i18n="ui.raidCard.progress">Postęp</dt><dd class="progress"></dd></div>
+      </dl>
+      <p class="error"></p>
+    </article>
+  </template>
+
+  <template id="disk-card-template">
+    <article class="card">
+      <div class="card-head">
+        <span class="badge"></span>
+        <span class="name mono"></span>
+        <span class="model"></span>
+      </div>
+      <div class="usage-bar"></div>
+      <dl class="facts">
+        <div><dt data-i18n="ui.diskCard.size">Rozmiar</dt><dd class="size"></dd></div>
+        <div><dt data-i18n="ui.diskCard.temp">Temperatura</dt><dd class="temp"></dd></div>
+        <div><dt data-i18n="ui.diskCard.hours">Godziny pracy</dt><dd class="hours"></dd></div>
+        <div><dt data-i18n="ui.diskCard.serial">Serial</dt><dd class="serial mono"></dd></div>
+      </dl>
+      <p class="error"></p>
+    </article>
+  </template>
+
+  <template id="user-row-template">
+    <tr>
+      <td>
+        <div class="display-name"></div>
+      </td>
+      <td class="smb-cell"><span class="pill"></span></td>
+      <td class="groups mono"></td>
+      <td class="row-actions">
+        <button type="button" class="link-btn edit-btn" data-i18n="ui.users.editBtn">Edytuj</button>
+        <button type="button" class="link-btn toggle-active-btn" data-i18n="ui.users.disableBtn">Wyłącz</button>
+        <button type="button" class="link-btn danger delete-btn" data-i18n="ui.users.deleteBtn">Usuń</button>
+      </td>
+    </tr>
+  </template>
+
+  <template id="group-row-template">
+    <tr>
+      <td class="display-name mono"></td>
+      <td class="members"></td>
+      <td class="row-actions">
+        <button type="button" class="link-btn danger delete-btn" data-i18n="ui.groups.deleteBtn">Usuń</button>
+      </td>
+    </tr>
+  </template>
+
+  <template id="ssh-key-row-template">
+    <tr>
+      <td class="display-name"></td>
+      <td class="key-cell"><span class="pill"></span></td>
+      <td class="deployments-cell"></td>
+      <td class="row-actions">
+        <button type="button" class="link-btn generate-btn" data-i18n="ui.certs.generateBtn">Generuj</button>
+        <button type="button" class="link-btn deploy-btn" data-i18n="ui.certs.deployBtn">Wyślij na urządzenie</button>
+        <button type="button" class="link-btn danger delete-key-btn" data-i18n="ui.certs.deleteBtn">Usuń</button>
+      </td>
+    </tr>
+  </template>
+
+  <template id="share-row-template">
+    <tr>
+      <td>
+        <div class="display-name"></div>
+        <div class="mono username sub path"></div>
+      </td>
+      <td class="comment"></td>
+      <td class="share-users"></td>
+      <td class="row-actions">
+        <button type="button" class="link-btn edit-btn" data-i18n="ui.shares.editBtn">Edytuj</button>
+        <button type="button" class="link-btn danger delete-btn" data-i18n="ui.shares.deleteBtn">Usuń</button>
+      </td>
+    </tr>
+  </template>
+
+  <template id="log-entry-template">
+    <article class="log-entry">
+      <button type="button" class="log-entry-head">
+        <span class="pill status-pill"></span>
+        <span class="log-summary"></span>
+        <span class="log-time mono"></span>
+        <span class="log-chevron">▾</span>
+      </button>
+      <div class="log-entry-body">
+        <pre class="log-message mono"></pre>
+        <button type="button" class="link-btn log-copy-btn" data-i18n="ui.log.copyBtn">Kopiuj</button>
+      </div>
+    </article>
+  </template>
+
+  <script src="{{ url_for('static', filename='i18n/pl.js') }}"></script>
+  <script src="{{ url_for('static', filename='i18n/en.js') }}"></script>
+  <script src="{{ url_for('static', filename='i18n/index.js') }}"></script>
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>
