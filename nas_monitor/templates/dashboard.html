@@ -38,8 +38,8 @@
     <button type="button" class="tab-btn" data-tab="disks" role="tab" data-i18n="ui.tabs.disks">Dyski i macierze</button>
     <button type="button" class="tab-btn" data-tab="users" role="tab" data-i18n="ui.tabs.users">Użytkownicy</button>
     <button type="button" class="tab-btn" data-tab="groups" role="tab" data-i18n="ui.tabs.groups">Grupy</button>
-    <button type="button" class="tab-btn" data-tab="certs" role="tab" data-i18n="ui.tabs.certs">Certyfikaty</button>
     <button type="button" class="tab-btn" data-tab="shares" role="tab" data-i18n="ui.tabs.shares">Udziały</button>
+    <button type="button" class="tab-btn" data-tab="certs" role="tab" data-i18n="ui.tabs.certs">Certyfikaty</button>
     <button type="button" class="tab-btn" data-tab="network" role="tab" data-i18n="ui.tabs.network">Sieć</button>
     <button type="button" class="tab-btn" data-tab="log" role="tab" data-i18n="ui.tabs.log">Log</button>
   </nav>
@@ -78,14 +78,6 @@
       </section>
     </div>
 
-    <div class="tab-panel" data-tab="certs">
-      <section>
-        <h2 data-i18n="ui.certs.heading">Certyfikaty (klucze SSH)</h2>
-        <p class="subtitle" data-i18n="ui.certs.subtitle">Do logowania/synchronizacji (np. rsync) na inne maszyny bez hasła - niezależne od hasła SMB.</p>
-        <div id="ssh-keys-container" class="user-table"></div>
-      </section>
-    </div>
-
     <div class="tab-panel" data-tab="shares">
       <section>
         <div class="section-head">
@@ -93,6 +85,14 @@
           <button id="add-share-btn" class="btn-primary" type="button" data-i18n="ui.shares.addBtn">+ Dodaj udział</button>
         </div>
         <div id="shares-container" class="user-table"></div>
+      </section>
+    </div>
+
+    <div class="tab-panel" data-tab="certs">
+      <section>
+        <h2 data-i18n="ui.certs.heading">Certyfikaty (klucze SSH)</h2>
+        <p class="subtitle" data-i18n="ui.certs.subtitle">Do logowania/synchronizacji (np. rsync) na inne maszyny bez hasła - niezależne od hasła SMB.</p>
+        <div id="ssh-keys-container" class="user-table"></div>
       </section>
     </div>
 
