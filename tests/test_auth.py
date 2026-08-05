@@ -195,6 +195,28 @@ class TestSecretKey(AuthTestCase):
                 key2 = auth.get_or_create_secret_key()
         self.assertNotEqual(key1, key2)
 
+    def test_concurrent_workers_on_a_fresh_install_agree_on_one_key(self):
+        # Reproduces the real report: two gunicorn worker processes
+        # starting near-simultaneously on a brand new install, before
+        # the key file exists yet. Every "worker" here calls the
+        # function with NO key file present (simulating the race
+        # window), and they must all end up agreeing on exactly one
+        # key - not each keeping whatever they individually generated.
+        import concurrent.futures
+
+        def worker():
+            return auth.get_or_create_secret_key()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: worker(), range(8)))
+
+        self.assertEqual(len(set(results)), 1, "all workers must agree on the same key")
+
+        # And it matches what's actually persisted on disk - no worker
+        # is silently running with a key that doesn't match the file.
+        on_disk = auth.get_or_create_secret_key()
+        self.assertEqual(on_disk, results[0])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -31,6 +31,7 @@ around the web login.
 
 from __future__ import annotations
 
+import json
 import os
 import secrets
 from typing import Any
@@ -171,10 +172,40 @@ def set_session_duration_minutes(minutes: int | None) -> dict[str, Any]:
 
 def get_or_create_secret_key() -> str:
     """The Flask session-signing key - generated once, persisted, and
-    reused by every gunicorn worker process (see module docstring)."""
+    reused by every gunicorn worker process (see module docstring).
+
+    Race-safe on purpose: gunicorn runs multiple worker PROCESSES, and
+    on a genuinely fresh install (no key file yet) they can start
+    within milliseconds of each other. A naive "check if it exists,
+    else write" has a real window where two workers both see "doesn't
+    exist yet" and each generate and save their OWN key - whichever
+    write lands last silently wins on disk, while the other worker
+    keeps running with the key it already loaded into memory. A
+    session cookie signed by one worker then fails verification on the
+    other, which looks exactly like "logs in, works for a moment, then
+    gets bounced back to the login page" depending on which worker
+    happens to handle the next request. Confirmed against a real report.
+
+    os.link() creates the file atomically at the OS level and raises
+    FileExistsError if the target is already there - so at most one
+    worker's key ever actually gets written; every other worker (or a
+    retry after losing the race) just reads whatever won."""
     data = state_store.load(SECRET_KEY_FILE, default=None)
     if data and data.get("key"):
         return data["key"]
-    key = secrets.token_hex(32)
-    state_store.save(SECRET_KEY_FILE, {"key": key})
-    return key
+
+    os.makedirs(state_store.STATE_DIR, exist_ok=True)
+    final_path = os.path.join(state_store.STATE_DIR, SECRET_KEY_FILE)
+    tmp_path = f"{final_path}.{os.getpid()}.tmp"
+
+    with open(tmp_path, "w") as f:
+        json.dump({"key": secrets.token_hex(32)}, f)
+    try:
+        os.link(tmp_path, final_path)
+    except FileExistsError:
+        pass  # another worker won the race - its key is the one that counts
+    finally:
+        os.remove(tmp_path)
+
+    data = state_store.load(SECRET_KEY_FILE, default=None)
+    return data["key"]
