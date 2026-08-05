@@ -118,12 +118,9 @@ window.NAS_I18N.pl = {
       permNone: "Brak dostępu",
       permRo: "Tylko odczyt",
       permRw: "Odczyt i zapis",
-      permBlocked: "Zablokowany (nawet przez grupę)",
       permSummaryRw: "RW",
       permSummaryRo: "R",
       permSummaryNa: "NA",
-      permSummaryBlocked: "zablokowany",
-      permOverriddenHint: "Ustawienie tego użytkownika jest tu ignorowane - efektywny dostęp pochodzi z innego źródła (np. grupy).",
     },
     network: {
       heading: "Sieć",

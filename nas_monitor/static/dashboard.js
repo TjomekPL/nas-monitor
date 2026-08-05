@@ -927,18 +927,6 @@ const shareGroupGrantsList = document.getElementById("share-group-grants-list");
 const shareSubmitBtn = document.getElementById("share-submit");
 
 function permissionLabels() {
-  return {
-    none: t("ui.shares.permNone"),
-    ro: t("ui.shares.permRo"),
-    rw: t("ui.shares.permRw"),
-    blocked: t("ui.shares.permBlocked"),
-  };
-}
-
-// Groups can only ever be granted rw/ro (matches the backend's
-// validation) - "blocked" is deliberately an individual-only override,
-// so it never appears as a group-grant option.
-function groupGrantLabels() {
   return { none: t("ui.shares.permNone"), ro: t("ui.shares.permRo"), rw: t("ui.shares.permRw") };
 }
 
@@ -958,22 +946,6 @@ function summarizeGrantedAccess(permissions, groupGrants) {
   return entries.length ? entries.join(", ") : t("ui.shares.noAccess");
 }
 
-// Mirrors smb_shares.compute_effective_permission() exactly - same
-// priority order (blocked > ro > rw > na), so the frontend never shows
-// something different from what the backend will actually enforce.
-function computeEffectivePermission(username, permissions, groupGrants, userGroups) {
-  const individual = permissions[username];
-  if (individual === "blocked") return "blocked";
-
-  const candidates = individual === "rw" || individual === "ro" ? [individual] : [];
-  for (const g of userGroups || []) {
-    if (groupGrants[g]) candidates.push(groupGrants[g]);
-  }
-  if (candidates.includes("ro")) return "ro";
-  if (candidates.includes("rw")) return "rw";
-  return "na";
-}
-
 function renderPermissionsSummary(container, permissions, groupGrants) {
   container.innerHTML = "";
   const perms = permissions || {};
@@ -982,35 +954,26 @@ function renderPermissionsSummary(container, permissions, groupGrants) {
   function levelInfo(level) {
     if (level === "rw") return { text: t("ui.shares.permSummaryRw"), cls: "perm-rw" };
     if (level === "ro") return { text: t("ui.shares.permSummaryRo"), cls: "perm-ro" };
-    if (level === "blocked") return { text: t("ui.shares.permSummaryBlocked"), cls: "perm-na" };
     return { text: t("ui.shares.permSummaryNa"), cls: "perm-na" };
   }
 
-  function appendTag(label, level, overridden) {
+  function appendTag(label, level) {
     const info = levelInfo(level);
     const span = document.createElement("span");
-    span.className = `perm-tag ${info.cls}${overridden ? " perm-overridden" : ""}`;
+    span.className = `perm-tag ${info.cls}`;
     span.textContent = `${label} (${info.text})`;
-    if (overridden) span.title = t("ui.shares.permOverriddenHint");
     container.appendChild(span);
   }
 
   for (const [group, level] of Object.entries(grants)) {
-    appendTag(`@${group}`, level, false);
+    appendTag(`@${group}`, level);
   }
   // Every known user gets a tag, not just the ones with access - RO/RW
   // are colored to stand out, NA (red) makes it just as visible who's
   // explicitly excluded, which used to be invisible (removing someone's
-  // access just made them disappear from this list entirely). The tag
-  // always reflects the EFFECTIVE outcome (individual setting combined
-  // with any group they're in), dimmed when that differs from what they
-  // were individually set to - e.g. an individual RW quietly downgraded
-  // to RO by a group's more restrictive grant.
+  // access just made them disappear from this list entirely).
   for (const u of lastKnownUsersData) {
-    const stated = perms[u.username];
-    const effective = computeEffectivePermission(u.username, perms, grants, u.groups || []);
-    const overridden = stated !== undefined && stated !== effective;
-    appendTag(u.display_name || u.username, effective, overridden);
+    appendTag(u.display_name || u.username, perms[u.username]);
   }
 
   if (!container.children.length) {
@@ -1140,7 +1103,7 @@ function populateShareGroupGrantsList(existingGrants) {
     const select = document.createElement("select");
     select.dataset.group = g.name;
     select.className = "permission-select group-grant-select";
-    for (const [value, label] of Object.entries(groupGrantLabels())) {
+    for (const [value, label] of Object.entries(permissionLabels())) {
       const opt = document.createElement("option");
       opt.value = value;
       opt.textContent = label;

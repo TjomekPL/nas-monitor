@@ -113,6 +113,42 @@ body {
   padding: 22px max(24px, calc((100% - 1080px) / 2));
   border-bottom: 1px solid var(--border);
   background: var(--surface);
+  position: relative;
+  overflow: hidden;
+  /* Photo background + a fixed dark gradient scrim on top - the gradient
+     is deliberately NOT theme-dependent (always dark) because it exists
+     purely to guarantee the always-light header text stays readable
+     against whatever part of the photo shows through, in both themes.
+     background-size:cover + a left-weighted position keeps the lit
+     drive bay in frame at any viewport width, since a wide/short header
+     strip only ever shows a horizontal slice of the source photo. */
+  background-image:
+    linear-gradient(100deg, rgba(8, 12, 18, 0.86) 0%, rgba(8, 12, 18, 0.62) 45%, rgba(8, 12, 18, 0.78) 100%),
+    url("img/header-bg.jpg");
+  background-size: cover;
+  background-position: left 30%;
+  background-repeat: no-repeat;
+  color: #f2f4f6;
+}
+
+.top h1,
+.top .subtitle,
+.top .refresh-info,
+.top .lang-toggle,
+.top .theme-toggle {
+  color: #f2f4f6;
+}
+.top .subtitle,
+.top .refresh-info { color: rgba(242, 244, 246, 0.75); }
+.top .lang-toggle,
+.top .theme-toggle {
+  border-color: rgba(242, 244, 246, 0.35);
+  background: rgba(20, 24, 30, 0.35);
+}
+.top .lang-toggle:hover,
+.top .theme-toggle:hover {
+  background: rgba(242, 244, 246, 0.14);
+  border-color: rgba(242, 244, 246, 0.6);
 }
 
 h1 { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: -0.01em; }
@@ -431,10 +467,6 @@ h2 {
 .perm-tag.perm-rw { color: var(--ok); }
 .perm-tag.perm-ro { color: var(--accent); }
 .perm-tag.perm-na { color: var(--crit); }
-.perm-tag.perm-overridden {
-  opacity: 0.55;
-  cursor: help;
-}
 .username.sub {
   font-size: 11.5px;
   color: var(--text-muted);
@@ -493,6 +525,12 @@ dialog h3 { margin: 0 0 16px; font-size: 17px; }
   margin-bottom: 8px;
   max-height: 220px;
   overflow-y: auto;
+  overflow-x: visible; /* explicit, so overflow-y:auto doesn't implicitly
+    force overflow-x to "auto" too (a CSS quirk: setting only one axis to
+    a scrolling value computes the other to auto as well) - that was
+    clipping the focus outline / native option-list highlight on the
+    permission <select> elements at the row's right edge */
+  padding-right: 2px; /* room for the focus outline itself */
 }
 .permission-row {
   display: flex;
@@ -815,6 +853,11 @@ select:focus-visible,
     align-items: flex-start;
     gap: 12px;
     padding: 18px 16px;
+    /* taller header on mobile (stacked) shows more vertical slice of the
+       photo - shift the anchor up so the darkest corner (best text
+       contrast) stays behind the title instead of the brighter mid-photo
+       glow drifting into view */
+    background-position: left top;
   }
   main { padding: 8px 16px 40px; }
   .tabs { padding: 0 8px; }
