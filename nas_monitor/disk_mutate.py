@@ -36,6 +36,23 @@ _MKFS_BINARY = {
     "exfat": "mkfs.exfat",  # exfatprogs
 }
 
+# Every mkfs tool refuses to run over a signature it recognizes unless
+# told otherwise - each one spells that differently. wipefs already
+# clears the disk and the partition before this runs (see format_disk),
+# but that alone hasn't proven reliable enough in practice: it can miss
+# some signatures (a real report showed mkfs.xfs still refusing over a
+# leftover "partition table (dos)" signature after both wipefs passes
+# already ran clean). Passing each tool's own force flag on top is the
+# actually-robust fix - the tool's own detection logic is what would
+# reject the operation, so overriding it directly is more reliable than
+# trying to out-guess every signature format wipefs might not catch.
+_MKFS_FORCE_ARGS = {
+    "ext4": ["-F"],
+    "btrfs": ["-f"],
+    "xfs": ["-f"],
+    "exfat": [],  # mkfs.exfat (exfatprogs) has no such safety check to override
+}
+
 
 def _disk_name(device_or_partition: str) -> str:
     """"/dev/sda1" -> "sda", "/dev/nvme0n1p1" -> "nvme0n1",
@@ -251,7 +268,7 @@ def format_disk(device: str, filesystem: str) -> dict[str, Any]:
     if code != 0:
         return errors.command_failed(result, err, out, code, "wipefs")
 
-    code, out, err = system_tools.run([mkfs_path, partition], timeout=180)
+    code, out, err = system_tools.run([mkfs_path, *_MKFS_FORCE_ARGS[filesystem], partition], timeout=180)
     if code != 0:
         return errors.command_failed(result, err, out, code, mkfs_binary)
 

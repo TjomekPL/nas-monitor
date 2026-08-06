@@ -14,10 +14,14 @@ this feature shipped), everything here reports git_managed: False
 instead of raising - the fix for that is one more `sudo ./install.sh`,
 which converts it. After that this module works unattended.
 
-Applying an update restarts the whole service a second after this
-module returns (see apply_update()'s comment below) - the operations
-log entry for it is written by app.py just before that happens, not
-here, since this module has no oplog dependency of its own.
+Applying an update hands off to install.sh in a detached background
+process rather than duplicating a subset of what it does - see
+apply_update()'s own comment for why. install.sh restarts the service
+itself as its last step; the operations log entry for the attempt is
+written by app.py right after this module returns "success" (meaning
+"the update was kicked off", not "it's finished" - there's no way to
+know that synchronously), not here, since this module has no oplog
+dependency of its own.
 """
 
 from __future__ import annotations
@@ -86,11 +90,6 @@ def apply_update() -> dict[str, Any]:
     if not _is_git_checkout():
         return {"success": False, "error_code": "update.not_git_managed"}
 
-    old_head_code, old_head, _ = _git("rev-parse", "HEAD")
-    if old_head_code != 0:
-        return {"success": False, "error_code": "update.apply_failed"}
-    old_head = old_head.strip()
-
     fetch_code, _, _ = _git("fetch", "--tags", "--quiet", "origin", BRANCH, timeout=FETCH_TIMEOUT)
     if fetch_code != 0:
         return {"success": False, "error_code": "update.fetch_failed"}
@@ -102,45 +101,35 @@ def apply_update() -> dict[str, Any]:
     # Defensive: on a slow disk, `git reset --hard` checking out a large
     # number of files can in principle get interrupted by a timeout
     # partway through, leaving the working tree with HEAD already moved
-    # but some tracked files (like requirements.txt) not yet written -
-    # pip would then fail with a confusing "file not found" that looks
-    # like a dependency problem but is really an incomplete checkout.
-    # Catch that here with a clear, specific error instead.
-    if not _path_exists(f"{APP_DIR}/requirements.txt"):
+    # but some tracked files not yet written. Catch that here with a
+    # clear, specific error instead of install.sh failing on a missing
+    # file with no obvious connection to "the checkout didn't finish".
+    if not _path_exists(f"{APP_DIR}/install.sh"):
         return {"success": False, "error_code": "update.incomplete_checkout"}
-
-    # Only touch the venv if this update actually changed requirements.txt
-    # (or the venv doesn't exist at all yet) - most releases don't touch
-    # dependencies, and skipping a no-op `pip install` entirely means
-    # nothing there can fail for them. When it IS needed, pip's own
-    # stderr is carried back in error_context instead of guessing why it
-    # failed - a plain "deps_failed" with no detail isn't fixable from a
-    # dashboard error message.
-    venv_pip = f"{APP_DIR}/venv/bin/pip"
-    _, changed_files, _ = _git("diff", "--name-only", old_head, "HEAD")
-    requirements_changed = "requirements.txt" in changed_files.splitlines()
-    venv_missing = not _path_exists(venv_pip)
-
-    if requirements_changed or venv_missing:
-        pip_code, _, pip_err = system_tools.run(
-            [venv_pip, "install", "-q", "-r", f"{APP_DIR}/requirements.txt"], timeout=180
-        )
-        if pip_code != 0:
-            return {
-                "success": False,
-                "error_code": "update.deps_failed",
-                "error_context": {"detail": (pip_err or "").strip()[-400:] or "-"},
-            }
 
     new_version = get_current_version()
 
-    # Restart from a detached child, not from this request handler directly -
-    # `systemctl restart` would kill this process mid-response. The 1s
-    # delay gives Flask time to finish sending the JSON body below before
-    # the service (and this worker with it) goes down; dashboard.js polls
-    # /api/auth/status afterward until the new process answers again.
+    # install.sh handles everything a release might actually need -
+    # system packages (apt), the venv/pip, nginx + fail2ban config, and
+    # finally the systemd service itself (which it restarts as its own
+    # last step) - exactly the same path a manual `sudo ./install.sh`
+    # takes. An earlier version of this function tried to duplicate a
+    # *subset* of that by hand (pip only, only when requirements.txt
+    # changed) and kept missing things a real release needed - a new
+    # apt package, an nginx config tweak - which only a manual reinstall
+    # ever picked up. Running the actual script is what stays correct
+    # release over release without this file needing to keep guessing
+    # what a given update might touch.
+    #
+    # Detached and logged, not awaited: apt can take anywhere from
+    # instant (nothing changed) to the better part of a minute, and this
+    # request should return either way rather than hold the connection
+    # open - the frontend already polls for the service coming back
+    # up. install.sh's own restart step is what actually brings gunicorn
+    # back, same as the old direct Popen used to (see git history) -
+    # nothing here schedules a second one.
     subprocess.Popen(
-        ["/bin/sh", "-c", "sleep 1 && systemctl restart nas-monitor"],
+        ["/bin/sh", "-c", f"mkdir -p /var/log/nas-monitor && cd {APP_DIR} && ./install.sh >> /var/log/nas-monitor/self-update.log 2>&1"],
         start_new_session=True,
     )
     return {"success": True, "version": new_version}

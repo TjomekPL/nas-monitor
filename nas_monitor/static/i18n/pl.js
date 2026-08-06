@@ -53,7 +53,7 @@ window.NAS_I18N.pl = {
       upToDate: "Masz najnowszą wersję.",
       updateAvailableStatus: "Dostępna aktualizacja: {version}",
       notGitManaged: "Ta instalacja nie jest jeszcze zarządzana przez git - uruchom raz ręcznie sudo ./install.sh, żeby włączyć aktualizacje z panelu.",
-      applyingUpdate: "Instaluję aktualizację i restartuję usługę... to potrwa kilka-kilkanaście sekund.",
+      applyingUpdate: "Instaluję aktualizację (może to potrwać do minuty lub dwóch, jeśli trzeba pobrać nowe pakiety systemowe) i restartuję usługę...",
       applySuccess: "Zaktualizowano do {version}. Strona odświeży się automatycznie.",
       passwordMismatch: "Nowe hasła nie są takie same",
       passwordChanged: "Hasło zmienione.",
@@ -361,7 +361,6 @@ window.NAS_I18N.pl = {
     update: {
       fetch_failed: "Nie udało się połączyć z GitHub, żeby sprawdzić aktualizacje",
       apply_failed: "Nie udało się zastosować aktualizacji (git reset nie powiódł się)",
-      deps_failed: "Aktualizacja pobrana, ale instalacja zależności (pip) nie powiodła się: {detail}",
       not_git_managed: "Ta instalacja nie jest jeszcze zarządzana przez git - uruchom raz ręcznie sudo ./install.sh, żeby to włączyć",
       incomplete_checkout: "Aktualizacja nie dokończyła się (niekompletne pobranie plików) - uruchom ręcznie sudo ./install.sh, żeby dokończyć i naprawić instalację",
     },

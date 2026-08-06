@@ -19,7 +19,16 @@ Environment=PATH=/opt/nas-monitor/venv/bin:/usr/local/sbin:/usr/local/bin:/usr/s
 # if HTTPS setup didn't succeed, so a broken nginx config can never lock
 # you out of the dashboard entirely (this file gets regenerated from the
 # checked-in template on every install.sh run, so it isn't hand-edited).
-ExecStart=/opt/nas-monitor/venv/bin/gunicorn -w 2 -b __BIND_ADDR__:8420 nas_monitor.app:app
+# --timeout 300: gunicorn's own default worker timeout is 30s - if a
+# worker doesn't "check in" within that window it's assumed hung and
+# SIGKILLed, restarting fresh. Disk format/wipe (disk_mutate.py) can
+# legitimately run well past 30s - mkfs.ext4 in particular, especially
+# over USB - so the *worker itself* was getting killed mid-operation
+# long before nginx's own (already-raised) proxy_read_timeout ever
+# came into play. The client then saw nginx's error page for a dead
+# upstream, which is a completely different failure from - and was
+# masking - the real cause here.
+ExecStart=/opt/nas-monitor/venv/bin/gunicorn -w 2 --timeout 300 -b __BIND_ADDR__:8420 nas_monitor.app:app
 Restart=on-failure
 RestartSec=5
 

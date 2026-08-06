@@ -53,7 +53,7 @@ window.NAS_I18N.en = {
       upToDate: "You're on the latest version.",
       updateAvailableStatus: "Update available: {version}",
       notGitManaged: "This install isn't git-managed yet - run sudo ./install.sh once manually to enable updates from this panel.",
-      applyingUpdate: "Installing the update and restarting the service... this'll take a few seconds.",
+      applyingUpdate: "Installing the update (this can take a minute or two if new system packages are needed) and restarting the service...",
       applySuccess: "Updated to {version}. The page will refresh automatically.",
       passwordMismatch: "The new passwords don't match",
       passwordChanged: "Password changed.",
@@ -361,7 +361,6 @@ window.NAS_I18N.en = {
     update: {
       fetch_failed: "Couldn't reach GitHub to check for updates",
       apply_failed: "Couldn't apply the update (git reset failed)",
-      deps_failed: "Update downloaded, but dependency install (pip) failed: {detail}",
       not_git_managed: "This install isn't git-managed yet - run sudo ./install.sh once manually to enable it",
       incomplete_checkout: "The update didn't finish checking out files - run sudo ./install.sh manually to finish and repair the install",
     },

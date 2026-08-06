@@ -242,6 +242,32 @@ class TestFormatDisk(unittest.TestCase):
         wipefs_targets = [c.args[0][-1] for c in mock_run.call_args_list if os.path.basename(c.args[0][0]) == "wipefs"]
         self.assertEqual(wipefs_targets, ["/dev/sdc", "/dev/sdc1"])
 
+    def test_mkfs_receives_the_right_force_flag_per_filesystem(self):
+        # wipefs alone proved insufficient in practice - a real report
+        # showed mkfs.xfs still refusing over a leftover "partition
+        # table" signature even after both wipefs passes ran clean.
+        # Each mkfs tool's own force flag is the actually-robust
+        # override, and each one spells it differently.
+        cases = {"ext4": "-F", "btrfs": "-f", "xfs": "-f"}
+        for fs, expected_flag in cases.items():
+            responses = {
+                "findmnt": (0, "/dev/sda2\n", ""),
+                "lsblk": _lsblk_handler,
+                "wipefs": (0, "", ""),
+                "parted": (0, "", ""),
+                f"mkfs.{fs}": (0, "", ""),
+            }
+            with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+                 mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
+                 mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+                 mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+                 mock.patch.object(disk_mutate.os.path, "exists", return_value=True):
+                result = disk_mutate.format_disk("/dev/sdc", fs)
+
+            self.assertTrue(result["success"], fs)
+            mkfs_call = next(c for c in mock_run.call_args_list if os.path.basename(c.args[0][0]) == f"mkfs.{fs}")
+            self.assertIn(expected_flag, mkfs_call.args[0], fs)
+
     def test_parted_failure_stops_before_mkfs(self):
         responses = {
             "findmnt": (0, "/dev/sda2\n", ""),

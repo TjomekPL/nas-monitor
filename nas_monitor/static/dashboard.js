@@ -2268,10 +2268,14 @@ async function checkForUpdate() {
 }
 
 function waitForRestartThenReload() {
-  // The service restarts ~1s after apply_update() returns (see
-  // update_manager.py's comment on why) - poll until it answers again,
-  // then reload so every open tab picks up the new frontend code
-  // instead of running stale JS against an already-updated backend.
+  // install.sh runs in the background after apply_update() returns (see
+  // update_manager.py) and restarts the service as its own last step -
+  // that can take anywhere from a few seconds to a couple of minutes
+  // depending on whether new system packages need downloading, so this
+  // polls indefinitely rather than giving up after a fixed number of
+  // tries. Reloads every open tab once the service answers again, so
+  // none of them keep running stale JS against an already-updated
+  // backend.
   const poll = () => {
     fetch("/api/auth/status")
       .then(() => window.location.reload())
