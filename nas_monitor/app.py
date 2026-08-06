@@ -181,14 +181,19 @@ def api_disk_smart(name):
 def api_disk_format(name):
     data = request.get_json(force=True, silent=True) or {}
     filesystem = (data.get("filesystem") or "").strip()
+    label = (data.get("label") or "").strip()
+    auto_mount = data.get("auto_mount", True)
     device = f"/dev/{name}"
 
-    result = disk_mutate.format_disk(device, filesystem)
+    result = disk_mutate.format_disk(device, filesystem, label=label, auto_mount=auto_mount)
     if not result["success"]:
         oplog.log_event("disks", "format", "failure", params={"device": device, "filesystem": filesystem})
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
-    oplog.log_event("disks", "format", "success", params={"device": device, "filesystem": filesystem})
-    return jsonify({"success": True})
+    oplog.log_event(
+        "disks", "format", "success",
+        params={"device": device, "filesystem": filesystem, "label": label, "mount_point": result.get("mount_point")},
+    )
+    return jsonify({"success": True, "mount_point": result.get("mount_point"), "warnings": result.get("warnings", [])})
 
 
 @app.route("/api/disks/<name>/wipe", methods=["POST"])

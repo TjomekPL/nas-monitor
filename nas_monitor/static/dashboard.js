@@ -540,6 +540,10 @@ const diskActionTitle = document.getElementById("disk-action-title");
 const diskActionDevice = document.getElementById("disk-action-device");
 const diskActionFsRow = document.getElementById("disk-action-fs-row");
 const diskActionFsSelect = document.getElementById("disk-action-fs");
+const diskActionLabelRow = document.getElementById("disk-action-label-row");
+const diskActionLabelInput = document.getElementById("disk-action-label-input");
+const diskActionAutomountRow = document.getElementById("disk-action-automount-row");
+const diskActionAutomountCheckbox = document.getElementById("disk-action-automount");
 const diskActionWarning = document.getElementById("disk-action-warning");
 const diskActionConfirmLabel = document.getElementById("disk-action-confirm-label");
 const diskActionConfirmInput = document.getElementById("disk-action-confirm-input");
@@ -555,7 +559,7 @@ function renderRawDisks(disks) {
     return;
   }
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr><th>${t("ui.rawDisks.colName")}</th><th>${t("ui.rawDisks.colSize")}</th><th>${t("ui.rawDisks.colModel")}</th><th></th></tr></thead>`;
+  table.innerHTML = `<thead><tr><th>${t("ui.rawDisks.colName")}</th><th>${t("ui.rawDisks.colSize")}</th><th>${t("ui.rawDisks.colModel")}</th><th>${t("ui.rawDisks.colSerial")}</th><th>${t("ui.rawDisks.colFstype")}</th><th></th></tr></thead>`;
   const tbody = document.createElement("tbody");
   for (const d of disks) {
     const row = document.createElement("tr");
@@ -563,6 +567,8 @@ function renderRawDisks(disks) {
       <td class="mono">${d.name}</td>
       <td>${d.size}</td>
       <td>${d.model}${d.transport === "usb" ? ` <span class="pill pill-warn">USB</span>` : ""}</td>
+      <td class="mono">${d.serial}</td>
+      <td class="mono">${d.fstype || t("ui.rawDisks.fstypeNone")}</td>
     `;
     const actions = document.createElement("td");
     actions.className = "row-actions";
@@ -632,22 +638,32 @@ function openDiskActionDialog(disk, kind) {
   diskActionState = { device: disk.path, name: disk.name, kind };
   diskActionError.textContent = "";
   diskActionConfirmInput.value = "";
+  diskActionLabelInput.value = "";
+  diskActionAutomountCheckbox.checked = true;
   diskActionDevice.textContent = `${disk.name} (${disk.size}, ${disk.model})`;
 
   if (kind === "format") {
     diskActionTitle.textContent = t("ui.diskActionDialog.formatTitle");
     diskActionFsRow.style.display = "block";
+    diskActionLabelRow.style.display = "block";
+    diskActionAutomountRow.style.display = "flex";
     diskActionWarning.textContent = t("ui.diskActionDialog.formatWarning");
     diskActionSubmitBtn.textContent = t("ui.diskActionDialog.formatBtn");
   } else {
     diskActionTitle.textContent = t("ui.diskActionDialog.wipeTitle");
     diskActionFsRow.style.display = "none";
+    diskActionLabelRow.style.display = "none";
+    diskActionAutomountRow.style.display = "none";
     diskActionWarning.textContent = t("ui.diskActionDialog.wipeWarning");
     diskActionSubmitBtn.textContent = t("ui.diskActionDialog.wipeBtn");
   }
-  if (disk.transport === "usb") {
-    diskActionWarning.textContent += " " + t("ui.diskActionDialog.usbWarning");
-  }
+  // No USB warning here (format/wipe of a single disk) - the real risk
+  // (weaker I/O error handling, port stability) is specific to USB
+  // disks *in a RAID array*, where one drive's hiccup can degrade the
+  // whole array. A lone USB drive being formatted for ordinary
+  // standalone use is completely normal and doesn't need a caveat -
+  // that warning belongs in the future Arrays/RAID creation flow
+  // instead (see ui.diskActionDialog.usbWarning, kept for reuse there).
   diskActionConfirmLabel.textContent = t("ui.diskActionDialog.confirmLabel", { name: disk.name });
   diskActionSubmitBtn.disabled = true;
   diskActionDialog.showModal();
@@ -667,7 +683,9 @@ diskActionForm.addEventListener("submit", async (ev) => {
   const { name, kind } = diskActionState;
   try {
     const url = kind === "format" ? `/api/disks/${encodeURIComponent(name)}/format` : `/api/disks/${encodeURIComponent(name)}/wipe`;
-    const body = kind === "format" ? { filesystem: diskActionFsSelect.value } : undefined;
+    const body = kind === "format"
+      ? { filesystem: diskActionFsSelect.value, label: diskActionLabelInput.value.trim(), auto_mount: diskActionAutomountCheckbox.checked }
+      : undefined;
     const res = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -680,7 +698,14 @@ diskActionForm.addEventListener("submit", async (ev) => {
       return;
     }
     diskActionDialog.close();
-    showToast(kind === "format" ? t("ui.diskActionDialog.formatSuccess", { name }) : t("ui.diskActionDialog.wipeSuccess", { name }));
+    if (kind === "format") {
+      const successMsg = t("ui.diskActionDialog.formatSuccess", { name });
+      const mountMsg = data.mount_point ? " " + t("ui.diskActionDialog.mountedAt", { path: data.mount_point }) : "";
+      const warnMsg = data.warnings && data.warnings.length ? " " + warningsText(data.warnings) : "";
+      showToast(successMsg + mountMsg + warnMsg, Boolean(warnMsg));
+    } else {
+      showToast(t("ui.diskActionDialog.wipeSuccess", { name }));
+    }
     await loadRawDisks();
     await refresh();
   } catch (err) {

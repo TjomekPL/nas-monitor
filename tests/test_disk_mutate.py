@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -12,6 +15,19 @@ from nas_monitor import disk_mutate  # noqa: E402
 
 def _fake_find_binary(name):
     return f"/usr/bin/{name}"
+
+
+# Real os.path.exists, captured before any test patches it - used as the
+# fallback in _partition_exists_stub below so patching "the partition
+# node showed up" doesn't also make os.makedirs() elsewhere in the same
+# call (see _mount_and_persist) think directories exist that don't.
+_real_path_exists = os.path.exists
+
+
+def _partition_exists_stub(path):
+    if re.match(r"^/dev/[a-z0-9]+\d+$", path):
+        return True
+    return _real_path_exists(path)
 
 
 def _fake_run_factory(responses):
@@ -81,6 +97,40 @@ class TestDiskNameParsing(unittest.TestCase):
 
     def test_partition_path_sd_card(self):
         self.assertEqual(disk_mutate._partition_path("/dev/mmcblk0"), "/dev/mmcblk0p1")
+
+
+class TestDiskFstype(unittest.TestCase):
+    def test_reports_fstype_of_whole_disk(self):
+        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": "ext4", "children": []}]}'
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
+            self.assertEqual(disk_mutate._disk_fstype("/dev/sdc"), "ext4")
+
+    def test_reports_fstype_of_first_partition_when_disk_itself_is_bare(self):
+        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": null, "children": [{"name": "sdc1", "fstype": "xfs"}]}]}'
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
+            self.assertEqual(disk_mutate._disk_fstype("/dev/sdc"), "xfs")
+
+    def test_none_when_genuinely_blank(self):
+        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": null, "children": []}]}'
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
+            self.assertIsNone(disk_mutate._disk_fstype("/dev/sdc"))
+
+    def test_list_raw_disks_includes_fstype_per_disk(self):
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": (0, '{"blockdevices": [{"name": "sdc", "fstype": "btrfs", "children": []}]}', ""),
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=[DISKS[2]]), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]):
+            raw = disk_mutate.list_raw_disks()
+
+        self.assertEqual(raw[0]["fstype"], "btrfs")
+        self.assertEqual(raw[0]["name"], "sdc")
 
 
 class TestListRawDisks(unittest.TestCase):
@@ -196,10 +246,164 @@ class TestWipeDisk(unittest.TestCase):
 
 
 class TestFormatDisk(unittest.TestCase):
+    def setUp(self):
+        # _mount_and_persist touches real system paths (/mnt, /etc/fstab)
+        # by default - redirect both to a scratch tempdir for every test
+        # in this class so nothing here ever writes to the real machine
+        # running the test suite.
+        self.tmpdir = tempfile.mkdtemp()
+        self.fstab_path = os.path.join(self.tmpdir, "fstab")
+        open(self.fstab_path, "w").close()
+        self.mount_base = os.path.join(self.tmpdir, "mnt")
+        self.mount_base_patch = mock.patch.object(disk_mutate, "MOUNT_BASE", self.mount_base)
+        self.fstab_patch = mock.patch.object(disk_mutate, "FSTAB_PATH", self.fstab_path)
+        self.mount_base_patch.start()
+        self.fstab_patch.start()
+
+    def tearDown(self):
+        self.mount_base_patch.stop()
+        self.fstab_patch.stop()
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
     def test_rejects_unsupported_filesystem(self):
         result = disk_mutate.format_disk("/dev/sdc", "zfs")
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "disks.unsupported_filesystem")
+
+    def test_rejects_invalid_label(self):
+        result = disk_mutate.format_disk("/dev/sdc", "ext4", label="not a valid label!")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "disks.invalid_label")
+
+    def test_passes_label_to_mkfs(self):
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": _lsblk_handler,
+            "wipefs": (0, "", ""),
+            "parted": (0, "", ""),
+            "mkfs.ext4": (0, "", ""),
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub):
+            result = disk_mutate.format_disk("/dev/sdc", "ext4", label="dane", auto_mount=False)
+
+        self.assertTrue(result["success"])
+        mkfs_call = next(c for c in mock_run.call_args_list if os.path.basename(c.args[0][0]) == "mkfs.ext4")
+        self.assertIn("-L", mkfs_call.args[0])
+        self.assertIn("dane", mkfs_call.args[0])
+
+    def test_auto_mount_false_never_touches_mount_or_fstab(self):
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": _lsblk_handler,
+            "wipefs": (0, "", ""),
+            "parted": (0, "", ""),
+            "mkfs.ext4": (0, "", ""),
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub):
+            result = disk_mutate.format_disk("/dev/sdc", "ext4", auto_mount=False)
+
+        self.assertTrue(result["success"])
+        self.assertNotIn("warnings", result)
+        used_tools = {os.path.basename(c.args[0][0]) for c in mock_run.call_args_list}
+        self.assertNotIn("blkid", used_tools)
+        self.assertNotIn("mount", used_tools)
+        self.assertFalse(os.path.isdir(self.mount_base))
+
+    def test_auto_mount_success_creates_fstab_entry_and_mounts(self):
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": _lsblk_handler,
+            "wipefs": (0, "", ""),
+            "parted": (0, "", ""),
+            "mkfs.ext4": (0, "", ""),
+            "blkid": (0, "1234-ABCD-uuid\n", ""),
+            "mount": (0, "", ""),
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub):
+            result = disk_mutate.format_disk("/dev/sdc", "ext4", label="dane")
+
+        self.assertTrue(result["success"])
+        self.assertNotIn("warnings", result)
+        self.assertEqual(result["mount_point"], os.path.join(self.mount_base, "dane"))
+        self.assertTrue(os.path.isdir(result["mount_point"]))
+        with open(self.fstab_path) as f:
+            fstab_content = f.read()
+        self.assertIn("1234-ABCD-uuid", fstab_content)
+        self.assertIn(result["mount_point"], fstab_content)
+        self.assertIn("nofail", fstab_content)
+        mount_call = next(c for c in mock_run.call_args_list if os.path.basename(c.args[0][0]) == "mount")
+        self.assertIn(result["mount_point"], mount_call.args[0])
+
+    def test_auto_mount_uses_disk_name_when_no_label_given(self):
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": _lsblk_handler,
+            "wipefs": (0, "", ""),
+            "parted": (0, "", ""),
+            "mkfs.ext4": (0, "", ""),
+            "blkid": (0, "1234-ABCD-uuid\n", ""),
+            "mount": (0, "", ""),
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub):
+            result = disk_mutate.format_disk("/dev/sdc", "ext4")  # no label
+
+        self.assertEqual(result["mount_point"], os.path.join(self.mount_base, "sdc"))
+
+    def test_auto_mount_failure_is_a_warning_not_a_failure(self):
+        # blkid failing (or missing) means no UUID, which means no safe
+        # fstab entry can be written - the filesystem itself is still
+        # correctly created, so this must not turn the whole format
+        # into a reported failure, just flag that mounting needs doing
+        # by hand.
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": _lsblk_handler,
+            "wipefs": (0, "", ""),
+            "parted": (0, "", ""),
+            "mkfs.ext4": (0, "", ""),
+            "blkid": (1, "", "no such device"),
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub):
+            result = disk_mutate.format_disk("/dev/sdc", "ext4")
+
+        self.assertTrue(result["success"])
+        self.assertIsNone(result["mount_point"])
+        self.assertEqual(result["warnings"][0]["code"], "disks.uuid_not_found")
+
+    def test_mount_and_persist_does_not_duplicate_an_existing_fstab_entry(self):
+        with open(self.fstab_path, "w") as f:
+            f.write("UUID=1234-ABCD-uuid  /mnt/dane  ext4  defaults,nofail  0  2\n")
+
+        responses = {"blkid": (0, "1234-ABCD-uuid\n", ""), "mount": (0, "", "")}
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)):
+            result = disk_mutate._mount_and_persist("/dev/sdc1", "ext4", "dane")
+
+        self.assertTrue(result["success"])
+        with open(self.fstab_path) as f:
+            content = f.read()
+        # exactly one line for this UUID, not two
+        self.assertEqual(content.count("1234-ABCD-uuid"), 1)
 
     def test_refuses_to_format_a_raid_member(self):
         responses = {"findmnt": (0, "/dev/sda2\n", ""), "lsblk": _lsblk_handler}
@@ -225,7 +429,7 @@ class TestFormatDisk(unittest.TestCase):
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
              mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
              mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
-             mock.patch.object(disk_mutate.os.path, "exists", return_value=True):
+             mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub):
             result = disk_mutate.format_disk("/dev/sdc", "ext4")
 
         self.assertTrue(result["success"])
@@ -261,7 +465,7 @@ class TestFormatDisk(unittest.TestCase):
                  mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
                  mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
                  mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
-                 mock.patch.object(disk_mutate.os.path, "exists", return_value=True):
+                 mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub):
                 result = disk_mutate.format_disk("/dev/sdc", fs)
 
             self.assertTrue(result["success"], fs)
@@ -308,7 +512,7 @@ class TestFormatDisk(unittest.TestCase):
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
              mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
              mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
-             mock.patch.object(disk_mutate.os.path, "exists", return_value=True):
+             mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub):
             result = disk_mutate.format_disk("/dev/sdc", "ext4")
 
         self.assertFalse(result["success"])

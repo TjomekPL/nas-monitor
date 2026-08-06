@@ -369,6 +369,14 @@
           <option value="exfat">exFAT</option>
         </select>
       </label>
+      <label id="disk-action-label-row">
+        <span class="label-text" data-i18n="ui.diskActionDialog.labelLabel">Etykieta (opcjonalnie)</span>
+        <input type="text" id="disk-action-label-input" pattern="[A-Za-z0-9_-]{1,32}" maxlength="32" autocomplete="off">
+      </label>
+      <label class="inline" id="disk-action-automount-row">
+        <input type="checkbox" id="disk-action-automount" checked>
+        <span data-i18n="ui.diskActionDialog.automountLabel">Zamontuj automatycznie po sformatowaniu (i przy każdym starcie systemu)</span>
+      </label>
       <p class="form-error" id="disk-action-warning" style="color: var(--crit);"></p>
       <label>
         <span class="label-text" id="disk-action-confirm-label"></span>

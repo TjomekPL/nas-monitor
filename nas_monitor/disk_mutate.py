@@ -28,6 +28,17 @@ from typing import Any
 from nas_monitor import system_tools, errors, monitor
 
 SUPPORTED_FILESYSTEMS = {"ext4", "btrfs", "xfs", "exfat"}
+MOUNT_BASE = "/mnt"
+FSTAB_PATH = "/etc/fstab"
+
+# Conservative allowlist a label must satisfy before it's ever handed
+# to mkfs's own -L flag or used to build a mount-point directory name -
+# not because mkfs/mkdir would mishandle other characters, but because
+# this same string becomes a path component (/mnt/<label>) and an
+# /etc/fstab field, and there's no reason to accept anything that could
+# be awkward in either place (spaces, slashes, quotes) when a plain
+# alnum/dash/underscore name covers every real use case.
+_VALID_LABEL_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 _MKFS_BINARY = {
     "ext4": "mkfs.ext4",
@@ -145,6 +156,36 @@ def _raid_member_disk_names() -> set[str]:
     return members
 
 
+def _disk_fstype(device: str) -> str | None:
+    """Filesystem currently on this disk (or its first partition, if
+    any), even though nothing is mounted - so the raw-disks table can
+    show what's actually there rather than a disk always looking blank
+    until you dig into it. None if genuinely blank/unrecognized."""
+    lsblk_path = system_tools.find_binary("lsblk")
+    if lsblk_path is None:
+        return None
+    code, out, _ = system_tools.run([lsblk_path, "-J", "-o", "NAME,FSTYPE", device])
+    if code != 0 or not out.strip():
+        return None
+    try:
+        import json
+        data = json.loads(out)
+    except ValueError:
+        return None
+
+    def walk(devices):
+        for dev in devices:
+            fstype = dev.get("fstype")
+            if fstype:
+                return fstype
+            found = walk(dev.get("children") or [])
+            if found:
+                return found
+        return None
+
+    return walk(data.get("blockdevices", []))
+
+
 def list_raw_disks() -> list[dict[str, Any]]:
     """Whole disks that are not the boot disk, not part of any RAID
     array, and have nothing currently mounted on them - disks a human
@@ -155,11 +196,14 @@ def list_raw_disks() -> list[dict[str, Any]]:
     mounted = _mounted_disk_names()
     raid_members = _raid_member_disk_names()
 
-    return [
-        disk
-        for disk in monitor.list_disks()
-        if disk["name"] != boot_disk and disk["name"] not in mounted and disk["name"] not in raid_members
-    ]
+    raw = []
+    for disk in monitor.list_disks():
+        if disk["name"] == boot_disk or disk["name"] in mounted or disk["name"] in raid_members:
+            continue
+        disk = dict(disk)
+        disk["fstype"] = _disk_fstype(disk["path"])
+        raw.append(disk)
+    return raw
 
 
 def check_disk_safe_to_modify(device: str) -> dict[str, Any]:
@@ -207,14 +251,30 @@ def wipe_disk(device: str) -> dict[str, Any]:
     return result
 
 
-def format_disk(device: str, filesystem: str) -> dict[str, Any]:
+def format_disk(device: str, filesystem: str, label: str = "", auto_mount: bool = True) -> dict[str, Any]:
     """Wipe -> new GPT label -> one partition spanning the disk ->
-    mkfs on that partition. See the module docstring for why this never
-    formats the raw disk device directly."""
+    mkfs on that partition -> (by default) mount it and make that
+    persistent across reboots. See the module docstring for why this
+    never formats the raw disk device directly.
+
+    auto_mount defaults on: wiping a disk is preparation for a future
+    RAID array (no mount wanted, mdadm needs the bare partition), but
+    formatting is preparation for standalone use - a formatted disk you
+    still have to SSH in and mount by hand isn't actually usable yet,
+    so this finishes the job. Mount-point naming and fstab persistence
+    are still a nice-to-have on top of the filesystem itself, though:
+    if either step fails, that failure comes back as a warning on an
+    otherwise-successful result, not a hard failure - the disk is
+    correctly formatted either way, and can always be mounted by hand
+    afterward."""
     result: dict[str, Any] = {"device": device, "filesystem": filesystem, "success": False}
 
     if filesystem not in SUPPORTED_FILESYSTEMS:
         return errors.fail(result, "disks.unsupported_filesystem", filesystem=filesystem)
+
+    label = label.strip()
+    if label and not _VALID_LABEL_RE.match(label):
+        return errors.fail(result, "disks.invalid_label", label=label)
 
     safety = check_disk_safe_to_modify(device)
     if not safety["safe"]:
@@ -259,19 +319,93 @@ def format_disk(device: str, filesystem: str) -> dict[str, Any]:
     # created the same way ("0% to 100%") - whatever filesystem used to
     # live there is still physically sitting in that data region, on
     # its own separate device node (/dev/sda1, not /dev/sda), which the
-    # first wipefs never touched. Every mkfs tool refuses to run over a
-    # signature it recognizes without an explicit force flag - and
-    # each tool spells that flag differently (-f, -F, ...) - so
-    # clearing it here once, consistently, is simpler and more robust
-    # than tracking a force flag per filesystem.
+    # first wipefs never touched.
     code, out, err = system_tools.run([wipefs_path, "-a", partition], timeout=30)
     if code != 0:
         return errors.command_failed(result, err, out, code, "wipefs")
 
-    code, out, err = system_tools.run([mkfs_path, *_MKFS_FORCE_ARGS[filesystem], partition], timeout=180)
+    mkfs_args = [mkfs_path, *_MKFS_FORCE_ARGS[filesystem]]
+    if label:
+        mkfs_args += ["-L", label]
+    mkfs_args.append(partition)
+    code, out, err = system_tools.run(mkfs_args, timeout=180)
     if code != 0:
         return errors.command_failed(result, err, out, code, mkfs_binary)
 
     result["success"] = True
     result["partition"] = partition
+
+    if auto_mount:
+        mount_result = _mount_and_persist(partition, filesystem, label or _disk_name(device))
+        result["mount_point"] = mount_result.get("mount_point")
+        if not mount_result["success"]:
+            errors.warn(result, mount_result["error_code"], **mount_result.get("error_context", {}))
+
+    return result
+
+
+def _get_uuid(partition: str) -> str | None:
+    blkid_path = system_tools.find_binary("blkid")
+    if blkid_path is None:
+        return None
+    code, out, _ = system_tools.run([blkid_path, "-s", "UUID", "-o", "value", partition], timeout=10)
+    uuid = out.strip()
+    return uuid if code == 0 and uuid else None
+
+
+def _mount_and_persist(partition: str, filesystem: str, mount_name: str) -> dict[str, Any]:
+    """Creates /mnt/<mount_name>, adds a UUID-keyed /etc/fstab entry
+    (nofail - a disk that's missing at boot, e.g. an unplugged USB
+    drive, must never hang the rest of the system coming up), and
+    mounts it immediately rather than waiting for the next reboot.
+    UUID rather than the device path (/dev/sda1): device names aren't
+    guaranteed stable across reboots, especially for USB/hot-plugged
+    drives - the UUID always points at the right filesystem regardless
+    of what the kernel happens to name it this time.
+
+    Every failure path here uses its own disks.* code rather than the
+    generic errors.tool_missing/io_failed/command_failed helpers (which
+    all produce system.* codes) - format_disk() surfaces whichever of
+    these fires as a *warning* on an otherwise-successful format, and a
+    system.* code would double as both this and some unrelated future
+    warning that happens to hit the same generic helper, showing this
+    disk-specific wording in a context that has nothing to do with
+    mounting."""
+    result: dict[str, Any] = {"success": False, "mount_point": None}
+
+    uuid = _get_uuid(partition)
+    if not uuid:
+        return errors.fail(result, "disks.uuid_not_found", partition=partition)
+
+    mount_point = os.path.join(MOUNT_BASE, mount_name)
+    try:
+        os.makedirs(mount_point, exist_ok=True)
+    except OSError as exc:
+        return errors.fail(result, "disks.mount_point_failed", path=mount_point, detail=str(exc))
+
+    try:
+        with open(FSTAB_PATH, "r") as fh:
+            fstab_content = fh.read()
+    except OSError as exc:
+        return errors.fail(result, "disks.fstab_failed", path=FSTAB_PATH, detail=str(exc))
+
+    if uuid not in fstab_content:
+        entry = f"UUID={uuid}  {mount_point}  {filesystem}  defaults,nofail  0  2\n"
+        try:
+            with open(FSTAB_PATH, "a") as fh:
+                fh.write(entry)
+        except OSError as exc:
+            return errors.fail(result, "disks.fstab_failed", path=FSTAB_PATH, detail=str(exc))
+
+    mount_path = system_tools.find_binary("mount")
+    if mount_path is None:
+        return errors.fail(result, "disks.mount_tool_missing")
+
+    code, out, err = system_tools.run([mount_path, mount_point], timeout=30)
+    if code != 0:
+        detail = (err or "").strip() or (out or "").strip() or f"exit code {code}"
+        return errors.fail(result, "disks.mount_failed", detail=detail)
+
+    result["success"] = True
+    result["mount_point"] = mount_point
     return result
