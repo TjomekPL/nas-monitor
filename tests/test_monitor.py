@@ -501,6 +501,20 @@ class TestGetFullStatusVisibility(unittest.TestCase):
         self.assertEqual(broken["health"], "unknown")
         self.assertIn("lsblk exploded", broken["smart"]["error"])
 
+    @mock.patch("nas_monitor.monitor.get_smart_health", return_value={"available": False})
+    @mock.patch("nas_monitor.monitor.classify_health", return_value="unknown")
+    @mock.patch("nas_monitor.monitor.get_raid_arrays", return_value=[])
+    @mock.patch("nas_monitor.monitor._boot_disk_name", return_value="sda")
+    def test_flags_is_boot_disk_correctly(self, mock_boot, mock_raid, mock_health, mock_smart):
+        disks = [{"name": "sda", "path": "/dev/sda"}, {"name": "sdb", "path": "/dev/sdb"}]
+        with mock.patch("nas_monitor.monitor.list_disks", return_value=disks), \
+             mock.patch("nas_monitor.monitor.get_filesystem_usage", return_value={"mounted": True}):
+            status = monitor.get_full_status()
+
+        by_name = {d["name"]: d for d in status["disks"]}
+        self.assertTrue(by_name["sda"]["is_boot_disk"])
+        self.assertFalse(by_name["sdb"]["is_boot_disk"])
+
 
 if __name__ == "__main__":
     unittest.main()

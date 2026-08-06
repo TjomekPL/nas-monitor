@@ -485,9 +485,13 @@ function renderDisks(disks) {
     emptyState(disksContainer, t("msg.empty.disks"));
     return;
   }
-  for (const disk of disks) {
+  const ordered = applyCardOrder("disks", disks, (d) => d.name);
+  for (const disk of ordered) {
     const node = diskTemplate.content.cloneNode(true);
     window.i18n.applyTranslations(node);
+    const article = node.querySelector(".card");
+    article.dataset.cardId = disk.name;
+    article.draggable = true;
     node.querySelector(".badge").classList.add(disk.health || "unknown");
     node.querySelector(".name").textContent = disk.path;
     node.querySelector(".model").textContent = disk.model || "";
@@ -509,12 +513,21 @@ function renderDisks(disks) {
     // disk_mutate.MOUNT_BASE) - that's specifically the convention
     // format_disk()'s auto-mount uses, so it's the one case a mounted
     // disk showing up here (read-only otherwise - see monitor.py's
-    // get_full_status filtering) still has a way back to the raw-disks
-    // table (format/wipe) instead of being stuck permanently. A RAID
-    // member's usage isn't a plain mount in this sense (the array is),
-    // so this naturally never shows for those either.
+    // get_full_status filtering) still has a way back to the
+    // disk-management table (Dyski i macierze tab) instead of being
+    // stuck permanently. A RAID member's usage isn't a plain mount in
+    // this sense (the array is), so this naturally never shows for
+    // those either.
+    //
+    // Hard-excluded regardless: the boot disk. A boot disk that also
+    // happens to carry a /mnt/-mounted spare partition would otherwise
+    // still pass the check above - disk.is_boot_disk (set server-side
+    // by monitor.get_full_status, backed by the same rejection in
+    // disk_mutate.unmount_disk) makes this a rule of its own, not just
+    // a side effect of the /mnt/ check, so the button for the disk
+    // carrying the running system can never appear at all.
     const mountpoints = (disk.usage && disk.usage.mountpoints) || [];
-    if (mountpoints.some((mp) => mp && mp.startsWith("/mnt/"))) {
+    if (!disk.is_boot_disk && mountpoints.some((mp) => mp && mp.startsWith("/mnt/"))) {
       const actions = node.querySelector(".card-actions");
       actions.style.display = "block";
       node.querySelector(".unmount-btn").addEventListener("click", () => unmountDisk(disk));
@@ -522,6 +535,100 @@ function renderDisks(disks) {
 
     disksContainer.appendChild(node);
   }
+  wireCardDragging(disksContainer, "disks");
+}
+
+// --------------------------------------------------------------------
+// Card drag-and-drop reordering (Podsumowanie tab) - native HTML5 drag
+// events, no library. Reordering is scoped to whichever container the
+// drag started in (each container carries its own [data-drag-section]
+// and only listens to drops of cards already inside it), so a card can
+// never be dragged from one section into another - there's only one
+// section (disks) today, but this is the boundary that matters once a
+// network/shares section is added later.
+// --------------------------------------------------------------------
+
+const cardOrderCache = {};
+
+function applyCardOrder(section, items, idFn) {
+  const saved = cardOrderCache[section];
+  if (!saved || !saved.length) return items;
+  const byId = new Map(items.map((item) => [idFn(item), item]));
+  const ordered = [];
+  for (const id of saved) {
+    if (byId.has(id)) {
+      ordered.push(byId.get(id));
+      byId.delete(id);
+    }
+  }
+  // anything not in the saved order (new since it was last saved) goes
+  // after everything that is, in whatever order the API returned it
+  for (const item of items) {
+    if (byId.has(idFn(item))) ordered.push(item);
+  }
+  return ordered;
+}
+
+async function loadCardOrder(section) {
+  try {
+    const res = await fetch(`/api/layout/${encodeURIComponent(section)}`);
+    const data = await res.json();
+    cardOrderCache[section] = data.order || [];
+  } catch (err) {
+    cardOrderCache[section] = [];
+  }
+}
+
+async function saveCardOrder(section, order) {
+  cardOrderCache[section] = order;
+  try {
+    await fetch(`/api/layout/${encodeURIComponent(section)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ order }),
+    });
+  } catch (err) {
+    // Not user-visible on purpose - a failed save just means the next
+    // render falls back to natural order again; nothing was lost, and
+    // surfacing a toast for a drag-and-drop reorder would be noisy.
+  }
+}
+
+let draggedCard = null;
+
+function wireCardDragging(container, section) {
+  if (container.dataset.dragWired) return;
+  container.dataset.dragWired = "true";
+
+  container.addEventListener("dragstart", (ev) => {
+    const card = ev.target.closest(".card");
+    if (!card || card.parentElement !== container) return;
+    draggedCard = card;
+    card.classList.add("dragging");
+    ev.dataTransfer.effectAllowed = "move";
+  });
+
+  container.addEventListener("dragend", () => {
+    if (draggedCard) draggedCard.classList.remove("dragging");
+    draggedCard = null;
+  });
+
+  container.addEventListener("dragover", (ev) => {
+    if (!draggedCard) return;
+    ev.preventDefault();
+    const target = ev.target.closest(".card");
+    if (!target || target === draggedCard || target.parentElement !== container) return;
+    const rect = target.getBoundingClientRect();
+    const before = (ev.clientY - rect.top) < rect.height / 2;
+    container.insertBefore(draggedCard, before ? target : target.nextSibling);
+  });
+
+  container.addEventListener("drop", (ev) => {
+    if (!draggedCard) return;
+    ev.preventDefault();
+    const order = Array.from(container.querySelectorAll(".card")).map((el) => el.dataset.cardId);
+    saveCardOrder(section, order);
+  });
 }
 
 async function unmountDisk(disk) {
@@ -591,7 +698,7 @@ function renderRawDisks(disks) {
     return;
   }
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr><th>${t("ui.rawDisks.colName")}</th><th>${t("ui.rawDisks.colSize")}</th><th>${t("ui.rawDisks.colModel")}</th><th>${t("ui.rawDisks.colSerial")}</th><th>${t("ui.rawDisks.colFstype")}</th><th></th></tr></thead>`;
+  table.innerHTML = `<thead><tr><th>${t("ui.rawDisks.colName")}</th><th>${t("ui.rawDisks.colSize")}</th><th>${t("ui.rawDisks.colModel")}</th><th>${t("ui.rawDisks.colSerial")}</th><th>${t("ui.rawDisks.colFstype")}</th><th>${t("ui.rawDisks.colStatus")}</th><th></th></tr></thead>`;
   const tbody = document.createElement("tbody");
   for (const d of disks) {
     const row = document.createElement("tr");
@@ -602,30 +709,56 @@ function renderRawDisks(disks) {
       <td class="mono">${d.serial}</td>
       <td class="mono">${d.fstype || t("ui.rawDisks.fstypeNone")}</td>
     `;
+
+    // Status + actions both depend on the same three states, so they're
+    // decided together: a RAID member is only ever shown as such here
+    // (managing RAID membership is the future Arrays section's job,
+    // not this table's); a disk mounted under /mnt/ shows where and
+    // offers the same Unmount as the disk cards (unmountDisk is shared
+    // with renderDisks - one implementation, two entry points to it);
+    // anything else is genuinely free and gets the destructive actions.
+    const statusCell = document.createElement("td");
     const actions = document.createElement("td");
     actions.className = "row-actions";
 
-    const checkBtn = document.createElement("button");
-    checkBtn.type = "button";
-    checkBtn.className = "link-btn";
-    checkBtn.textContent = t("ui.rawDisks.checkBtn");
-    checkBtn.addEventListener("click", () => checkRawDiskStatus(d, checkBtn));
-    actions.appendChild(checkBtn);
+    if (d.is_raid_member) {
+      statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusRaidMember")}</span>`;
+    } else if (d.mounted) {
+      statusCell.innerHTML = `<span class="pill pill-ok">${t("ui.rawDisks.statusMounted")}</span> <span class="mono">${d.mount_point || ""}</span>`;
+      if (d.mount_point && d.mount_point.startsWith("/mnt/")) {
+        const unmountBtn = document.createElement("button");
+        unmountBtn.type = "button";
+        unmountBtn.className = "link-btn";
+        unmountBtn.textContent = t("ui.diskCard.unmountBtn");
+        unmountBtn.addEventListener("click", () => unmountDisk(d));
+        actions.appendChild(unmountBtn);
+      }
+    } else {
+      statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusFree")}</span>`;
 
-    const formatBtn = document.createElement("button");
-    formatBtn.type = "button";
-    formatBtn.className = "link-btn";
-    formatBtn.textContent = t("ui.rawDisks.formatBtn");
-    formatBtn.addEventListener("click", () => openDiskActionDialog(d, "format"));
-    actions.appendChild(formatBtn);
+      const checkBtn = document.createElement("button");
+      checkBtn.type = "button";
+      checkBtn.className = "link-btn";
+      checkBtn.textContent = t("ui.rawDisks.checkBtn");
+      checkBtn.addEventListener("click", () => checkRawDiskStatus(d, checkBtn));
+      actions.appendChild(checkBtn);
 
-    const wipeBtn = document.createElement("button");
-    wipeBtn.type = "button";
-    wipeBtn.className = "link-btn danger";
-    wipeBtn.textContent = t("ui.rawDisks.wipeBtn");
-    wipeBtn.addEventListener("click", () => openDiskActionDialog(d, "wipe"));
-    actions.appendChild(wipeBtn);
+      const formatBtn = document.createElement("button");
+      formatBtn.type = "button";
+      formatBtn.className = "link-btn";
+      formatBtn.textContent = t("ui.rawDisks.formatBtn");
+      formatBtn.addEventListener("click", () => openDiskActionDialog(d, "format"));
+      actions.appendChild(formatBtn);
 
+      const wipeBtn = document.createElement("button");
+      wipeBtn.type = "button";
+      wipeBtn.className = "link-btn danger";
+      wipeBtn.textContent = t("ui.rawDisks.wipeBtn");
+      wipeBtn.addEventListener("click", () => openDiskActionDialog(d, "wipe"));
+      actions.appendChild(wipeBtn);
+    }
+
+    row.appendChild(statusCell);
     row.appendChild(actions);
     tbody.appendChild(row);
   }
@@ -636,7 +769,7 @@ function renderRawDisks(disks) {
 async function loadRawDisks() {
   if (diskActionDialog.open) return;
   try {
-    const res = await fetch("/api/disks/raw");
+    const res = await fetch("/api/disks/manageable");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     renderRawDisks(data.disks || []);
@@ -1209,6 +1342,8 @@ const shareError = document.getElementById("share-error");
 const shareDialogTitle = document.getElementById("share-dialog-title");
 const shareNameInput = document.getElementById("share-name");
 const sharePathPreview = document.getElementById("share-path-preview");
+const shareLocationRow = document.getElementById("share-location-row");
+const shareLocationSelect = document.getElementById("share-location");
 const shareCommentInput = document.getElementById("share-comment");
 const sharePermissionsList = document.getElementById("share-permissions-list");
 const shareGroupGrantsList = document.getElementById("share-group-grants-list");
@@ -1429,9 +1564,37 @@ async function loadShares() {
 
 function updateSharePathPreview() {
   const raw = shareNameInput.value.trim().toLowerCase();
-  sharePathPreview.textContent = raw ? t("ui.shareDialog.pathPreview", { name: raw }) : "";
+  if (!raw) {
+    sharePathPreview.textContent = "";
+    return;
+  }
+  const base = shareLocationSelect.value || "/srv";
+  sharePathPreview.textContent = t("ui.shareDialog.pathPreview", { path: `${base}/${raw}` });
 }
 shareNameInput.addEventListener("input", updateSharePathPreview);
+shareLocationSelect.addEventListener("change", updateSharePathPreview);
+
+async function loadShareLocations() {
+  shareLocationSelect.innerHTML = "";
+  try {
+    const res = await fetch("/api/shares/locations");
+    const data = await res.json();
+    for (const loc of data.locations || []) {
+      const opt = document.createElement("option");
+      opt.value = loc.path;
+      opt.textContent = loc.disk
+        ? t("ui.shareDialog.locationDisk", { path: loc.path, disk: loc.disk, fstype: loc.fstype || "?" })
+        : t("ui.shareDialog.locationDefault", { path: loc.path });
+      shareLocationSelect.appendChild(opt);
+    }
+  } catch (err) {
+    // A failed fetch just leaves the select empty - the submit will
+    // then fall through to the default (/srv) server-side, same as if
+    // nothing had been chosen, rather than blocking share creation
+    // entirely over a location list that failed to load.
+  }
+  updateSharePathPreview();
+}
 
 function openShareDialog(mode, share) {
   shareForm.reset();
@@ -1444,6 +1607,7 @@ function openShareDialog(mode, share) {
     shareDialogTitle.textContent = t("ui.shareDialog.titleEdit", { name: share.name });
     shareNameInput.value = share.name;
     shareNameInput.disabled = true; // renaming not supported - delete + recreate instead
+    shareLocationRow.style.display = "none"; // location is fixed at creation - see smb_shares.create_share's docstring on why
     sharePathPreview.textContent = t("ui.shareDialog.pathPreviewFixed", { path: share.path });
     shareCommentInput.value = share.comment || "";
     shareSubmitBtn.textContent = t("ui.shareDialog.saveBtn");
@@ -1451,8 +1615,10 @@ function openShareDialog(mode, share) {
     editingShareName = null;
     shareDialogTitle.textContent = t("ui.shareDialog.titleNew");
     shareNameInput.disabled = false;
+    shareLocationRow.style.display = "block";
     sharePathPreview.textContent = "";
     shareSubmitBtn.textContent = t("ui.shareDialog.createBtn");
+    loadShareLocations();
   }
 
   shareDialog.showModal();
@@ -1479,7 +1645,7 @@ shareForm.addEventListener("submit", async (ev) => {
     const name = shareNameInput.value.trim().toLowerCase();
     confirmMsg = t("msg.confirmCreateShare", { name, summary });
     url = "/api/shares/create";
-    body = { name, comment, permissions, group_grants: groupGrants };
+    body = { name, comment, permissions, group_grants: groupGrants, base_path: shareLocationSelect.value || "" };
   }
   if (!(await confirmDialog(confirmMsg))) return;
 
@@ -2374,8 +2540,10 @@ loadUsers();
 setInterval(loadUsers, REFRESH_MS);
 loadSshKeys();
 setInterval(loadSshKeys, REFRESH_MS);
-refresh();
-setInterval(refresh, REFRESH_MS);
+loadCardOrder("disks").then(() => {
+  refresh();
+  setInterval(refresh, REFRESH_MS);
+});
 loadRawDisks();
 setInterval(loadRawDisks, REFRESH_MS);
 loadStatusbar();

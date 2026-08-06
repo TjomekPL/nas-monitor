@@ -410,6 +410,30 @@ def _disk_name_from_device(device_or_partition: str) -> str:
     return base
 
 
+def _boot_disk_name() -> str | None:
+    """Whole-disk name (e.g. "sda") backing the root filesystem -
+    resolved via findmnt + lsblk's PKNAME. Duplicated from
+    disk_mutate._boot_disk_name for the same reason as
+    _disk_name_from_device above - used here only to flag
+    is_boot_disk on the disk cards, so the frontend can hide actions
+    (like Unmount) that could never apply to the running system's own
+    disk, rather than showing a button that would just come back as a
+    rejection."""
+    findmnt_path = _find_binary("findmnt")
+    lsblk_path = _find_binary("lsblk")
+    if findmnt_path is None or lsblk_path is None:
+        return None
+
+    code, out, _ = _run([findmnt_path, "-no", "SOURCE", "/"])
+    if code != 0 or not out.strip():
+        return None
+    source = out.strip().splitlines()[0]
+
+    code, out, _ = _run([lsblk_path, "-no", "PKNAME", source])
+    parent = out.strip().splitlines()[0] if code == 0 and out.strip() else ""
+    return parent if parent else _disk_name_from_device(source)
+
+
 def get_full_status() -> dict[str, Any]:
     disks = list_disks()
     raid = get_raid_arrays()
@@ -430,6 +454,7 @@ def get_full_status() -> dict[str, Any]:
         for dev in arr.get("devices", [])
         if dev.get("device")
     }
+    boot_disk = _boot_disk_name()
 
     # A disk shows here only once it means something: it has a real,
     # mounted filesystem, or it's part of a RAID array (the array's own
@@ -455,12 +480,14 @@ def get_full_status() -> dict[str, Any]:
             if not usage["mounted"] and disk["name"] not in raid_member_names:
                 continue
             disk["usage"] = usage
+            disk["is_boot_disk"] = disk["name"] == boot_disk
             smart = get_smart_health(disk["path"])
             disk["smart"] = smart
             disk["health"] = classify_health(smart)
             visible_disks.append(disk)
         except Exception as exc:
             disk["usage"] = {"mounted": False, "mountpoints": [], "total_bytes": None, "used_bytes": None, "available_bytes": None}
+            disk["is_boot_disk"] = disk["name"] == boot_disk
             disk["smart"] = {"available": False, "error": str(exc)}
             disk["health"] = "unknown"
             visible_disks.append(disk)

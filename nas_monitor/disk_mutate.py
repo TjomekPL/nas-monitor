@@ -156,63 +156,72 @@ def _raid_member_disk_names() -> set[str]:
     return members
 
 
-def _disk_fstype(device: str) -> str | None:
-    """Filesystem currently on this disk (or its first partition, if
-    any), even though nothing is mounted - so the raw-disks table can
-    show what's actually there rather than a disk always looking blank
-    until you dig into it. None if genuinely blank/unrecognized."""
+def _disk_state(device: str) -> dict[str, Any]:
+    """One lsblk call per disk covering both fstype and mountpoint
+    (whichever partition, or the whole disk itself, actually has
+    them) - used by list_manageable_disks so each row only needs a
+    single lsblk invocation instead of two."""
     lsblk_path = system_tools.find_binary("lsblk")
     if lsblk_path is None:
-        return None
-    code, out, _ = system_tools.run([lsblk_path, "-J", "-o", "NAME,FSTYPE", device])
+        return {"fstype": None, "mountpoint": None}
+    code, out, _ = system_tools.run([lsblk_path, "-J", "-o", "NAME,FSTYPE,MOUNTPOINT", device], timeout=10)
     if code != 0 or not out.strip():
-        return None
+        return {"fstype": None, "mountpoint": None}
     try:
         import json
         data = json.loads(out)
     except ValueError:
-        return None
+        return {"fstype": None, "mountpoint": None}
 
     def walk(devices):
         for dev in devices:
             fstype = dev.get("fstype")
-            if fstype:
-                return fstype
+            mountpoint = dev.get("mountpoint")
+            if fstype or mountpoint:
+                return {"fstype": fstype, "mountpoint": mountpoint}
             found = walk(dev.get("children") or [])
             if found:
                 return found
         return None
 
-    return walk(data.get("blockdevices", []))
+    return walk(data.get("blockdevices", [])) or {"fstype": None, "mountpoint": None}
 
 
-def list_raw_disks() -> list[dict[str, Any]]:
-    """Whole disks that are not the boot disk, not part of any RAID
-    array, and have nothing currently mounted on them - disks a human
-    could safely format or wipe right now without checking anything
-    else first. Everything else (the system disk, mounted disks, RAID
-    members) stays out of this list entirely and is shown elsewhere."""
+def list_manageable_disks() -> list[dict[str, Any]]:
+    """Every disk except the boot disk - the boot disk never appears
+    here at all (see the Summary tab for it instead), everything else
+    shows here regardless of state (raw, formatted-and-mounted, RAID
+    member) so this table is always the one place to manage a disk,
+    not just the ones that happen to be empty right now. Each entry
+    carries enough state (fstype, mount_point, is_raid_member) for the
+    frontend to decide which actions - Format/Wipe (only when
+    genuinely free), Unmount (only when mounted under MOUNT_BASE), or
+    none at all (RAID members - that's the future Arrays section's
+    job) - make sense for that row."""
     boot_disk = _boot_disk_name()
-    mounted = _mounted_disk_names()
     raid_members = _raid_member_disk_names()
 
-    raw = []
+    manageable = []
     for disk in monitor.list_disks():
-        if disk["name"] == boot_disk or disk["name"] in mounted or disk["name"] in raid_members:
+        if disk["name"] == boot_disk:
             continue
         disk = dict(disk)
-        # A single disk's fstype lookup failing (lsblk choking on a
+        # A single disk's state lookup failing (lsblk choking on a
         # disk mid-format, just unplugged, or otherwise in a state this
         # code didn't anticipate) must never take the rest of this list
         # down with it - same reasoning as monitor.get_full_status()'s
         # per-disk try/except, which exists for exactly this failure
         # mode after it once hid the entire Disks & Arrays tab.
         try:
-            disk["fstype"] = _disk_fstype(disk["path"])
+            state = _disk_state(disk["path"])
         except Exception:
-            disk["fstype"] = None
-        raw.append(disk)
-    return raw
+            state = {"fstype": None, "mountpoint": None}
+        disk["fstype"] = state["fstype"]
+        disk["mount_point"] = state["mountpoint"]
+        disk["mounted"] = bool(state["mountpoint"])
+        disk["is_raid_member"] = disk["name"] in raid_members
+        manageable.append(disk)
+    return manageable
 
 
 def check_disk_safe_to_modify(device: str) -> dict[str, Any]:
@@ -246,14 +255,22 @@ def unmount_disk(device: str) -> dict[str, Any]:
     into the raw-disks table (format/wipe) for a disk that's currently
     sitting in the read-only "Disks" view with nothing else you can do
     to it. Deliberately refuses anything not mounted under MOUNT_BASE -
-    this only ever undoes what this tool itself set up, never an
-    unrelated mount point that happens to belong to a non-boot disk."""
+    this only ever undoes what this tool itself set up.
+
+    Also refuses the boot disk outright, even if - on a system that
+    also has a spare partition mounted under /mnt/ on that same
+    physical disk - _our_mount_point() would otherwise find a
+    legitimate /mnt/ target there: this is a hard rule, not just a
+    consequence of the /mnt/ check, so the button for it can never even
+    appear next to a disk carrying the running system."""
     result: dict[str, Any] = {"device": device, "success": False}
     name = _disk_name(device)
 
     known = {d["name"] for d in monitor.list_disks()}
     if name not in known:
         return errors.fail(result, "disks.not_found", device=device)
+    if name == _boot_disk_name():
+        return errors.fail(result, "disks.is_boot_disk", device=device)
     if name in _raid_member_disk_names():
         return errors.fail(result, "disks.is_raid_member", device=device)
 

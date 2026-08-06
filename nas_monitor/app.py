@@ -17,7 +17,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth, system_stats, update_manager, disk_mutate
+from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth, system_stats, update_manager, disk_mutate, layout
 
 # Every account that gets SMB access lands here by default - removable
 # afterward like any other group (just uncheck it in the edit form).
@@ -159,9 +159,26 @@ def api_status():
     return jsonify(monitor.get_full_status())
 
 
-@app.route("/api/disks/raw")
-def api_disks_raw():
-    return jsonify({"disks": disk_mutate.list_raw_disks()})
+@app.route("/api/disks/manageable")
+def api_disks_manageable():
+    return jsonify({"disks": disk_mutate.list_manageable_disks()})
+
+
+@app.route("/api/layout/<section>")
+def api_layout_get(section):
+    return jsonify({"order": layout.get_order(section)})
+
+
+@app.route("/api/layout/<section>", methods=["POST"])
+def api_layout_set(section):
+    data = request.get_json(force=True, silent=True) or {}
+    order = data.get("order")
+    if not isinstance(order, list):
+        return jsonify({"success": False, "error_code": "layout.invalid_order", "error_context": {}}), 400
+    result = layout.set_order(section, order)
+    if not result["success"]:
+        return jsonify({"success": False, "error_code": "system.io_failed", "error_context": {"detail": result.get("error") or ""}}), 400
+    return jsonify({"success": True})
 
 
 @app.route("/api/disks/<name>/smart")
@@ -495,11 +512,17 @@ def api_shares():
     return jsonify(smb_shares.list_shares())
 
 
+@app.route("/api/shares/locations")
+def api_shares_locations():
+    return jsonify({"locations": smb_shares.list_share_locations()})
+
+
 @app.route("/api/shares/create", methods=["POST"])
 def api_shares_create():
     data = request.get_json(force=True, silent=True) or {}
     name = (data.get("name") or "").strip().lower()
     comment = (data.get("comment") or "").strip()
+    base_path = (data.get("base_path") or "").strip() or None
     permissions = {
         u.strip(): level
         for u, level in (data.get("permissions") or {}).items()
@@ -511,11 +534,11 @@ def api_shares_create():
         if g.strip() and level in ("rw", "ro")
     }
 
-    result = smb_shares.create_share(name, comment=comment, permissions=permissions, group_grants=group_grants)
+    result = smb_shares.create_share(name, comment=comment, permissions=permissions, group_grants=group_grants, base_path=base_path)
     if not result["success"]:
         oplog.log_event("shares", "create", "failure", params={"name": name})
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
-    oplog.log_event("shares", "create", "success", params={"name": name})
+    oplog.log_event("shares", "create", "success", params={"name": name, "base_path": base_path or smb_shares.BASE_SHARE_PATH})
     return jsonify({"success": True, "share": result})
 
 

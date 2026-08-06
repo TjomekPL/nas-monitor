@@ -277,6 +277,70 @@ class TestCreateShareWithPermissions(unittest.TestCase):
 
 
 @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
+class TestListShareLocations(unittest.TestCase):
+    def test_always_includes_the_default_location(self, mock_smb):
+        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=[]):
+            locations = smb_shares.list_share_locations()
+        self.assertEqual(locations, [{"path": smb_shares.BASE_SHARE_PATH, "disk": None, "fstype": None}])
+
+    def test_includes_disks_mounted_under_mount_base(self, mock_smb):
+        disks = [
+            {"name": "sdb", "mounted": True, "mount_point": "/mnt/dane", "fstype": "ext4"},
+            {"name": "sdc", "mounted": False, "mount_point": None, "fstype": None},
+            {"name": "sdd", "mounted": True, "mount_point": "/media/other", "fstype": "ext4"},
+        ]
+        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=disks):
+            locations = smb_shares.list_share_locations()
+
+        paths = {loc["path"] for loc in locations}
+        # sdb: mounted under /mnt/ - included. sdc: not mounted at all -
+        # excluded. sdd: mounted, but NOT under /mnt/ (some unrelated
+        # mount point) - excluded, this table only ever offers locations
+        # this tool's own mount convention actually set up.
+        self.assertEqual(paths, {smb_shares.BASE_SHARE_PATH, "/mnt/dane"})
+        sdb_entry = next(loc for loc in locations if loc["path"] == "/mnt/dane")
+        self.assertEqual(sdb_entry["disk"], "sdb")
+        self.assertEqual(sdb_entry["fstype"], "ext4")
+
+
+@mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
+class TestCreateShareWithLocation(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.managed = os.path.join(self.tmpdir, "shares.conf")
+        open(self.managed, "a").close()
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    def test_defaults_to_base_share_path_when_no_location_given(self, mock_dir, mock_apply, mock_smb):
+        smb_shares.create_share("dane", managed_conf_path=self.managed)
+        mock_dir.assert_called_once_with(os.path.join(smb_shares.BASE_SHARE_PATH, "dane"), None)
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    def test_uses_the_chosen_valid_location(self, mock_dir, mock_apply, mock_smb):
+        disks = [{"name": "sdb", "mounted": True, "mount_point": "/mnt/dane", "fstype": "ext4"}]
+        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=disks):
+            result = smb_shares.create_share("filmy", base_path="/mnt/dane", managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        mock_dir.assert_called_once_with("/mnt/dane/filmy", None)
+
+    def test_rejects_a_location_that_is_not_currently_valid(self, mock_smb):
+        # e.g. the disk was unmounted in the time between the page
+        # loading the location list and the form actually being
+        # submitted - re-checked server-side, never trusted from the
+        # client.
+        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=[]):
+            result = smb_shares.create_share("filmy", base_path="/mnt/dane", managed_conf_path=self.managed)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "shares.invalid_location")
+        self.assertEqual(result["error_context"]["location"], "/mnt/dane")
+
+
+@mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
 class TestLegacyAccessGroupMigration(unittest.TestCase):
     """A share created through the old single-group picker (before this
     became per-user) could point its access_group at ANY existing group -

@@ -99,42 +99,31 @@ class TestDiskNameParsing(unittest.TestCase):
         self.assertEqual(disk_mutate._partition_path("/dev/mmcblk0"), "/dev/mmcblk0p1")
 
 
-class TestDiskFstype(unittest.TestCase):
-    def test_reports_fstype_of_whole_disk(self):
-        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": "ext4", "children": []}]}'
+class TestDiskState(unittest.TestCase):
+    def test_reports_fstype_and_mountpoint_of_whole_disk(self):
+        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": "ext4", "mountpoint": "/mnt/dane", "children": []}]}'
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
-            self.assertEqual(disk_mutate._disk_fstype("/dev/sdc"), "ext4")
+            state = disk_mutate._disk_state("/dev/sdc")
+        self.assertEqual(state, {"fstype": "ext4", "mountpoint": "/mnt/dane"})
 
-    def test_reports_fstype_of_first_partition_when_disk_itself_is_bare(self):
-        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": null, "children": [{"name": "sdc1", "fstype": "xfs"}]}]}'
+    def test_reports_state_of_first_partition_when_disk_itself_is_bare(self):
+        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": null, "mountpoint": null, "children": [{"name": "sdc1", "fstype": "xfs", "mountpoint": "/mnt/dane"}]}]}'
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
-            self.assertEqual(disk_mutate._disk_fstype("/dev/sdc"), "xfs")
+            state = disk_mutate._disk_state("/dev/sdc")
+        self.assertEqual(state, {"fstype": "xfs", "mountpoint": "/mnt/dane"})
 
-    def test_none_when_genuinely_blank(self):
-        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": null, "children": []}]}'
+    def test_none_none_when_genuinely_blank(self):
+        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": null, "mountpoint": null, "children": []}]}'
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
-            self.assertIsNone(disk_mutate._disk_fstype("/dev/sdc"))
-
-    def test_list_raw_disks_includes_fstype_per_disk(self):
-        responses = {
-            "findmnt": (0, "/dev/sda2\n", ""),
-            "lsblk": (0, '{"blockdevices": [{"name": "sdc", "fstype": "btrfs", "children": []}]}', ""),
-        }
-        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
-             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
-             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=[DISKS[2]]), \
-             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]):
-            raw = disk_mutate.list_raw_disks()
-
-        self.assertEqual(raw[0]["fstype"], "btrfs")
-        self.assertEqual(raw[0]["name"], "sdc")
+            state = disk_mutate._disk_state("/dev/sdc")
+        self.assertEqual(state, {"fstype": None, "mountpoint": None})
 
 
-class TestListRawDisks(unittest.TestCase):
-    def test_excludes_boot_mounted_and_raid_member_disks(self):
+class TestListManageableDisks(unittest.TestCase):
+    def test_includes_every_disk_except_boot(self):
         responses = {
             "findmnt": (0, "/dev/sda2\n", ""),
             "lsblk": _lsblk_handler,
@@ -143,33 +132,42 @@ class TestListRawDisks(unittest.TestCase):
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
              mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
              mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]):
-            raw = disk_mutate.list_raw_disks()
+            manageable = disk_mutate.list_manageable_disks()
 
-        names = {d["name"] for d in raw}
-        # sda excluded: boot disk. sdb excluded: has a mounted partition.
-        # sdc: nothing mounted, not boot, not a RAID member - genuinely free.
-        self.assertEqual(names, {"sdc"})
+        names = {d["name"] for d in manageable}
+        # sda excluded: it's the boot disk. sdb and sdc both included
+        # regardless of state - sdb is mounted, sdc is genuinely free -
+        # this table manages every non-boot disk, not just empty ones.
+        self.assertEqual(names, {"sdb", "sdc"})
 
-    def test_one_disk_fstype_lookup_failing_does_not_hide_the_others(self):
-        # Same regression as monitor.get_full_status()'s equivalent
-        # test - one disk's fstype lookup blowing up must not take the
-        # whole raw-disks table down with it.
-        responses = {
-            "findmnt": (0, "/dev/sda2\n", ""),
-            "lsblk": _lsblk_handler,
-        }
+    def test_flags_mounted_state_and_mount_point_per_disk(self):
+        # A device-aware lsblk stub this time, since _disk_state queries
+        # one specific device per call - the shared _lsblk_handler
+        # (used elsewhere for the no-argument "every mount on the
+        # system" bulk query) always returns the same multi-disk blob
+        # regardless of which device was asked about, which isn't
+        # accurate for this particular call shape.
+        def lsblk_for_device(args):
+            device = args[-1]
+            if device == "/dev/sdb":
+                return (0, '{"blockdevices": [{"name": "sdb", "fstype": null, "mountpoint": null, "children": [{"name": "sdb1", "fstype": "ext4", "mountpoint": "/mnt/data"}]}]}', "")
+            return (0, '{"blockdevices": [{"name": "sdc", "fstype": null, "mountpoint": null, "children": []}]}', "")
+
+        responses = {"findmnt": (0, "/dev/sda2\n", ""), "lsblk": lsblk_for_device}
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
              mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
              mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
-             mock.patch.object(disk_mutate, "_disk_fstype", side_effect=RuntimeError("lsblk exploded")):
-            raw = disk_mutate.list_raw_disks()
+             mock.patch.object(disk_mutate, "_boot_disk_name", return_value="sda"):
+            manageable = disk_mutate.list_manageable_disks()
 
-        # sdc is still there (with fstype simply unknown), not vanished
-        self.assertEqual([d["name"] for d in raw], ["sdc"])
-        self.assertIsNone(raw[0]["fstype"])
+        by_name = {d["name"]: d for d in manageable}
+        self.assertTrue(by_name["sdb"]["mounted"])
+        self.assertEqual(by_name["sdb"]["mount_point"], "/mnt/data")
+        self.assertFalse(by_name["sdc"]["mounted"])
+        self.assertIsNone(by_name["sdc"]["mount_point"])
 
-    def test_excludes_raid_member_disk(self):
+    def test_flags_raid_membership(self):
         responses = {
             "findmnt": (0, "/dev/sda2\n", ""),
             "lsblk": _lsblk_handler,
@@ -179,9 +177,34 @@ class TestListRawDisks(unittest.TestCase):
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
              mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
              mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=raid_arrays):
-            raw = disk_mutate.list_raw_disks()
+            manageable = disk_mutate.list_manageable_disks()
 
-        self.assertEqual(raw, [])  # sda=boot, sdb=mounted, sdc=RAID member
+        by_name = {d["name"]: d for d in manageable}
+        self.assertTrue(by_name["sdc"]["is_raid_member"])
+        self.assertFalse(by_name["sdb"]["is_raid_member"])
+
+    def test_one_disk_state_lookup_failing_does_not_hide_the_others(self):
+        # Same regression as monitor.get_full_status()'s equivalent
+        # test - one disk's state lookup blowing up must not take the
+        # whole management table down with it.
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": _lsblk_handler,
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate, "_disk_state", side_effect=RuntimeError("lsblk exploded")):
+            manageable = disk_mutate.list_manageable_disks()
+
+        # both non-boot disks are still there (state simply unknown), not vanished
+        names = {d["name"] for d in manageable}
+        self.assertEqual(names, {"sdb", "sdc"})
+        for disk in manageable:
+            self.assertIsNone(disk["fstype"])
+            self.assertIsNone(disk["mount_point"])
+            self.assertFalse(disk["mounted"])
 
 
 class TestCheckDiskSafeToModify(unittest.TestCase):
@@ -281,6 +304,21 @@ class TestUnmountDisk(unittest.TestCase):
 
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "disks.is_raid_member")
+
+    def test_refuses_boot_disk_even_if_mounted_under_our_base(self):
+        # A boot disk that also happens to carry a spare partition
+        # mounted under /mnt/ must still be refused outright - this is
+        # a hard rule of its own, not just a side effect of the /mnt/
+        # check (see the real report this guards against: the Unmount
+        # button showing up on the system disk's own card).
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate, "_boot_disk_name", return_value="sdc"), \
+             mock.patch.object(disk_mutate, "_raid_member_disk_names", return_value=set()):
+            result = disk_mutate.unmount_disk("/dev/sdc")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "disks.is_boot_disk")
 
     def test_umount_failure_is_surfaced_and_fstab_untouched(self):
         mount_point = f"{self.mount_base}/dane"

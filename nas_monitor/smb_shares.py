@@ -85,8 +85,28 @@ def _group_ref_name(token: str) -> str:
     return token[1:]
 
 
-def share_path(name: str) -> str:
-    return os.path.join(BASE_SHARE_PATH, name)
+def share_path(name: str, base_path: str | None = None) -> str:
+    return os.path.join(base_path or BASE_SHARE_PATH, name)
+
+
+def list_share_locations() -> list[dict[str, Any]]:
+    """Every place a new share can live: the default (BASE_SHARE_PATH,
+    on the system disk) plus any disk currently mounted under
+    disk_mutate.MOUNT_BASE - i.e. anything format_disk()'s auto-mount
+    (or a manually-set-up mount following the same /mnt/<name>
+    convention) has made available. A share's directory always ends up
+    as <location>/<share-name> (see share_path). Imported lazily to
+    avoid disk_mutate and smb_shares needing to agree on import order
+    at module load time - smb_shares is the only one of the two that
+    needs this, disk_mutate has no reason to know shares exist at all."""
+    from nas_monitor import disk_mutate
+
+    locations: list[dict[str, Any]] = [{"path": BASE_SHARE_PATH, "disk": None, "fstype": None}]
+    for disk in disk_mutate.list_manageable_disks():
+        mount_point = disk.get("mount_point") or ""
+        if disk.get("mounted") and mount_point.startswith(disk_mutate.MOUNT_BASE + os.sep):
+            locations.append({"path": mount_point, "disk": disk["name"], "fstype": disk.get("fstype")})
+    return locations
 
 
 # --------------------------------------------------------------------------
@@ -495,6 +515,7 @@ def create_share(
     comment: str = "",
     permissions: dict[str, str] | None = None,
     group_grants: dict[str, str] | None = None,
+    base_path: str | None = None,
     managed_conf_path: str = MANAGED_CONF_PATH,
 ) -> dict[str, Any]:
     """permissions maps username -> "rw" or "ro" (individual grants, via
@@ -504,11 +525,22 @@ def create_share(
     them access without touching the share again), backed by both an
     extra +group entry in valid users (protocol-level) AND a POSIX ACL
     on the directory (filesystem-level - see _set_group_acl for why
-    both are required)."""
+    both are required). base_path picks which disk the share's
+    directory lives on (see list_share_locations) - None defaults to
+    BASE_SHARE_PATH (the system disk), same as before this parameter
+    existed. Deliberately not something update_share can change later:
+    moving a share's location after the fact means moving its actual
+    file contents, a different (and much riskier) operation than
+    anything else this function does."""
     result: dict[str, Any] = {"name": name, "success": False}
 
     if not is_valid_share_name(name):
         return errors.fail(result, "shares.invalid_name")
+
+    if base_path is not None:
+        valid_paths = {loc["path"] for loc in list_share_locations()}
+        if base_path not in valid_paths:
+            return errors.fail(result, "shares.invalid_location", location=base_path)
 
     existing = _read_managed_shares(managed_conf_path)
     if any(s["name"] == name for s in existing):
@@ -536,7 +568,7 @@ def create_share(
             if not add_result["success"]:
                 return errors.propagate(result, add_result, user=u, group=group)
 
-    path = share_path(name)
+    path = share_path(name, base_path)
     dir_result = _prepare_share_directory(path, group)
     if not dir_result["success"]:
         return errors.propagate(result, dir_result)
