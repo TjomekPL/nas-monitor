@@ -222,7 +222,7 @@ class TestFormatDisk(unittest.TestCase):
             "mkfs.ext4": (0, "", ""),
         }
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
-             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
              mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
              mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
              mock.patch.object(disk_mutate.os.path, "exists", return_value=True):
@@ -230,6 +230,17 @@ class TestFormatDisk(unittest.TestCase):
 
         self.assertTrue(result["success"])
         self.assertEqual(result["partition"], "/dev/sdc1")
+
+        # Regression check: wipefs must run against BOTH the whole disk
+        # (clears its GPT/MBR header) AND the newly-created partition
+        # (clears any old filesystem signature still sitting in that
+        # data region) - see the docstring on the second wipefs call in
+        # format_disk. A wipe that only touches the whole disk leaves
+        # mkfs refusing to run on a partition that reused an old offset,
+        # exactly the "appears to contain an existing filesystem" error
+        # this was written to prevent.
+        wipefs_targets = [c.args[0][-1] for c in mock_run.call_args_list if os.path.basename(c.args[0][0]) == "wipefs"]
+        self.assertEqual(wipefs_targets, ["/dev/sdc", "/dev/sdc1"])
 
     def test_parted_failure_stops_before_mkfs(self):
         responses = {
@@ -242,6 +253,36 @@ class TestFormatDisk(unittest.TestCase):
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
              mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
              mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]):
+            result = disk_mutate.format_disk("/dev/sdc", "ext4")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+        self.assertNotIn("mkfs.ext4", [os.path.basename(c.args[0][0]) for c in mock_run.call_args_list])
+
+    def test_wipefs_on_partition_failure_is_surfaced(self):
+        # The second wipefs call (on the new partition) can fail too -
+        # must be reported the same way as the first, not silently
+        # ignored (which would let mkfs run into the same "existing
+        # filesystem" refusal this whole second call exists to prevent).
+        call_count = {"wipefs": 0}
+
+        def wipefs_handler(args):
+            call_count["wipefs"] += 1
+            if call_count["wipefs"] == 1:
+                return (0, "", "")  # whole-disk wipe succeeds
+            return (1, "", "device or resource busy")  # partition wipe fails
+
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": _lsblk_handler,
+            "wipefs": wipefs_handler,
+            "parted": (0, "", ""),
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate.os.path, "exists", return_value=True):
             result = disk_mutate.format_disk("/dev/sdc", "ext4")
 
         self.assertFalse(result["success"])

@@ -58,6 +58,25 @@ SAMPLE_SMART_NVME = {
     },
 }
 
+# A real report from a USB-attached drive: attribute 194's raw value
+# packed current/min/max temperature history into one 48-bit field
+# (0x2100210021 = 33°C current, 33/33 min/max) instead of just the
+# current reading - smartctl's own human-readable output shows this
+# correctly as "33 (Min/Max 33/33)", but the JSON raw.value is the
+# whole packed integer, 141736083489.
+SAMPLE_SMART_ATA_PACKED_TEMPERATURE = {
+    "smart_status": {"passed": True},
+    "ata_smart_attributes": {
+        "table": [
+            {"id": 5, "raw": {"value": 0}},
+            {"id": 194, "raw": {"value": 141736083489}},
+            {"id": 197, "raw": {"value": 0}},
+            {"id": 198, "raw": {"value": 0}},
+            {"id": 9, "raw": {"value": 900}},
+        ]
+    },
+}
+
 MDSTAT_HEALTHY = """\
 Personalities : [raid1]
 md0 : active raid1 sdb1[1] sda1[0]
@@ -152,6 +171,16 @@ class TestGetSmartHealth(unittest.TestCase):
         self.assertEqual(result["temperature_c"], 38)
         self.assertEqual(result["attributes"]["percentage_used"], 4)
         self.assertEqual(monitor.classify_health(result), "ok")
+
+    @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/usr/sbin/smartctl")
+    @mock.patch("nas_monitor.monitor._run")
+    def test_unpacks_multi_value_temperature_attribute(self, mock_run, mock_which):
+        # Regression test for a real report: a USB drive's raw 194 value
+        # (141736083489) was shown as-is, i.e. "141736083489°C" - only
+        # the low byte (33) is the actual current temperature.
+        mock_run.return_value = (0, json.dumps(SAMPLE_SMART_ATA_PACKED_TEMPERATURE), "")
+        result = monitor.get_smart_health("/dev/sda")
+        self.assertEqual(result["temperature_c"], 33)
 
     @mock.patch("nas_monitor.monitor._find_binary", return_value=None)
     def test_missing_smartctl_binary(self, mock_find_binary):

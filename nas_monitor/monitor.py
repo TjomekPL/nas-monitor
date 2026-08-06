@@ -235,6 +235,19 @@ def get_smart_health(device_path: str) -> dict[str, Any]:
         if attr_id in _KEY_ATA_ATTRS:
             key = _KEY_ATA_ATTRS[attr_id]
             raw = entry.get("raw", {}).get("value")
+            if key == "temperature" and isinstance(raw, int):
+                # Attribute 194's raw value isn't always just the
+                # temperature - some drives (this shows up a lot on
+                # USB-SATA bridge chips) pack current/min/max history
+                # into the same 48-bit field, e.g. 0x2100210021 for a
+                # drive sitting at 33°C with a 33/33 min/max history.
+                # Only the lowest byte is ever the *current* reading;
+                # taking the full raw integer as-is produced nonsense
+                # like "141736083489°C" on a real USB drive. Real-world
+                # temperatures always fit in a single byte, so masking
+                # to the low 8 bits recovers the current value in both
+                # the packed and unpacked (plain single-byte) cases.
+                raw = raw & 0xFF
             attrs[key] = raw
     result["attributes"] = attrs
     result["temperature_c"] = attrs.get("temperature")

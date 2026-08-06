@@ -235,6 +235,22 @@ def format_disk(device: str, filesystem: str) -> dict[str, Any]:
     else:
         return errors.fail(result, "disks.partition_not_ready", partition=partition)
 
+    # Second wipefs, now on the partition itself. The one above only
+    # ever reaches signatures that live in the whole *disk's* own
+    # address space (its GPT/MBR header). If the new partition lands at
+    # the same offset an old one used to - very likely, since both are
+    # created the same way ("0% to 100%") - whatever filesystem used to
+    # live there is still physically sitting in that data region, on
+    # its own separate device node (/dev/sda1, not /dev/sda), which the
+    # first wipefs never touched. Every mkfs tool refuses to run over a
+    # signature it recognizes without an explicit force flag - and
+    # each tool spells that flag differently (-f, -F, ...) - so
+    # clearing it here once, consistently, is simpler and more robust
+    # than tracking a force flag per filesystem.
+    code, out, err = system_tools.run([wipefs_path, "-a", partition], timeout=30)
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "wipefs")
+
     code, out, err = system_tools.run([mkfs_path, partition], timeout=180)
     if code != 0:
         return errors.command_failed(result, err, out, code, mkfs_binary)
