@@ -225,8 +225,42 @@ def api_disk_wipe(name):
 
 
 @app.route("/api/disks/<name>/unmount", methods=["POST"])
+def _shares_blocking_unmount(mount_point: str) -> list[str]:
+    """Names of shares whose path is this exact mount point or lives
+    somewhere underneath it - what api_disk_unmount refuses to unmount
+    over. A pure lookup (no side effects) so it's testable without
+    needing the whole Flask request/response cycle around it."""
+    shares_result = smb_shares.list_shares()
+    return [
+        s["name"] for s in shares_result.get("shares", [])
+        if s["path"] == mount_point or s["path"].startswith(mount_point + "/")
+    ]
+
+
 def api_disk_unmount(name):
     device = f"/dev/{name}"
+
+    # Check for shares depending on this mount point BEFORE unmounting -
+    # not something disk_mutate.unmount_disk itself can check (it has
+    # no reason to know shares exist, and importing smb_shares there
+    # would create a circular import the other way around). Refusing
+    # up front, with the exact list of what's in the way, is the
+    # middle ground between OMV's multi-step "unmount, then separately
+    # discover things broke, then go fix each one" and just letting a
+    # share silently start pointing at nothing (or worse, at whatever
+    # unrelated filesystem gets mounted at that same path next).
+    manageable_by_name = {d["name"]: d for d in disk_mutate.list_manageable_disks()}
+    mount_point = manageable_by_name.get(name, {}).get("mount_point")
+    if mount_point:
+        blocking = _shares_blocking_unmount(mount_point)
+        if blocking:
+            oplog.log_event("disks", "unmount", "failure", params={"device": device})
+            return jsonify({
+                "success": False,
+                "error_code": "disks.unmount_blocked_by_shares",
+                "error_context": {"shares": ", ".join(blocking)},
+            }), 400
+
     result = disk_mutate.unmount_disk(device)
     if not result["success"]:
         oplog.log_event("disks", "unmount", "failure", params={"device": device})

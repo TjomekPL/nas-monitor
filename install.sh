@@ -166,6 +166,14 @@ if getent group smb_users >/dev/null 2>&1; then
     [[ -n "$u" ]] && printf '[User]\nSystemAccount=true\n' > "/var/lib/AccountsService/users/${u}"
   done
 fi
+# accounts-daemon caches its user list in memory - writing the marker
+# files above does nothing visible on the actual login screen until it
+# re-reads them, which only happens on its own restart (not just a
+# screen lock, and not automatically on file change). Best-effort:
+# a headless install has no display manager and thus no reason for
+# this service to even be installed, so a missing/inactive
+# accounts-daemon here is fine, not an error.
+systemctl restart accounts-daemon 2>/dev/null || true
 
 echo "==> Instalacja usługi systemd..."
 sed "s#__BIND_ADDR__#${BIND_ADDR}#" "${APP_DIR}/nas-monitor.service" > /etc/systemd/system/nas-monitor.service

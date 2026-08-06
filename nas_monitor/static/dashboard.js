@@ -509,29 +509,10 @@ function renderDisks(disks) {
       err.classList.add("visible");
     }
 
-    // Only offer Unmount for a disk sitting under /mnt/ (must match
-    // disk_mutate.MOUNT_BASE) - that's specifically the convention
-    // format_disk()'s auto-mount uses, so it's the one case a mounted
-    // disk showing up here (read-only otherwise - see monitor.py's
-    // get_full_status filtering) still has a way back to the
-    // disk-management table (Dyski i macierze tab) instead of being
-    // stuck permanently. A RAID member's usage isn't a plain mount in
-    // this sense (the array is), so this naturally never shows for
-    // those either.
-    //
-    // Hard-excluded regardless: the boot disk. A boot disk that also
-    // happens to carry a /mnt/-mounted spare partition would otherwise
-    // still pass the check above - disk.is_boot_disk (set server-side
-    // by monitor.get_full_status, backed by the same rejection in
-    // disk_mutate.unmount_disk) makes this a rule of its own, not just
-    // a side effect of the /mnt/ check, so the button for the disk
-    // carrying the running system can never appear at all.
-    const mountpoints = (disk.usage && disk.usage.mountpoints) || [];
-    if (!disk.is_boot_disk && mountpoints.some((mp) => mp && mp.startsWith("/mnt/"))) {
-      const actions = node.querySelector(".card-actions");
-      actions.style.display = "block";
-      node.querySelector(".unmount-btn").addEventListener("click", () => unmountDisk(disk));
-    }
+    // No actions here on purpose - the Podsumowanie tab is pure
+    // monitoring (his design: cards for overview, the Dyski i macierze
+    // table for management). Unmount lives only in that table's rows
+    // now, not duplicated here too.
 
     disksContainer.appendChild(node);
   }
@@ -632,7 +613,26 @@ function wireCardDragging(container, section) {
 }
 
 async function unmountDisk(disk) {
-  if (!(await confirmDialog(t("msg.confirmUnmountDisk", { name: disk.name }), { danger: true }))) return;
+  // Proactive warning, not just the backend's hard block after the
+  // fact - if any share's path is under this disk's mount point,
+  // surface that in the confirm message itself so the choice to
+  // cancel and go remove/move the share first can be made up front,
+  // not discovered only after clicking through and getting an error.
+  // The backend re-checks this independently at unmount time (see
+  // app.py's _shares_blocking_unmount) - this is a convenience, not
+  // the actual guard, so stale/missing lastSharesData here is
+  // harmless, never a safety gap.
+  let message = t("msg.confirmUnmountDisk", { name: disk.name });
+  if (disk.mount_point) {
+    const blocking = lastSharesData
+      .filter((s) => s.path === disk.mount_point || s.path.startsWith(disk.mount_point + "/"))
+      .map((s) => s.name);
+    if (blocking.length) {
+      message += " " + t("msg.unmountBlockedWarning", { shares: blocking.join(", ") });
+    }
+  }
+
+  if (!(await confirmDialog(message, { danger: true }))) return;
   try {
     const res = await fetch(`/api/disks/${encodeURIComponent(disk.name)}/unmount`, { method: "POST" });
     const data = await res.json();
