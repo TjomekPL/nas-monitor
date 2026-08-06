@@ -187,17 +187,42 @@ def _disk_state(device: str) -> dict[str, Any]:
     return walk(data.get("blockdevices", [])) or {"fstype": None, "mountpoint": None}
 
 
+_SYSTEM_MOUNTPOINTS = {"/", "/boot", "/boot/efi"}
+
+
+def _is_system_partition(mountpoint: str | None) -> bool:
+    """True for anything that's clearly part of the running OS, not a
+    NAS data disk - a fixed set of well-known paths plus swap (lsblk
+    reports an active swap partition's MOUNTPOINT as the literal string
+    "[SWAP]", not a real path). Checked per-disk independent of whole-
+    disk boot-disk detection: a real report showed a *non-boot* test
+    disk that happened to carry a leftover /boot/efi partition (from
+    earlier, unrelated testing) still showing up in the manageable-
+    disks table - _boot_disk_name() correctly excludes the actual boot
+    disk as a whole, but says nothing about some other disk carrying a
+    stray system partition. This is the second, independent guard for
+    that case."""
+    return mountpoint in _SYSTEM_MOUNTPOINTS or mountpoint == "[SWAP]"
+
+
 def list_manageable_disks() -> list[dict[str, Any]]:
-    """Every disk except the boot disk - the boot disk never appears
-    here at all (see the Summary tab for it instead), everything else
-    shows here regardless of state (raw, formatted-and-mounted, RAID
-    member) so this table is always the one place to manage a disk,
-    not just the ones that happen to be empty right now. Each entry
-    carries enough state (fstype, mount_point, is_raid_member) for the
-    frontend to decide which actions - Format/Wipe (only when
-    genuinely free), Unmount (only when mounted under MOUNT_BASE), or
-    none at all (RAID members - that's the future Arrays section's
-    job) - make sense for that row."""
+    """Every disk except the boot disk and anything else carrying a
+    system partition (see _is_system_partition) - the boot disk never
+    appears here at all (see the Summary tab for it instead), and
+    nothing here is meant to support managing a disk that arrived with
+    an existing, foreign multi-partition layout (matches how TrueNAS
+    and OpenMediaVault both treat this - a "bring your own partitioned
+    disk" workflow is out of scope, not just unbuilt yet; the answer
+    for a disk like that is to format it clean, already supported).
+    Everything else shows here regardless of state (raw,
+    formatted-and-mounted, RAID member) so this table is always the
+    one place to manage a disk, not just the ones that happen to be
+    empty right now. Each entry carries enough state (fstype,
+    mount_point, is_raid_member) for the frontend to decide which
+    actions - Format/Wipe (only when genuinely free), Unmount (only
+    when mounted under MOUNT_BASE), or none at all (RAID members -
+    that's the future Arrays section's job) - make sense for that
+    row."""
     boot_disk = _boot_disk_name()
     raid_members = _raid_member_disk_names()
 
@@ -216,6 +241,8 @@ def list_manageable_disks() -> list[dict[str, Any]]:
             state = _disk_state(disk["path"])
         except Exception:
             state = {"fstype": None, "mountpoint": None}
+        if _is_system_partition(state["mountpoint"]):
+            continue
         disk["fstype"] = state["fstype"]
         disk["mount_point"] = state["mountpoint"]
         disk["mounted"] = bool(state["mountpoint"])

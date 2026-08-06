@@ -154,6 +154,19 @@ else
   unset ADMIN_PASSWORD ADMIN_PASSWORD_CONFIRM
 fi
 
+echo "==> Ukrywanie kont SMB-only z graficznego ekranu logowania (AccountsService)..."
+# nas_monitor.users.create_user() already does this for every NEW
+# account going forward - this is the one-time backfill for accounts
+# created by an earlier version of the tool, before this existed. Safe
+# to re-run every install.sh - a marker that's already there is just
+# overwritten with the same content.
+mkdir -p /var/lib/AccountsService/users
+if getent group smb_users >/dev/null 2>&1; then
+  for u in $(getent group smb_users | cut -d: -f4 | tr ',' ' '); do
+    [[ -n "$u" ]] && printf '[User]\nSystemAccount=true\n' > "/var/lib/AccountsService/users/${u}"
+  done
+fi
+
 echo "==> Instalacja usługi systemd..."
 sed "s#__BIND_ADDR__#${BIND_ADDR}#" "${APP_DIR}/nas-monitor.service" > /etc/systemd/system/nas-monitor.service
 systemctl daemon-reload

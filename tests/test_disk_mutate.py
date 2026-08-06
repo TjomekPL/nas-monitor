@@ -73,7 +73,19 @@ LSBLK_MOUNT_JSON = """
 def _lsblk_handler(args):
     if "PKNAME" in args:
         return (0, "sda\n", "")
-    return (0, LSBLK_MOUNT_JSON, "")
+    device = args[-1] if args and args[-1].startswith("/dev/") else None
+    if device is None:
+        return (0, LSBLK_MOUNT_JSON, "")
+    # Device-scoped query (e.g. `lsblk -J -o ... /dev/sdb`) - real lsblk
+    # only ever returns that one disk's own subtree, not everyone
+    # else's too, so the mock has to actually filter rather than always
+    # handing back the full multi-disk blob regardless of what was
+    # asked for (a query for sdb must never see sda's /boot entry).
+    import json as _json
+    name = device.rsplit("/", 1)[-1]
+    full = _json.loads(LSBLK_MOUNT_JSON)
+    match = next((d for d in full["blockdevices"] if d["name"] == name), None)
+    return (0, _json.dumps({"blockdevices": [match] if match else []}), "")
 
 
 class TestDiskNameParsing(unittest.TestCase):
@@ -123,6 +135,49 @@ class TestDiskState(unittest.TestCase):
 
 
 class TestListManageableDisks(unittest.TestCase):
+    def test_excludes_a_non_boot_disk_carrying_a_stray_system_partition(self):
+        # Regression test for a real report: a disk that was NOT the
+        # detected boot disk still showed up in the manageable-disks
+        # table because it happened to carry a leftover /boot/efi
+        # partition (from earlier, unrelated testing) - _boot_disk_name
+        # correctly excludes the actual boot disk as a whole, but this
+        # is the separate, independent guard for any *other* disk
+        # carrying a system partition.
+        def lsblk_for_device(args):
+            device = args[-1]
+            if device == "/dev/sdb":
+                return (0, '{"blockdevices": [{"name": "sdb", "fstype": null, "mountpoint": null, "children": [{"name": "sdb1", "fstype": "vfat", "mountpoint": "/boot/efi"}]}]}', "")
+            return (0, '{"blockdevices": [{"name": "sdc", "fstype": null, "mountpoint": null, "children": []}]}', "")
+
+        responses = {"findmnt": (0, "/dev/sda2\n", ""), "lsblk": lsblk_for_device}
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate, "_boot_disk_name", return_value="sda"):
+            manageable = disk_mutate.list_manageable_disks()
+
+        names = {d["name"] for d in manageable}
+        self.assertNotIn("sdb", names)
+        self.assertIn("sdc", names)
+
+    def test_excludes_a_disk_showing_active_swap(self):
+        def lsblk_for_device(args):
+            device = args[-1]
+            if device == "/dev/sdb":
+                return (0, '{"blockdevices": [{"name": "sdb", "fstype": null, "mountpoint": null, "children": [{"name": "sdb1", "fstype": "swap", "mountpoint": "[SWAP]"}]}]}', "")
+            return (0, '{"blockdevices": [{"name": "sdc", "fstype": null, "mountpoint": null, "children": []}]}', "")
+
+        responses = {"findmnt": (0, "/dev/sda2\n", ""), "lsblk": lsblk_for_device}
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate, "_boot_disk_name", return_value="sda"):
+            manageable = disk_mutate.list_manageable_disks()
+
+        self.assertNotIn("sdb", {d["name"] for d in manageable})
+
     def test_includes_every_disk_except_boot(self):
         responses = {
             "findmnt": (0, "/dev/sda2\n", ""),

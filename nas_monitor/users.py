@@ -249,10 +249,39 @@ def create_user(
     if code != 0:
         return errors.command_failed(result, err, out, code, "useradd")
 
+    _hide_from_login_screen(username)
+
     result["success"] = True
     result["shell"] = resolved_shell
     result["groups"] = groups or []
     return result
+
+
+ACCOUNTS_SERVICE_DIR = "/var/lib/AccountsService/users"
+
+
+def _hide_from_login_screen(username: str) -> None:
+    """Marks the account as a "system account" to AccountsService, the
+    mechanism GDM/LightDM/SDDM all read to decide who shows up on the
+    graphical login screen (via /var/lib/AccountsService/users/<name>,
+    [User] SystemAccount=true - the standard, documented way to do
+    this on a Debian desktop). These are SMB-only accounts (nologin
+    shell, no interactive session ever intended) - real report: they
+    were showing up right alongside actual desktop users on the login
+    screen, on a machine that also runs a desktop environment.
+
+    Deliberately best-effort and silent on failure (never raises, never
+    returns an error to the caller) - this is a login-screen cosmetic
+    concern, not something that should ever block account creation
+    itself; a headless install with no display manager at all simply
+    has no /var/lib/AccountsService directory to write into, and that
+    is completely fine, not a failure."""
+    try:
+        os.makedirs(ACCOUNTS_SERVICE_DIR, exist_ok=True)
+        with open(os.path.join(ACCOUNTS_SERVICE_DIR, username), "w") as fh:
+            fh.write("[User]\nSystemAccount=true\n")
+    except OSError:
+        pass
 
 
 def update_user(

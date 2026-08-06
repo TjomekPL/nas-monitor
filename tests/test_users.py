@@ -1,6 +1,8 @@
 import os
 import pwd
+import shutil
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -17,6 +19,41 @@ class TestValidUsername(unittest.TestCase):
     def test_rejects_bad_names(self):
         for name in ("", "Tomek", "1tomek", "tomek user", "tomek;rm -rf /", "a" * 33, "użytkownik"):
             self.assertFalse(users.is_valid_username(name), name)
+
+
+class TestHideFromLoginScreen(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.patcher = mock.patch("nas_monitor.users.ACCOUNTS_SERVICE_DIR", self.tmpdir)
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_writes_system_account_marker(self):
+        users._hide_from_login_screen("gosia")
+        with open(os.path.join(self.tmpdir, "gosia")) as fh:
+            content = fh.read()
+        self.assertIn("SystemAccount=true", content)
+
+    def test_never_raises_if_the_directory_cannot_be_created(self):
+        # e.g. a headless install with no display manager, and thus no
+        # /var/lib/AccountsService at all - this is fine, not a failure,
+        # so nothing here should ever propagate an error up to the
+        # caller (account creation itself must never be blocked by it).
+        with mock.patch("nas_monitor.users.os.makedirs", side_effect=OSError("permission denied")):
+            users._hide_from_login_screen("gosia")  # must not raise
+
+    @mock.patch("nas_monitor.users.default_nologin_shell", return_value="/usr/sbin/nologin")
+    @mock.patch("nas_monitor.users.user_exists", return_value=False)
+    @mock.patch("nas_monitor.users.system_tools.find_binary", return_value="/usr/sbin/useradd")
+    @mock.patch("nas_monitor.users.system_tools.run", return_value=(0, "", ""))
+    def test_create_user_hides_the_new_account(self, mock_run, mock_find, mock_exists, mock_shell):
+        result = users.create_user("Gosia")
+        self.assertTrue(result["success"])
+        with open(os.path.join(self.tmpdir, "gosia")) as fh:
+            self.assertIn("SystemAccount=true", fh.read())
 
 
 class TestCreateUser(unittest.TestCase):
