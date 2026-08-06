@@ -638,34 +638,42 @@ async function mountExistingDisk(disk) {
 }
 
 async function unmountDisk(disk) {
-  // Proactive warning, not just the backend's hard block after the
-  // fact - if any share's path is under this disk's mount point,
-  // surface that in the confirm message itself so the choice to
-  // cancel and go remove/move the share first can be made up front,
-  // not discovered only after clicking through and getting an error.
-  // The backend re-checks this independently at unmount time (see
-  // app.py's _shares_blocking_unmount) - this is a convenience, not
-  // the actual guard, so stale/missing lastSharesData here is
-  // harmless, never a safety gap.
+  // Proactive check, using already-loaded lastSharesData - his
+  // explicit expectation: confirming should DELETE the dependent
+  // share(s) (Samba definition + access group only, files preserved -
+  // same as any other share delete) and THEN unmount, not just fail a
+  // second time after a separate manual cleanup step. The backend
+  // independently re-verifies this (see app.py's
+  // _shares_blocking_unmount) before actually deleting anything - a
+  // stale/missing lastSharesData here only means the warning text
+  // might be incomplete, never that something gets deleted without
+  // the server's own check agreeing first.
+  const blocking = disk.mount_point
+    ? lastSharesData
+        .filter((s) => s.path === disk.mount_point || s.path.startsWith(disk.mount_point + "/"))
+        .map((s) => s.name)
+    : [];
+
   let message = t("msg.confirmUnmountDisk", { name: disk.name });
-  if (disk.mount_point) {
-    const blocking = lastSharesData
-      .filter((s) => s.path === disk.mount_point || s.path.startsWith(disk.mount_point + "/"))
-      .map((s) => s.name);
-    if (blocking.length) {
-      message += " " + t("msg.unmountBlockedWarning", { shares: blocking.join(", ") });
-    }
+  if (blocking.length) {
+    message += " " + t("msg.unmountWillDeleteShares", { shares: blocking.join(", ") });
   }
 
   if (!(await confirmDialog(message, { danger: true }))) return;
   try {
-    const res = await fetch(`/api/disks/${encodeURIComponent(disk.name)}/unmount`, { method: "POST" });
+    const res = await fetch(`/api/disks/${encodeURIComponent(disk.name)}/unmount`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ delete_blocking_shares: blocking.length > 0 }),
+    });
     const data = await res.json();
     if (!res.ok || !data.success) {
       showToast(apiErrorMessage(data, res), true);
       return;
     }
-    showToast(t("msg.unmountedDisk", { name: disk.name }));
+    const deleted = data.deleted_shares || [];
+    showToast(deleted.length ? t("msg.unmountedDiskWithShares", { name: disk.name, shares: deleted.join(", ") }) : t("msg.unmountedDisk", { name: disk.name }));
+    if (deleted.length) await loadShares();
     await refresh();
     await loadRawDisks();
   } catch (err) {
@@ -1458,12 +1466,12 @@ function renderPermissionsSummary(container, permissions, groupGrants) {
   for (const [group, level] of Object.entries(grants)) {
     appendTag(`@${group}`, level);
   }
-  // Every known user gets a tag, not just the ones with access - RO/RW
-  // are colored to stand out, NA (red) makes it just as visible who's
-  // explicitly excluded, which used to be invisible (removing someone's
-  // access just made them disappear from this list entirely).
-  for (const u of lastKnownUsersData) {
-    appendTag(u.display_name || u.username, perms[u.username]);
+  // Only people/groups with an explicit entry show here - matches the
+  // create/edit dialog's own "+Add" lists (only shows who was
+  // consciously granted something), not every known user tagged NA.
+  for (const [username, level] of Object.entries(perms)) {
+    const u = lastKnownUsersData.find((x) => x.username === username);
+    appendTag(u ? (u.display_name || u.username) : username, level);
   }
 
   if (!container.children.length) {
@@ -1517,7 +1525,7 @@ function grantLabels() {
   return { ro: t("ui.shares.permRo"), rw: t("ui.shares.permRw") };
 }
 
-function makeShareGrantRow({ key, datasetAttr, label, sublabel, defaultLevel, selectClass }) {
+function makeShareGrantRow({ key, datasetAttr, label, sublabel, defaultLevel, selectClass, onRemove }) {
   const row = document.createElement("div");
   row.className = "permission-row";
   row.dataset.key = key;
@@ -1555,10 +1563,87 @@ function makeShareGrantRow({ key, datasetAttr, label, sublabel, defaultLevel, se
   removeBtn.className = "link-btn danger remove-grant-btn";
   removeBtn.textContent = "\u00d7";
   removeBtn.title = t("ui.shareDialog.removeBtn");
-  removeBtn.addEventListener("click", () => row.remove());
+  removeBtn.addEventListener("click", () => {
+    row.remove();
+    if (onRemove) onRemove();
+  });
   row.appendChild(removeBtn);
 
   return row;
+}
+
+// Shared "+Add" behaviour for both the people list and the groups list:
+// clicking the button doesn't just add the alphabetically-next
+// candidate (a real report - every click silently added "whoever's
+// next" with no way to pick a specific person) - it swaps the button
+// for an inline <select> of everyone not already in the list, and
+// adding happens on choosing one. keyFn/labelFn/sublabelFn let this
+// same logic serve both users (keyed by username) and groups (keyed
+// keyed by name) without duplicating it.
+function wireShareGrantAdder({ addBtn, listContainer, candidatesFn, keyFn, labelFn, sublabelFn, datasetAttr, selectClass }) {
+  function currentKeys() {
+    return new Set(Array.from(listContainer.querySelectorAll(".permission-row")).map((r) => r.dataset.key));
+  }
+  function remaining() {
+    const already = currentKeys();
+    return candidatesFn().filter((c) => !already.has(keyFn(c)));
+  }
+  function refresh() {
+    const left = remaining();
+    addBtn.style.display = left.length ? "inline-block" : "none";
+    return left;
+  }
+  function addRow(candidate) {
+    const row = makeShareGrantRow({
+      key: keyFn(candidate),
+      datasetAttr,
+      label: labelFn(candidate),
+      sublabel: sublabelFn ? sublabelFn(candidate) : "",
+      defaultLevel: "ro",
+      selectClass,
+      onRemove: refresh,
+    });
+    listContainer.appendChild(row);
+    refresh();
+  }
+
+  addBtn.addEventListener("click", () => {
+    const left = remaining();
+    if (!left.length) return;
+    const picker = document.createElement("select");
+    picker.className = "grant-picker";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = t("ui.shareDialog.pickPlaceholder");
+    placeholder.disabled = true;
+    placeholder.selected = true;
+    picker.appendChild(placeholder);
+    for (const c of left) {
+      const opt = document.createElement("option");
+      opt.value = keyFn(c);
+      opt.textContent = labelFn(c);
+      picker.appendChild(opt);
+    }
+    const cancelOnBlur = () => {
+      if (picker.isConnected) {
+        picker.remove();
+        addBtn.style.display = "inline-block";
+      }
+    };
+    picker.addEventListener("change", () => {
+      const chosen = left.find((c) => keyFn(c) === picker.value);
+      picker.removeEventListener("blur", cancelOnBlur);
+      picker.remove();
+      addBtn.style.display = "inline-block";
+      if (chosen) addRow(chosen);
+    });
+    picker.addEventListener("blur", cancelOnBlur);
+    addBtn.insertAdjacentElement("afterend", picker);
+    addBtn.style.display = "none";
+    picker.focus();
+  });
+
+  return { refresh };
 }
 
 function populateSharePermissionsList(existingPermissions) {
@@ -1576,29 +1661,22 @@ function populateSharePermissionsList(existingPermissions) {
         sublabel,
         defaultLevel: current[u.username],
         selectClass: "",
+        onRemove: () => sharePersonAdder.refresh(),
       })
     );
   }
-  refreshShareAddPersonBtn();
+  sharePersonAdder.refresh();
 }
 
-function refreshShareAddPersonBtn() {
-  const already = new Set(Array.from(sharePermissionsList.querySelectorAll(".permission-row")).map((r) => r.dataset.key));
-  const remaining = lastKnownUsersData.filter((u) => !already.has(u.username));
-  shareAddPersonBtn.style.display = remaining.length ? "inline-block" : "none";
-}
-
-shareAddPersonBtn.addEventListener("click", () => {
-  const already = new Set(Array.from(sharePermissionsList.querySelectorAll(".permission-row")).map((r) => r.dataset.key));
-  const remaining = lastKnownUsersData.filter((u) => !already.has(u.username));
-  if (!remaining.length) return;
-  const u = remaining[0];
-  const displayName = u.display_name || u.username;
-  const sublabel = u.has_smb ? "" : t("ui.shares.noSmbPasswordHint");
-  sharePermissionsList.appendChild(
-    makeShareGrantRow({ key: u.username, datasetAttr: "username", label: displayName, sublabel, defaultLevel: "ro", selectClass: "" })
-  );
-  refreshShareAddPersonBtn();
+const sharePersonAdder = wireShareGrantAdder({
+  addBtn: shareAddPersonBtn,
+  listContainer: sharePermissionsList,
+  candidatesFn: () => lastKnownUsersData,
+  keyFn: (u) => u.username,
+  labelFn: (u) => u.display_name || u.username,
+  sublabelFn: (u) => (u.has_smb ? "" : t("ui.shares.noSmbPasswordHint")),
+  datasetAttr: "username",
+  selectClass: "",
 });
 
 function collectSharePermissions() {
@@ -1622,27 +1700,21 @@ function populateShareGroupGrantsList(existingGrants) {
         sublabel: "",
         defaultLevel: current[g.name],
         selectClass: "group-grant-select",
+        onRemove: () => shareGroupAdder.refresh(),
       })
     );
   }
-  refreshShareAddGroupBtn();
+  shareGroupAdder.refresh();
 }
 
-function refreshShareAddGroupBtn() {
-  const already = new Set(Array.from(shareGroupGrantsList.querySelectorAll(".permission-row")).map((r) => r.dataset.key));
-  const remaining = lastKnownGroupsData.filter((g) => !already.has(g.name));
-  shareAddGroupBtn.style.display = remaining.length ? "inline-block" : "none";
-}
-
-shareAddGroupBtn.addEventListener("click", () => {
-  const already = new Set(Array.from(shareGroupGrantsList.querySelectorAll(".permission-row")).map((r) => r.dataset.key));
-  const remaining = lastKnownGroupsData.filter((g) => !already.has(g.name));
-  if (!remaining.length) return;
-  const g = remaining[0];
-  shareGroupGrantsList.appendChild(
-    makeShareGrantRow({ key: g.name, datasetAttr: "group", label: g.name, sublabel: "", defaultLevel: "ro", selectClass: "group-grant-select" })
-  );
-  refreshShareAddGroupBtn();
+const shareGroupAdder = wireShareGrantAdder({
+  addBtn: shareAddGroupBtn,
+  listContainer: shareGroupGrantsList,
+  candidatesFn: () => lastKnownGroupsData,
+  keyFn: (g) => g.name,
+  labelFn: (g) => g.name,
+  datasetAttr: "group",
+  selectClass: "group-grant-select",
 });
 
 function collectShareGroupGrants() {

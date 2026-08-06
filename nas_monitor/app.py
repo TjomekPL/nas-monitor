@@ -237,12 +237,12 @@ def api_disk_mount(name):
     return jsonify({"success": True, "mount_point": result["mount_point"]})
 
 
-@app.route("/api/disks/<name>/unmount", methods=["POST"])
 def _shares_blocking_unmount(mount_point: str) -> list[str]:
     """Names of shares whose path is this exact mount point or lives
     somewhere underneath it - what api_disk_unmount refuses to unmount
-    over. A pure lookup (no side effects) so it's testable without
-    needing the whole Flask request/response cycle around it."""
+    over (or, once confirmed, deletes). A pure lookup (no side effects)
+    so it's testable without needing the whole Flask request/response
+    cycle around it."""
     shares_result = smb_shares.list_shares()
     return [
         s["name"] for s in shares_result.get("shares", [])
@@ -250,36 +250,59 @@ def _shares_blocking_unmount(mount_point: str) -> list[str]:
     ]
 
 
+@app.route("/api/disks/<name>/unmount", methods=["POST"])
 def api_disk_unmount(name):
     device = f"/dev/{name}"
+    data = request.get_json(force=True, silent=True) or {}
+    delete_blocking_shares = bool(data.get("delete_blocking_shares", False))
 
     # Check for shares depending on this mount point BEFORE unmounting -
     # not something disk_mutate.unmount_disk itself can check (it has
     # no reason to know shares exist, and importing smb_shares there
-    # would create a circular import the other way around). Refusing
-    # up front, with the exact list of what's in the way, is the
-    # middle ground between OMV's multi-step "unmount, then separately
-    # discover things broke, then go fix each one" and just letting a
-    # share silently start pointing at nothing (or worse, at whatever
-    # unrelated filesystem gets mounted at that same path next).
+    # would create a circular import the other way around).
+    #
+    # His explicit preference (not OMV's separate multi-step gate, and
+    # not silently letting a share start pointing at nothing either):
+    # warn what's about to be deleted, and on confirmation actually
+    # delete the blocking share(s) - Samba definition + access group
+    # only, files preserved, same as any other share deletion - THEN
+    # unmount, in one action. Without delete_blocking_shares=true this
+    # still just refuses with the exact list, so a stale/missing
+    # frontend warning (see unmountDisk's own client-side check) can
+    # never silently delete something nobody was told about - the
+    # server independently re-verifies this every time.
     manageable_by_name = {d["name"]: d for d in disk_mutate.list_manageable_disks()}
     mount_point = manageable_by_name.get(name, {}).get("mount_point")
+    deleted_shares = []
     if mount_point:
         blocking = _shares_blocking_unmount(mount_point)
         if blocking:
-            oplog.log_event("disks", "unmount", "failure", params={"device": device})
-            return jsonify({
-                "success": False,
-                "error_code": "disks.unmount_blocked_by_shares",
-                "error_context": {"shares": ", ".join(blocking)},
-            }), 400
+            if not delete_blocking_shares:
+                oplog.log_event("disks", "unmount", "failure", params={"device": device})
+                return jsonify({
+                    "success": False,
+                    "error_code": "disks.unmount_blocked_by_shares",
+                    "error_context": {"shares": ", ".join(blocking)},
+                }), 400
+            for share_name in blocking:
+                del_result = smb_shares.delete_share(share_name, delete_files=False)
+                if del_result["success"]:
+                    deleted_shares.append(share_name)
+                    oplog.log_event("shares", "delete", "success", params={"name": share_name, "reason": "disk_unmount"})
+                else:
+                    oplog.log_event("shares", "delete", "failure", params={"name": share_name, "reason": "disk_unmount"})
 
     result = disk_mutate.unmount_disk(device)
     if not result["success"]:
         oplog.log_event("disks", "unmount", "failure", params={"device": device})
-        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
-    oplog.log_event("disks", "unmount", "success", params={"device": device})
-    return jsonify({"success": True})
+        return jsonify({
+            "success": False,
+            "error_code": result["error_code"],
+            "error_context": result["error_context"],
+            "deleted_shares": deleted_shares,
+        }), 400
+    oplog.log_event("disks", "unmount", "success", params={"device": device, "deleted_shares": ", ".join(deleted_shares)})
+    return jsonify({"success": True, "deleted_shares": deleted_shares})
 
 
 @app.route("/api/system-stats")
@@ -374,6 +397,7 @@ def api_groups_delete(name):
     if not result["success"]:
         oplog.log_event("groups", "delete", "failure", params={"name": name})
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    smb_shares.remove_group_from_all_shares(name)
     oplog.log_event("groups", "delete", "success", params={"name": name})
     return jsonify({"success": True})
 

@@ -863,5 +863,48 @@ class TestRemoveUserFromAllShares(unittest.TestCase):
         mock_update.assert_not_called()
 
 
+class TestRemoveGroupFromAllShares(unittest.TestCase):
+    def test_removes_the_group_from_every_managed_share_that_grants_it(self):
+        shares_result = {"available": True, "shares": [
+            {"name": "dane", "managed": True, "group_grants": {"rodzina": "rw", "znajomi": "ro"}},
+            {"name": "filmy", "managed": True, "group_grants": {"rodzina": "ro"}},
+            {"name": "inny", "managed": True, "group_grants": {"znajomi": "rw"}},
+        ]}
+        with mock.patch.object(smb_shares, "list_shares", return_value=shares_result), \
+             mock.patch.object(smb_shares, "update_share", return_value={"success": True}) as mock_update:
+            result = smb_shares.remove_group_from_all_shares("rodzina")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(set(result["updated_shares"]), {"dane", "filmy"})
+        called_names = {c.args[0] for c in mock_update.call_args_list}
+        self.assertEqual(called_names, {"dane", "filmy"})
+        dane_call = next(c for c in mock_update.call_args_list if c.args[0] == "dane")
+        self.assertEqual(dane_call.kwargs["group_grants"], {"znajomi": "ro"})
+
+    def test_never_touches_unmanaged_foreign_shares(self):
+        shares_result = {"available": True, "shares": [
+            {"name": "obcy", "managed": False, "group_grants": {"rodzina": "rw"}},
+        ]}
+        with mock.patch.object(smb_shares, "list_shares", return_value=shares_result), \
+             mock.patch.object(smb_shares, "update_share") as mock_update:
+            result = smb_shares.remove_group_from_all_shares("rodzina")
+
+        self.assertEqual(result["updated_shares"], [])
+        mock_update.assert_not_called()
+
+    def test_never_touches_individual_permissions(self):
+        shares_result = {"available": True, "shares": [
+            {"name": "dane", "managed": True, "permissions": {"rodzina": "rw"}, "group_grants": {}},
+        ]}
+        with mock.patch.object(smb_shares, "list_shares", return_value=shares_result), \
+             mock.patch.object(smb_shares, "update_share") as mock_update:
+            result = smb_shares.remove_group_from_all_shares("rodzina")
+
+        # "rodzina" only appears in permissions (a user, coincidentally
+        # same name), not group_grants - must not be touched
+        self.assertEqual(result["updated_shares"], [])
+        mock_update.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

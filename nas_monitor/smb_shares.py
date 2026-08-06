@@ -695,6 +695,29 @@ def remove_user_from_all_shares(username: str) -> dict[str, Any]:
     return {"success": True, "updated_shares": updated}
 
 
+def remove_group_from_all_shares(group_name: str) -> dict[str, Any]:
+    """The group_grants counterpart to remove_user_from_all_shares -
+    called when a general group is deleted, so a share's group_grants
+    never keeps a stale entry pointing at a group that no longer
+    exists. Same best-effort, hygiene-not-safety reasoning: the warning
+    shown before the delete (see the confirm dialog) is what actually
+    protects against surprise, this just keeps the stored config
+    honest afterward. Only ever touches group_grants - individual
+    permissions are a completely separate dict, untouched here."""
+    updated = []
+    for share in list_shares().get("shares", []):
+        if not share.get("managed"):
+            continue
+        grants = share.get("group_grants") or {}
+        if group_name not in grants:
+            continue
+        new_grants = {g: level for g, level in grants.items() if g != group_name}
+        result = update_share(share["name"], group_grants=new_grants)
+        if result["success"]:
+            updated.append(share["name"])
+    return {"success": True, "updated_shares": updated}
+
+
 def update_share(
     name: str,
     comment: str | None = None,
