@@ -127,7 +127,9 @@ class TestEnsureIncludeDirective(unittest.TestCase):
     def tearDown(self):
         shutil.rmtree(self.tmpdir)
 
-    def test_appends_include_once(self):
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/bin/testparm")
+    @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(0, "", ""))
+    def test_appends_include_once(self, mock_run, mock_find):
         with open(self.smb_conf, "w") as fh:
             fh.write("[global]\n   workgroup = WORKGROUP\n\n[printers]\n   path = /var/tmp\n")
 
@@ -144,7 +146,9 @@ class TestEnsureIncludeDirective(unittest.TestCase):
             content_after_second = fh.read()
         self.assertEqual(content_after_second.count("include ="), 1)
 
-    def test_creates_managed_file_if_missing(self):
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/bin/testparm")
+    @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(0, "", ""))
+    def test_creates_managed_file_if_missing(self, mock_run, mock_find):
         with open(self.smb_conf, "w") as fh:
             fh.write("[global]\n   workgroup = WORKGROUP\n")
         smb_shares._ensure_include_directive(self.smb_conf, self.managed)
@@ -156,6 +160,97 @@ class TestEnsureIncludeDirective(unittest.TestCase):
         result = smb_shares._ensure_include_directive(self.smb_conf, self.managed)
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "shares.global_section_missing")
+
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/bin/testparm")
+    @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(0, "", ""))
+    def test_disables_default_homes_share(self, mock_run, mock_find):
+        # Regression test for a real report: a normal user logging in
+        # via SMB saw a share named after themselves, alongside their
+        # actual managed shares - Debian's stock smb.conf ships [homes]
+        # active by default, and this tool otherwise only ever exposes
+        # what was explicitly created through the dashboard.
+        with open(self.smb_conf, "w") as fh:
+            fh.write("[global]\n   workgroup = WORKGROUP\n\n[homes]\n   browseable = no\n   read only = no\n\n[printers]\n   path = /var/tmp\n")
+
+        result = smb_shares._ensure_include_directive(self.smb_conf, self.managed)
+        self.assertTrue(result["success"])
+        with open(self.smb_conf) as fh:
+            content = fh.read()
+        self.assertIn("; [homes]", content)
+        self.assertIn("browseable = no", content)
+        self.assertIn("read only = no", content)
+        for line in content.splitlines():
+            if "browseable = no" in line or "read only = no" in line:
+                self.assertTrue(line.strip().startswith(";"), line)
+        # never touches anything outside that one section
+        self.assertIn("workgroup = WORKGROUP", content)
+        self.assertNotIn("; path = /var/tmp", content)  # [printers] untouched
+
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/bin/testparm")
+    @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(0, "", ""))
+    def test_disables_homes_even_when_include_already_present(self, mock_run, mock_find):
+        # The real case that matters most: an install running since
+        # before homes-disabling existed already has the include line,
+        # so this must NOT be gated behind "does it have the include
+        # line yet" (that would mean this fix silently never runs on
+        # any existing install).
+        with open(self.smb_conf, "w") as fh:
+            fh.write(
+                f"[global]\n   include = {self.managed}\n   workgroup = WORKGROUP\n\n"
+                "[homes]\n   browseable = no\n\n[printers]\n   path = /var/tmp\n"
+            )
+        result = smb_shares._ensure_include_directive(self.smb_conf, self.managed)
+        self.assertTrue(result["success"])
+        with open(self.smb_conf) as fh:
+            content = fh.read()
+        self.assertIn("; [homes]", content)
+        self.assertEqual(content.count("include ="), 1)  # not duplicated
+
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/bin/testparm")
+    @mock.patch("nas_monitor.smb_shares.system_tools.run")
+    def test_no_write_at_all_when_both_already_done(self, mock_run, mock_find):
+        with open(self.smb_conf, "w") as fh:
+            fh.write(f"[global]\n   include = {self.managed}\n   workgroup = WORKGROUP\n\n; [homes]\n;    browseable = no\n")
+        result = smb_shares._ensure_include_directive(self.smb_conf, self.managed)
+        self.assertTrue(result["success"])
+        mock_run.assert_not_called()  # no testparm call - nothing needed writing at all
+
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/bin/testparm")
+    @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(1, "", "syntax error near line 5"))
+    def test_rolls_back_main_conf_when_testparm_rejects_it(self, mock_run, mock_find):
+        with open(self.smb_conf, "w") as fh:
+            fh.write("[global]\n   workgroup = WORKGROUP\n")
+        original = open(self.smb_conf).read()
+
+        result = smb_shares._ensure_include_directive(self.smb_conf, self.managed)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "shares.config_rejected")
+        with open(self.smb_conf) as fh:
+            self.assertEqual(fh.read(), original)  # untouched - rolled back
+
+
+class TestDisableDefaultHomesShare(unittest.TestCase):
+    def test_comments_out_an_active_homes_section(self):
+        content = "[global]\n   workgroup = WORKGROUP\n\n[homes]\n   browseable = no\n   read only = no\n\n[printers]\n   path = /var/tmp\n"
+        result = smb_shares._disable_default_homes_share(content)
+        self.assertIn("; [homes]", result)
+        self.assertIn("browseable = no", result)
+        self.assertIn("read only = no", result)
+        for line in result.splitlines():
+            if "browseable = no" in line or "read only = no" in line:
+                self.assertTrue(line.strip().startswith(";"), line)
+        self.assertIn("[printers]", result)
+        self.assertNotIn("; path = /var/tmp", result)
+
+    def test_is_a_no_op_when_homes_is_already_commented_out(self):
+        content = "[global]\n   workgroup = WORKGROUP\n\n; [homes]\n;   browseable = no\n"
+        result = smb_shares._disable_default_homes_share(content)
+        self.assertEqual(result, content)
+
+    def test_is_a_no_op_when_homes_is_absent(self):
+        content = "[global]\n   workgroup = WORKGROUP\n\n[printers]\n   path = /var/tmp\n"
+        result = smb_shares._disable_default_homes_share(content)
+        self.assertEqual(result, content)
 
 
 class TestValidateAndApply(unittest.TestCase):

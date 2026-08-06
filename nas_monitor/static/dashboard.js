@@ -1347,11 +1347,9 @@ const shareLocationSelect = document.getElementById("share-location");
 const shareCommentInput = document.getElementById("share-comment");
 const sharePermissionsList = document.getElementById("share-permissions-list");
 const shareGroupGrantsList = document.getElementById("share-group-grants-list");
+const shareAddPersonBtn = document.getElementById("share-add-person-btn");
+const shareAddGroupBtn = document.getElementById("share-add-group-btn");
 const shareSubmitBtn = document.getElementById("share-submit");
-
-function permissionLabels() {
-  return { none: t("ui.shares.permNone"), ro: t("ui.shares.permRo"), rw: t("ui.shares.permRw") };
-}
 
 let editingShareName = null;
 let lastSharesData = [];
@@ -1442,61 +1440,102 @@ function renderShares(sharesList) {
   sharesContainer.appendChild(table);
 }
 
+function grantLabels() {
+  // No "none" here on purpose - unlike the old always-show-everyone
+  // list, a row's mere presence in this list now means "has access";
+  // removing it (see the × per row) is how you take access away, not
+  // selecting a "none" option out of a select that no longer offers one.
+  return { ro: t("ui.shares.permRo"), rw: t("ui.shares.permRw") };
+}
+
+function makeShareGrantRow({ key, datasetAttr, label, sublabel, defaultLevel, selectClass }) {
+  const row = document.createElement("div");
+  row.className = "permission-row";
+  row.dataset.key = key;
+
+  const info = document.createElement("div");
+  info.className = "permission-info";
+  const name = document.createElement("span");
+  name.className = "permission-user";
+  name.textContent = label;
+  name.title = label;
+  info.appendChild(name);
+  if (sublabel) {
+    const warn = document.createElement("span");
+    warn.className = "field-hint";
+    warn.style.color = "var(--warn)";
+    warn.textContent = sublabel;
+    info.appendChild(warn);
+  }
+  row.appendChild(info);
+
+  const select = document.createElement("select");
+  select.dataset[datasetAttr] = key;
+  select.className = `permission-select ${selectClass}`;
+  for (const [value, optLabel] of Object.entries(grantLabels())) {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = optLabel;
+    select.appendChild(opt);
+  }
+  select.value = defaultLevel;
+  row.appendChild(select);
+
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "link-btn danger remove-grant-btn";
+  removeBtn.textContent = "\u00d7";
+  removeBtn.title = t("ui.shareDialog.removeBtn");
+  removeBtn.addEventListener("click", () => row.remove());
+  row.appendChild(removeBtn);
+
+  return row;
+}
+
 function populateSharePermissionsList(existingPermissions) {
   const current = existingPermissions || {};
   sharePermissionsList.innerHTML = "";
-  if (!lastKnownUsersData.length) {
-    const p = document.createElement("p");
-    p.className = "empty-state";
-    p.textContent = t("ui.shareDialog.noUsersHint");
-    sharePermissionsList.appendChild(p);
-    return;
-  }
   for (const u of lastKnownUsersData) {
-    const row = document.createElement("div");
-    row.className = "permission-row";
-
-    const info = document.createElement("div");
-    info.className = "permission-info";
-
-    const name = document.createElement("span");
-    name.className = "permission-user";
+    if (!(u.username in current)) continue;
     const displayName = u.display_name || u.username;
-    name.textContent = displayName;
-    name.title = displayName;
-    info.appendChild(name);
-
-    if (!u.has_smb) {
-      const warn = document.createElement("span");
-      warn.className = "field-hint";
-      warn.style.color = "var(--warn)";
-      warn.textContent = t("ui.shares.noSmbPasswordHint");
-      info.appendChild(warn);
-    }
-    row.appendChild(info);
-
-    const select = document.createElement("select");
-    select.dataset.username = u.username;
-    select.className = "permission-select";
-    for (const [value, label] of Object.entries(permissionLabels())) {
-      const opt = document.createElement("option");
-      opt.value = value;
-      opt.textContent = label;
-      select.appendChild(opt);
-    }
-    select.value = current[u.username] || "none";
-    row.appendChild(select);
-
-    sharePermissionsList.appendChild(row);
+    const sublabel = u.has_smb ? "" : t("ui.shares.noSmbPasswordHint");
+    sharePermissionsList.appendChild(
+      makeShareGrantRow({
+        key: u.username,
+        datasetAttr: "username",
+        label: displayName,
+        sublabel,
+        defaultLevel: current[u.username],
+        selectClass: "",
+      })
+    );
   }
+  refreshShareAddPersonBtn();
 }
+
+function refreshShareAddPersonBtn() {
+  const already = new Set(Array.from(sharePermissionsList.querySelectorAll(".permission-row")).map((r) => r.dataset.key));
+  const remaining = lastKnownUsersData.filter((u) => !already.has(u.username));
+  shareAddPersonBtn.style.display = remaining.length ? "inline-block" : "none";
+}
+
+shareAddPersonBtn.addEventListener("click", () => {
+  const already = new Set(Array.from(sharePermissionsList.querySelectorAll(".permission-row")).map((r) => r.dataset.key));
+  const remaining = lastKnownUsersData.filter((u) => !already.has(u.username));
+  if (!remaining.length) return;
+  const u = remaining[0];
+  const displayName = u.display_name || u.username;
+  const sublabel = u.has_smb ? "" : t("ui.shares.noSmbPasswordHint");
+  sharePermissionsList.appendChild(
+    makeShareGrantRow({ key: u.username, datasetAttr: "username", label: displayName, sublabel, defaultLevel: "ro", selectClass: "" })
+  );
+  refreshShareAddPersonBtn();
+});
 
 function collectSharePermissions() {
   const permissions = {};
   sharePermissionsList.querySelectorAll(".permission-select").forEach((select) => {
-    if (select.value !== "none") {
-      permissions[select.dataset.username] = select.value;
-    }
+    permissions[select.dataset.username] = select.value;
   });
   return permissions;
 }
@@ -1504,47 +1543,43 @@ function collectSharePermissions() {
 function populateShareGroupGrantsList(existingGrants) {
   const current = existingGrants || {};
   shareGroupGrantsList.innerHTML = "";
-  if (!lastKnownGroupsData.length) {
-    const p = document.createElement("p");
-    p.className = "empty-state";
-    p.textContent = t("ui.shareDialog.noGroupsHint");
-    shareGroupGrantsList.appendChild(p);
-    return;
-  }
   for (const g of lastKnownGroupsData) {
-    const row = document.createElement("div");
-    row.className = "permission-row";
-
-    const info = document.createElement("div");
-    info.className = "permission-info";
-    const name = document.createElement("span");
-    name.className = "permission-user mono";
-    name.textContent = g.name;
-    info.appendChild(name);
-    row.appendChild(info);
-
-    const select = document.createElement("select");
-    select.dataset.group = g.name;
-    select.className = "permission-select group-grant-select";
-    for (const [value, label] of Object.entries(permissionLabels())) {
-      const opt = document.createElement("option");
-      opt.value = value;
-      opt.textContent = label;
-      select.appendChild(opt);
-    }
-    select.value = current[g.name] || "none";
-    row.appendChild(select);
-
-    shareGroupGrantsList.appendChild(row);
+    if (!(g.name in current)) continue;
+    shareGroupGrantsList.appendChild(
+      makeShareGrantRow({
+        key: g.name,
+        datasetAttr: "group",
+        label: g.name,
+        sublabel: "",
+        defaultLevel: current[g.name],
+        selectClass: "group-grant-select",
+      })
+    );
   }
+  refreshShareAddGroupBtn();
 }
+
+function refreshShareAddGroupBtn() {
+  const already = new Set(Array.from(shareGroupGrantsList.querySelectorAll(".permission-row")).map((r) => r.dataset.key));
+  const remaining = lastKnownGroupsData.filter((g) => !already.has(g.name));
+  shareAddGroupBtn.style.display = remaining.length ? "inline-block" : "none";
+}
+
+shareAddGroupBtn.addEventListener("click", () => {
+  const already = new Set(Array.from(shareGroupGrantsList.querySelectorAll(".permission-row")).map((r) => r.dataset.key));
+  const remaining = lastKnownGroupsData.filter((g) => !already.has(g.name));
+  if (!remaining.length) return;
+  const g = remaining[0];
+  shareGroupGrantsList.appendChild(
+    makeShareGrantRow({ key: g.name, datasetAttr: "group", label: g.name, sublabel: "", defaultLevel: "ro", selectClass: "group-grant-select" })
+  );
+  refreshShareAddGroupBtn();
+});
 
 function collectShareGroupGrants() {
   const grants = {};
   shareGroupGrantsList.querySelectorAll(".group-grant-select").forEach((select) => {
-    if (select.value !== "none") {
-      grants[select.dataset.group] = select.value;
-    }
+    grants[select.dataset.group] = select.value;
   });
   return grants;
 }

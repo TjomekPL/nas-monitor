@@ -230,12 +230,51 @@ def _render_managed_shares(shares: list[dict[str, Any]]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _disable_default_homes_share(content: str) -> str:
+    """Comments out an active [homes] stanza, if present - Samba's
+    built-in per-user home-directory auto-share, active by default on
+    a fresh Debian Samba install and completely independent of
+    anything this tool manages (a real report: logging in as a normal
+    user revealed a share named after them, alongside their actual
+    managed shares, with no dashboard entry to explain it). Every
+    other share here only ever exists because it was explicitly
+    created through the dashboard - a share silently appearing per
+    login breaks that principle, so this is disabled by default rather
+    than something the tool has to actively support turning off later.
+    Idempotent (a no-op if [homes] is already commented out or absent)
+    - only ever called from _ensure_include_directive, itself only
+    doing real work once per install."""
+    lines = content.splitlines(keepends=True)
+    out = []
+    in_homes = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_homes = stripped.lower() == "[homes]"
+        if in_homes and stripped and not stripped.startswith((";", "#")):
+            out.append(f"; {line}")
+        else:
+            out.append(line)
+    return "".join(out)
+
+
 def _ensure_include_directive(
     smb_conf_path: str = MAIN_SMB_CONF, managed_conf_path: str = MANAGED_CONF_PATH
 ) -> dict[str, Any]:
-    """Make sure the main smb.conf includes our managed file. Appends a
-    single line under [global] the first time only - never touches
-    anything else in the (possibly hand-edited) main file."""
+    """Make sure the main smb.conf includes our managed file, and that
+    Debian's default [homes] auto-share is disabled (see
+    _disable_default_homes_share) - these are two INDEPENDENT one-time
+    migrations, not one. An install that's been running since before
+    [homes]-disabling existed already has the include line, so gating
+    everything behind "does it have the include line yet" (as this
+    used to) would mean the homes fix silently never runs on any
+    existing install - exactly the installs it matters most for. Each
+    piece is computed against what's actually still missing; nothing
+    is written or testparm-validated at all if both are already in
+    place. Validated with testparm and rolled back to the original
+    content if it doesn't pass, same as every write to the managed
+    file itself (_validate_and_apply) - this touches the main,
+    not-tool-owned smb.conf, so it gets no less care than that."""
     result: dict[str, Any] = {"success": False}
 
     os.makedirs(os.path.dirname(managed_conf_path), exist_ok=True)
@@ -248,20 +287,36 @@ def _ensure_include_directive(
     except OSError as exc:
         return errors.io_failed(result, exc, smb_conf_path)
 
-    include_line = f"   include = {managed_conf_path}"
-    if managed_conf_path in content:
+    new_content = content
+    if managed_conf_path not in new_content:
+        if "[global]" not in new_content:
+            return errors.fail(result, "shares.global_section_missing", path=smb_conf_path)
+        include_line = f"   include = {managed_conf_path}"
+        new_content = new_content.replace("[global]", f"[global]\n{include_line}", 1)
+
+    new_content = _disable_default_homes_share(new_content)
+
+    if new_content == content:
         result["success"] = True
         return result
 
-    if "[global]" not in content:
-        return errors.fail(result, "shares.global_section_missing", path=smb_conf_path)
-
-    new_content = content.replace("[global]", f"[global]\n{include_line}", 1)
     try:
         with open(smb_conf_path, "w") as fh:
             fh.write(new_content)
     except OSError as exc:
         return errors.io_failed(result, exc, smb_conf_path)
+
+    testparm_path = system_tools.find_binary("testparm")
+    if testparm_path is None:
+        with open(smb_conf_path, "w") as fh:
+            fh.write(content)
+        return errors.fail(result, "shares.validate_tool_missing", tool="testparm")
+
+    code, out, err = system_tools.run([testparm_path, "-s"])
+    if code != 0:
+        with open(smb_conf_path, "w") as fh:
+            fh.write(content)
+        return errors.fail(result, "shares.config_rejected", detail=(err or out).strip()[:300])
 
     result["success"] = True
     return result
