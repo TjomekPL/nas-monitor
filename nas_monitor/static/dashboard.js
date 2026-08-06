@@ -505,7 +505,39 @@ function renderDisks(disks) {
       err.classList.add("visible");
     }
 
+    // Only offer Unmount for a disk sitting under /mnt/ (must match
+    // disk_mutate.MOUNT_BASE) - that's specifically the convention
+    // format_disk()'s auto-mount uses, so it's the one case a mounted
+    // disk showing up here (read-only otherwise - see monitor.py's
+    // get_full_status filtering) still has a way back to the raw-disks
+    // table (format/wipe) instead of being stuck permanently. A RAID
+    // member's usage isn't a plain mount in this sense (the array is),
+    // so this naturally never shows for those either.
+    const mountpoints = (disk.usage && disk.usage.mountpoints) || [];
+    if (mountpoints.some((mp) => mp && mp.startsWith("/mnt/"))) {
+      const actions = node.querySelector(".card-actions");
+      actions.style.display = "block";
+      node.querySelector(".unmount-btn").addEventListener("click", () => unmountDisk(disk));
+    }
+
     disksContainer.appendChild(node);
+  }
+}
+
+async function unmountDisk(disk) {
+  if (!(await confirmDialog(t("msg.confirmUnmountDisk", { name: disk.name }), { danger: true }))) return;
+  try {
+    const res = await fetch(`/api/disks/${encodeURIComponent(disk.name)}/unmount`, { method: "POST" });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      showToast(apiErrorMessage(data, res), true);
+      return;
+    }
+    showToast(t("msg.unmountedDisk", { name: disk.name }));
+    await refresh();
+    await loadRawDisks();
+  } catch (err) {
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
   }
 }
 

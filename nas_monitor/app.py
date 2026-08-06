@@ -207,6 +207,17 @@ def api_disk_wipe(name):
     return jsonify({"success": True})
 
 
+@app.route("/api/disks/<name>/unmount", methods=["POST"])
+def api_disk_unmount(name):
+    device = f"/dev/{name}"
+    result = disk_mutate.unmount_disk(device)
+    if not result["success"]:
+        oplog.log_event("disks", "unmount", "failure", params={"device": device})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("disks", "unmount", "success", params={"device": device})
+    return jsonify({"success": True})
+
+
 @app.route("/api/system-stats")
 def api_system_stats():
     # Deliberately not logged to the operations log - this is a

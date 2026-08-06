@@ -120,6 +120,7 @@ window.NAS_I18N.pl = {
       temp: "Temperatura",
       hours: "Godziny pracy",
       serial: "Serial",
+      unmountBtn: "Odmontuj",
     },
     users: {
       heading: "Użytkownicy",
@@ -323,6 +324,8 @@ window.NAS_I18N.pl = {
     confirmDeleteShare: "Usunąć udział \"{name}\"?\n\nOK = usuń tylko z Samby, ZOSTAW pliki na dysku (bezpieczne).\nAnuluj = przerwij.\n\n(Skasowanie też plików nie jest tu jeszcze dostępne z tego dialogu - celowo, żeby nie skasować czyichś danych jednym kliknięciem.)",
     confirmCreateGroup: "Utworzyć grupę \"{name}\"?",
     confirmDeleteGroup: "Usunąć grupę \"{name}\"? Wszyscy jej członkowie stracą wynikające z niej uprawnienia.",
+    confirmUnmountDisk: "Odmontować {name}? Wpis w /etc/fstab też zostanie usunięty - dysk trafi z powrotem do tabeli surowych dysków.",
+    unmountedDisk: "Odmontowano {name}.",
     confirmGenerateKey: "Wygenerować nową parę kluczy SSH dla \"{username}\"?",
     confirmDeleteKey: "Usunąć klucz SSH dla \"{username}\"? Będzie trzeba go ponownie wysłać wszędzie, gdzie był zainstalowany.",
     confirmDeployKey: "Zainstalować klucz na {user}@{host}?",
@@ -349,6 +352,7 @@ window.NAS_I18N.pl = {
       is_boot_disk: "{device} to dysk systemowy - nie można go sformatować ani wyczyścić",
       is_mounted: "{device} jest aktualnie zamontowany - odmontuj go najpierw",
       is_raid_member: "{device} jest częścią macierzy RAID - usuń go z macierzy najpierw",
+      not_our_mount: "{device} nie jest zamontowany w miejscu zarządzanym przez ten panel - odmontuj go ręcznie",
       unsupported_filesystem: "Nieobsługiwany system plików: {filesystem}",
       invalid_label: "Nieprawidłowa etykieta: {label} (dozwolone: litery, cyfry, myślnik, podkreślenie, max 32 znaki)",
       partition_not_ready: "Partycja {partition} nie pojawiła się po utworzeniu - spróbuj ponownie",
@@ -466,6 +470,7 @@ window.NAS_I18N.pl = {
     disks: {
       format: { success: "Sformatowano {device} ({filesystem})", failure: "Nie udało się sformatować {device}" },
       wipe: { success: "Wyczyszczono {device}", failure: "Nie udało się wyczyścić {device}" },
+      unmount: { success: "Odmontowano {device}", failure: "Nie udało się odmontować {device}" },
     },
     network: {
       apply: { success: "Zmieniono adres IP interfejsu {interface} na {ip}", failure: "Nie udało się zmienić ustawień sieci dla {interface}" },

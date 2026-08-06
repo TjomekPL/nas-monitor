@@ -202,6 +202,85 @@ class TestCheckDiskSafeToModify(unittest.TestCase):
         self.assertTrue(result["safe"])
 
 
+class TestUnmountDisk(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.fstab_path = os.path.join(self.tmpdir, "fstab")
+        self.mount_base = os.path.join(self.tmpdir, "mnt")
+        self.fstab_patch = mock.patch.object(disk_mutate, "FSTAB_PATH", self.fstab_path)
+        self.mount_base_patch = mock.patch.object(disk_mutate, "MOUNT_BASE", self.mount_base)
+        self.fstab_patch.start()
+        self.mount_base_patch.start()
+
+    def tearDown(self):
+        self.fstab_patch.stop()
+        self.mount_base_patch.stop()
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def _lsblk_mounted_under_our_base(self, args):
+        mount_point = f"{self.mount_base}/dane"
+        return (0, f'{{"blockdevices": [{{"name": "sdc", "mountpoint": null, "children": [{{"name": "sdc1", "mountpoint": "{mount_point}"}}]}}]}}', "")
+
+    def test_unmounts_and_removes_fstab_entry(self):
+        mount_point = f"{self.mount_base}/dane"
+        with open(self.fstab_path, "w") as f:
+            f.write(f"UUID=1234-ABCD  {mount_point}  ext4  defaults,nofail  0  2\n")
+            f.write("UUID=OTHER-UUID  /mnt/other  ext4  defaults,nofail  0  2\n")
+
+        responses = {"lsblk": self._lsblk_mounted_under_our_base, "umount": (0, "", "")}
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate, "_raid_member_disk_names", return_value=set()):
+            result = disk_mutate.unmount_disk("/dev/sdc")
+
+        self.assertTrue(result["success"])
+        umount_call = next(c for c in mock_run.call_args_list if os.path.basename(c.args[0][0]) == "umount")
+        self.assertIn(mount_point, umount_call.args[0])
+        with open(self.fstab_path) as f:
+            content = f.read()
+        self.assertNotIn(mount_point, content)
+        self.assertIn("OTHER-UUID", content)  # unrelated entries untouched
+
+    def test_refuses_disk_not_mounted_under_our_base(self):
+        # mounted somewhere else entirely - not something this tool set up
+        lsblk_json = '{"blockdevices": [{"name": "sdc", "mountpoint": null, "children": [{"name": "sdc1", "mountpoint": "/media/somewhere"}]}]}'
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate, "_raid_member_disk_names", return_value=set()):
+            result = disk_mutate.unmount_disk("/dev/sdc")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "disks.not_our_mount")
+
+    def test_refuses_raid_member(self):
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate, "_raid_member_disk_names", return_value={"sdc"}):
+            result = disk_mutate.unmount_disk("/dev/sdc")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "disks.is_raid_member")
+
+    def test_umount_failure_is_surfaced_and_fstab_untouched(self):
+        mount_point = f"{self.mount_base}/dane"
+        with open(self.fstab_path, "w") as f:
+            f.write(f"UUID=1234-ABCD  {mount_point}  ext4  defaults,nofail  0  2\n")
+
+        responses = {"lsblk": self._lsblk_mounted_under_our_base, "umount": (1, "", "target is busy")}
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate, "_raid_member_disk_names", return_value=set()):
+            result = disk_mutate.unmount_disk("/dev/sdc")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+        with open(self.fstab_path) as f:
+            self.assertIn(mount_point, f.read())  # untouched - umount never actually succeeded
+
+
 class TestWipeDisk(unittest.TestCase):
     def test_refuses_to_wipe_boot_disk(self):
         responses = {"findmnt": (0, "/dev/sda2\n", ""), "lsblk": _lsblk_handler}

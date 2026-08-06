@@ -230,6 +230,93 @@ def check_disk_safe_to_modify(device: str) -> dict[str, Any]:
     return result
 
 
+def unmount_disk(device: str) -> dict[str, Any]:
+    """Unmounts a disk this tool previously auto-mounted, and removes
+    its /etc/fstab entry so it doesn't try to come back at next boot -
+    the counterpart to format_disk()'s auto_mount, and the way back
+    into the raw-disks table (format/wipe) for a disk that's currently
+    sitting in the read-only "Disks" view with nothing else you can do
+    to it. Deliberately refuses anything not mounted under MOUNT_BASE -
+    this only ever undoes what this tool itself set up, never an
+    unrelated mount point that happens to belong to a non-boot disk."""
+    result: dict[str, Any] = {"device": device, "success": False}
+    name = _disk_name(device)
+
+    known = {d["name"] for d in monitor.list_disks()}
+    if name not in known:
+        return errors.fail(result, "disks.not_found", device=device)
+    if name in _raid_member_disk_names():
+        return errors.fail(result, "disks.is_raid_member", device=device)
+
+    mount_point = _our_mount_point(device)
+    if not mount_point:
+        return errors.fail(result, "disks.not_our_mount", device=device)
+
+    umount_path = system_tools.find_binary("umount")
+    if umount_path is None:
+        return errors.tool_missing(result, "umount")
+
+    code, out, err = system_tools.run([umount_path, mount_point], timeout=30)
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "umount")
+
+    _remove_fstab_entry(mount_point)
+
+    result["success"] = True
+    return result
+
+
+def _our_mount_point(device: str) -> str | None:
+    """The mount point this device is currently mounted at, if - and
+    only if - it's under MOUNT_BASE (i.e. something format_disk()'s
+    auto-mount could plausibly have set up), via lsblk so it reflects
+    reality regardless of whether an fstab entry exists at all."""
+    lsblk_path = system_tools.find_binary("lsblk")
+    if lsblk_path is None:
+        return None
+    code, out, _ = system_tools.run([lsblk_path, "-J", "-o", "NAME,MOUNTPOINT", device], timeout=10)
+    if code != 0 or not out.strip():
+        return None
+    try:
+        import json
+        data = json.loads(out)
+    except ValueError:
+        return None
+
+    def walk(devices):
+        for dev in devices:
+            mp = dev.get("mountpoint")
+            if mp and mp.startswith(MOUNT_BASE + os.sep):
+                return mp
+            found = walk(dev.get("children") or [])
+            if found:
+                return found
+        return None
+
+    return walk(data.get("blockdevices", []))
+
+
+def _remove_fstab_entry(mount_point: str) -> None:
+    """Best-effort - if this fails, the stale entry just sits there
+    (harmless: `nofail` means it won't hang boot, it'll just silently
+    not mount since the filesystem beneath it may since have changed).
+    Not surfaced as a warning: unmount already succeeded, which is the
+    part that actually matters to whoever clicked the button."""
+    try:
+        with open(FSTAB_PATH, "r") as fh:
+            lines = fh.readlines()
+    except OSError:
+        return
+    kept = [line for line in lines if f" {mount_point} " not in line and not line.rstrip("\n").endswith(f" {mount_point}")]
+    if kept == lines:
+        return
+    try:
+        with open(FSTAB_PATH, "w") as fh:
+            fh.writelines(kept)
+    except OSError:
+        pass
+
+
 def wipe_disk(device: str) -> dict[str, Any]:
     """Erases the partition table and any filesystem signatures -
     leaves the disk genuinely blank: no filesystem, ready to be

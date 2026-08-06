@@ -120,6 +120,7 @@ window.NAS_I18N.en = {
       temp: "Temperature",
       hours: "Power-on hours",
       serial: "Serial",
+      unmountBtn: "Unmount",
     },
     users: {
       heading: "Users",
@@ -323,6 +324,8 @@ window.NAS_I18N.en = {
     confirmDeleteShare: "Delete share \"{name}\"?\n\nOK = remove from Samba only, KEEP the files on disk (safe).\nCancel = abort.\n\n(Deleting the files too isn't available from this dialog yet - on purpose, so nobody's data gets wiped in one click.)",
     confirmCreateGroup: "Create group \"{name}\"?",
     confirmDeleteGroup: "Delete group \"{name}\"? Every member loses whatever access came from it.",
+    confirmUnmountDisk: "Unmount {name}? Its /etc/fstab entry will be removed too - the disk goes back to the raw-disks table.",
+    unmountedDisk: "Unmounted {name}.",
     confirmGenerateKey: "Generate a new SSH keypair for \"{username}\"?",
     confirmDeleteKey: "Delete the SSH key for \"{username}\"? It will need to be redeployed everywhere it was installed.",
     confirmDeployKey: "Install the key on {user}@{host}?",
@@ -349,6 +352,7 @@ window.NAS_I18N.en = {
       is_boot_disk: "{device} is the system disk - it can't be formatted or wiped",
       is_mounted: "{device} is currently mounted - unmount it first",
       is_raid_member: "{device} is part of a RAID array - remove it from the array first",
+      not_our_mount: "{device} isn't mounted at a location this panel manages - unmount it manually",
       unsupported_filesystem: "Unsupported filesystem: {filesystem}",
       invalid_label: "Invalid label: {label} (allowed: letters, digits, dash, underscore, max 32 chars)",
       partition_not_ready: "Partition {partition} didn't appear after being created - try again",
@@ -466,6 +470,7 @@ window.NAS_I18N.en = {
     disks: {
       format: { success: "Formatted {device} ({filesystem})", failure: "Failed to format {device}" },
       wipe: { success: "Wiped {device}", failure: "Failed to wipe {device}" },
+      unmount: { success: "Unmounted {device}", failure: "Failed to unmount {device}" },
     },
     network: {
       apply: { success: "Changed interface {interface}'s IP to {ip}", failure: "Failed to change network settings for {interface}" },
