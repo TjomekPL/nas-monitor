@@ -611,6 +611,27 @@ class TestCreateShareWithGroupGrants(unittest.TestCase):
         mock_sync.assert_called_once_with(smb_shares.share_path("wspolne"), {"rodzina": "rw"}, {})
         mock_dir.assert_called_once_with(smb_shares.share_path("wspolne"), "wspolne_access")
 
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._sync_group_acls", return_value={"success": True, "warnings": []})
+    @mock.patch("nas_monitor.smb_shares.grp.getgrnam", return_value=object())
+    @mock.patch("nas_monitor.smb_shares.users_mod.ensure_group_exists", return_value={"success": True})
+    def test_group_grants_only_still_creates_the_dedicated_access_group(
+        self, mock_ensure, mock_getgrnam, mock_sync, mock_dir, mock_apply, mock_smb
+    ):
+        # Regression test for a real report: a share created with ONLY
+        # a group grant (no individual user permissions at all) failed
+        # with "Group 'X_access' doesn't exist" - the dedicated group
+        # used to only ever get created as a side effect of adding an
+        # individual user to it (add_user_to_group calls
+        # ensure_group_exists internally), and that loop is empty when
+        # `permissions` is empty. ensure_group_exists must now be
+        # called explicitly, independent of whether there are any
+        # individual permissions to add.
+        result = smb_shares.create_share("wspolne", group_grants={"rodzina": "rw"}, managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        mock_ensure.assert_called_once_with("wspolne_access")
+
     @mock.patch("nas_monitor.smb_shares.grp.getgrnam", side_effect=KeyError)
     def test_rejects_nonexistent_group(self, mock_getgrnam, mock_smb):
         result = smb_shares.create_share("wspolne", group_grants={"ghost": "rw"}, managed_conf_path=self.managed)
@@ -664,6 +685,43 @@ class TestUpdateShareWithGroupGrants(unittest.TestCase):
         self.assertTrue(result["success"])
         reread = smb_shares._read_managed_shares(self.managed)
         self.assertEqual(reread[0]["group_grants"], {"rodzina": "rw"})
+
+
+class TestUpdateShareFirstEverGroupGrant(unittest.TestCase):
+    """A share that started with zero access (created bare, or every
+    grant since removed) getting its very first group_grant, with no
+    individual permissions ever added, is the same gap
+    TestCreateShareWithGroupGrants guards at creation time - its
+    dedicated access group has never been created by anything yet."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.managed = os.path.join(self.tmpdir, "shares.conf")
+        self.existing_share = {
+            "name": "wakacje",
+            "path": "/srv/wakacje",
+            "comment": "",
+            "permissions": {},
+            "group_grants": {},
+            "access_group": None,
+        }
+        with open(self.managed, "w") as fh:
+            fh.write(smb_shares._render_managed_shares([self.existing_share]))
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    @mock.patch("nas_monitor.smb_shares._sync_group_acls", return_value={"success": True, "warnings": []})
+    @mock.patch("nas_monitor.smb_shares.grp.getgrnam", return_value=object())
+    @mock.patch("nas_monitor.smb_shares.users_mod.ensure_group_exists", return_value={"success": True})
+    def test_ensures_the_dedicated_group_exists(self, mock_ensure, mock_getgrnam, mock_sync, mock_dir, mock_apply, mock_smb):
+        with mock.patch("nas_monitor.smb_shares._resolve_group_members", return_value=[]):
+            result = smb_shares.update_share("wakacje", group_grants={"rodzina": "rw"}, managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        mock_ensure.assert_called_once_with("wakacje_access")
 
 
 if __name__ == "__main__":

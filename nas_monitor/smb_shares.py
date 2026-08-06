@@ -563,6 +563,17 @@ def create_share(
     group = access_group_name(name) if (permissions or group_grants) else None
 
     if group:
+        # Explicit, not just a side effect of the loop below: that loop
+        # is empty whenever a share's only access comes from
+        # group_grants (no individual users) - the exact case this was
+        # missing for. _prepare_share_directory needs the group to
+        # already exist by the time it looks it up a few lines down
+        # (real report: creating a share with only a group grant and no
+        # individual permissions failed with "Group 'X_access' doesn't
+        # exist", because nothing had created it yet).
+        ensure_result = users_mod.ensure_group_exists(group)
+        if not ensure_result["success"]:
+            return errors.propagate(result, ensure_result, group=group)
         for u in permissions:
             add_result = users_mod.add_user_to_group(u, group)
             if not add_result["success"]:
@@ -670,6 +681,15 @@ def update_share(
         match["access_group"] = group if has_any_access else None
 
         if has_any_access:
+            # Same explicit call as create_share, for the same reason:
+            # this share's dedicated group may never have existed yet
+            # (e.g. its first-ever access grant is a group_grant with
+            # no individual permissions - the loop above never runs in
+            # that case, so nothing created the group before
+            # _prepare_share_directory looks it up).
+            ensure_result = users_mod.ensure_group_exists(group)
+            if not ensure_result["success"]:
+                return errors.propagate(result, ensure_result, group=group)
             dir_result = _prepare_share_directory(match["path"], group)
             if not dir_result["success"]:
                 return errors.propagate(result, dir_result)
