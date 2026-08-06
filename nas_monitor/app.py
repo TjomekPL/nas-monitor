@@ -17,7 +17,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth, system_stats, update_manager
+from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth, system_stats, update_manager, disk_mutate
 
 # Every account that gets SMB access lands here by default - removable
 # afterward like any other group (just uncheck it in the edit form).
@@ -157,6 +157,49 @@ def dashboard():
 @app.route("/api/status")
 def api_status():
     return jsonify(monitor.get_full_status())
+
+
+@app.route("/api/disks/raw")
+def api_disks_raw():
+    return jsonify({"disks": disk_mutate.list_raw_disks()})
+
+
+@app.route("/api/disks/<name>/smart")
+def api_disk_smart(name):
+    # On-demand only ("Sprawdź stan" button) - unlike the known/mounted
+    # disks in /api/status, raw disks aren't worth polling smartctl for
+    # continuously since nothing's using them yet.
+    known = {d["name"]: d for d in monitor.list_disks()}
+    if name not in known:
+        return jsonify({"available": False, "error": "not found"}), 404
+    smart = monitor.get_smart_health(known[name]["path"])
+    smart["health"] = monitor.classify_health(smart)
+    return jsonify(smart)
+
+
+@app.route("/api/disks/<name>/format", methods=["POST"])
+def api_disk_format(name):
+    data = request.get_json(force=True, silent=True) or {}
+    filesystem = (data.get("filesystem") or "").strip()
+    device = f"/dev/{name}"
+
+    result = disk_mutate.format_disk(device, filesystem)
+    if not result["success"]:
+        oplog.log_event("disks", "format", "failure", params={"device": device, "filesystem": filesystem})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("disks", "format", "success", params={"device": device, "filesystem": filesystem})
+    return jsonify({"success": True})
+
+
+@app.route("/api/disks/<name>/wipe", methods=["POST"])
+def api_disk_wipe(name):
+    device = f"/dev/{name}"
+    result = disk_mutate.wipe_disk(device)
+    if not result["success"]:
+        oplog.log_event("disks", "wipe", "failure", params={"device": device})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("disks", "wipe", "success", params={"device": device})
+    return jsonify({"success": True})
 
 
 @app.route("/api/system-stats")

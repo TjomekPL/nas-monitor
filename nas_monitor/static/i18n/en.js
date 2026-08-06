@@ -72,6 +72,34 @@ window.NAS_I18N.en = {
       raidHeading: "RAID arrays",
       disksHeading: "Disks",
     },
+    rawDisks: {
+      heading: "Raw disks",
+      subtitle: "Disks with no mounted filesystem and not part of any RAID array - format, wipe, or check their status here.",
+      colName: "Name",
+      colSize: "Size",
+      colModel: "Model",
+      checkBtn: "Check status",
+      checking: "Checking...",
+      formatBtn: "Format",
+      wipeBtn: "Wipe",
+      smartUnavailable: "No SMART data for {name}",
+      smartResult: "{name}: {health}{temp}",
+      smartTemp: ", {temp}\u00b0C",
+    },
+    diskActionDialog: {
+      formatTitle: "Format disk",
+      wipeTitle: "Wipe disk",
+      fsLabel: "Filesystem",
+      cancelBtn: "Cancel",
+      formatBtn: "Format",
+      wipeBtn: "Wipe",
+      formatWarning: "This permanently erases all data on this disk and creates a new filesystem.",
+      wipeWarning: "This permanently erases the partition table and all data on this disk, without creating a new filesystem.",
+      usbWarning: "This disk is connected over USB - not a recommended setup for a RAID array or long-term storage (weaker I/O error handling, risk of port instability).",
+      confirmLabel: "Type the disk name ({name}) to confirm",
+      formatSuccess: "Formatted {name}",
+      wipeSuccess: "Wiped {name}",
+    },
     usageBar: {
       label: "{used} of {total} used ({percent}%)",
     },
@@ -262,6 +290,7 @@ window.NAS_I18N.en = {
       shares: "No shares yet - add one with the button above.",
       networkInterfaces: "No network interfaces detected.",
       log: "No events to show.",
+      rawDisks: "No raw disks - every disk is either mounted or part of an array.",
     },
     lastUpdated: "updated {time}",
     connectionError: "connection error ({detail})",
@@ -308,6 +337,14 @@ window.NAS_I18N.en = {
     statusbar: {
       psutil_missing: "the psutil library isn't installed",
       read_failed: "failed to read system stats",
+    },
+    disks: {
+      not_found: "Disk {device} not found",
+      is_boot_disk: "{device} is the system disk - it can't be formatted or wiped",
+      is_mounted: "{device} is currently mounted - unmount it first",
+      is_raid_member: "{device} is part of a RAID array - remove it from the array first",
+      unsupported_filesystem: "Unsupported filesystem: {filesystem}",
+      partition_not_ready: "Partition {partition} didn't appear after being created - try again",
     },
     auth: {
       invalid_credentials: "Invalid username or password",
@@ -412,6 +449,10 @@ window.NAS_I18N.en = {
   log: {
     system: {
       error: { failure: "Unexpected error in {path}" },
+    },
+    disks: {
+      format: { success: "Formatted {device} ({filesystem})", failure: "Failed to format {device}" },
+      wipe: { success: "Wiped {device}", failure: "Failed to wipe {device}" },
     },
     network: {
       apply: { success: "Changed interface {interface}'s IP to {ip}", failure: "Failed to change network settings for {interface}" },

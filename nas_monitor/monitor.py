@@ -379,19 +379,57 @@ def get_raid_arrays() -> list[dict[str, Any]]:
 # Top-level snapshot used by the web app
 # --------------------------------------------------------------------------
 
+def _disk_name_from_device(device_or_partition: str) -> str:
+    """"/dev/sda1" -> "sda", "/dev/nvme0n1p1" -> "nvme0n1", "/dev/mmcblk0p1"
+    -> "mmcblk0" (SD cards - relevant on a Raspberry Pi). Deliberately
+    duplicated from disk_mutate._disk_name rather than imported - this
+    module stays read-only and dependency-free of the mutation module
+    on principle, and the parsing itself is a handful of lines."""
+    base = device_or_partition.rsplit("/", 1)[-1]
+    if re.match(r"^(nvme\d+n\d+|mmcblk\d+)$", base):
+        return base
+    m = re.match(r"^(nvme\d+n\d+|mmcblk\d+)p\d+$", base)
+    if m:
+        return m.group(1)
+    m = re.match(r"^([a-zA-Z]+)\d+$", base)
+    if m:
+        return m.group(1)
+    return base
+
+
 def get_full_status() -> dict[str, Any]:
     disks = list_disks()
-    for disk in disks:
-        smart = get_smart_health(disk["path"])
-        disk["smart"] = smart
-        disk["health"] = classify_health(smart)
-        disk["usage"] = get_filesystem_usage(disk["path"])
-
     raid = get_raid_arrays()
     for arr in raid:
         arr["usage"] = get_filesystem_usage(arr["path"])
 
+    raid_member_names = {
+        _disk_name_from_device(dev["device"])
+        for arr in raid
+        for dev in arr.get("devices", [])
+        if dev.get("device")
+    }
+
+    # A disk shows here only once it means something: it has a real,
+    # mounted filesystem, or it's part of a RAID array (the array's own
+    # card already represents it - see nas-monitor's Arrays section).
+    # Anything else - blank, unrecognized filesystem, unmounted - is a
+    # "raw disk" and lives in the separate raw-disks table instead
+    # (disk_mutate.list_raw_disks), where formatting/wiping actually
+    # happens. Skipping smartctl for those here too - no point paying
+    # for it on a disk this view won't show.
+    visible_disks = []
+    for disk in disks:
+        usage = get_filesystem_usage(disk["path"])
+        if not usage["mounted"] and disk["name"] not in raid_member_names:
+            continue
+        disk["usage"] = usage
+        smart = get_smart_health(disk["path"])
+        disk["smart"] = smart
+        disk["health"] = classify_health(smart)
+        visible_disks.append(disk)
+
     return {
-        "disks": disks,
+        "disks": visible_disks,
         "raid": raid,
     }

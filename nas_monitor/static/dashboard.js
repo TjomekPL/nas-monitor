@@ -528,6 +528,168 @@ async function refresh() {
 }
 
 // --------------------------------------------------------------------
+// Raw disks - unmounted, not part of any RAID array. Format/wipe live
+// here; disks with a real mounted filesystem show as cards above
+// instead (see renderDisks) once they're actually in use.
+// --------------------------------------------------------------------
+
+const rawDisksContainer = document.getElementById("raw-disks-container");
+const diskActionDialog = document.getElementById("disk-action-dialog");
+const diskActionForm = document.getElementById("disk-action-form");
+const diskActionTitle = document.getElementById("disk-action-title");
+const diskActionDevice = document.getElementById("disk-action-device");
+const diskActionFsRow = document.getElementById("disk-action-fs-row");
+const diskActionFsSelect = document.getElementById("disk-action-fs");
+const diskActionWarning = document.getElementById("disk-action-warning");
+const diskActionConfirmLabel = document.getElementById("disk-action-confirm-label");
+const diskActionConfirmInput = document.getElementById("disk-action-confirm-input");
+const diskActionError = document.getElementById("disk-action-error");
+const diskActionCancel = document.getElementById("disk-action-cancel");
+const diskActionSubmitBtn = document.getElementById("disk-action-submit");
+let diskActionState = null; // { device, name, kind: "format" | "wipe" }
+
+function renderRawDisks(disks) {
+  rawDisksContainer.innerHTML = "";
+  if (!disks.length) {
+    emptyState(rawDisksContainer, t("msg.empty.rawDisks"));
+    return;
+  }
+  const table = document.createElement("table");
+  table.innerHTML = `<thead><tr><th>${t("ui.rawDisks.colName")}</th><th>${t("ui.rawDisks.colSize")}</th><th>${t("ui.rawDisks.colModel")}</th><th></th></tr></thead>`;
+  const tbody = document.createElement("tbody");
+  for (const d of disks) {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td class="mono">${d.name}</td>
+      <td>${d.size}</td>
+      <td>${d.model}${d.transport === "usb" ? ` <span class="pill pill-warn">USB</span>` : ""}</td>
+    `;
+    const actions = document.createElement("td");
+    actions.className = "row-actions";
+
+    const checkBtn = document.createElement("button");
+    checkBtn.type = "button";
+    checkBtn.className = "link-btn";
+    checkBtn.textContent = t("ui.rawDisks.checkBtn");
+    checkBtn.addEventListener("click", () => checkRawDiskStatus(d, checkBtn));
+    actions.appendChild(checkBtn);
+
+    const formatBtn = document.createElement("button");
+    formatBtn.type = "button";
+    formatBtn.className = "link-btn";
+    formatBtn.textContent = t("ui.rawDisks.formatBtn");
+    formatBtn.addEventListener("click", () => openDiskActionDialog(d, "format"));
+    actions.appendChild(formatBtn);
+
+    const wipeBtn = document.createElement("button");
+    wipeBtn.type = "button";
+    wipeBtn.className = "link-btn danger";
+    wipeBtn.textContent = t("ui.rawDisks.wipeBtn");
+    wipeBtn.addEventListener("click", () => openDiskActionDialog(d, "wipe"));
+    actions.appendChild(wipeBtn);
+
+    row.appendChild(actions);
+    tbody.appendChild(row);
+  }
+  table.appendChild(tbody);
+  rawDisksContainer.appendChild(table);
+}
+
+async function loadRawDisks() {
+  if (diskActionDialog.open) return;
+  try {
+    const res = await fetch("/api/disks/raw");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    renderRawDisks(data.disks || []);
+  } catch (err) {
+    emptyState(rawDisksContainer, t("msg.connectionErrorDetail", { detail: err.message }));
+  }
+}
+
+async function checkRawDiskStatus(disk, button) {
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = t("ui.rawDisks.checking");
+  try {
+    const res = await fetch(`/api/disks/${encodeURIComponent(disk.name)}/smart`);
+    const data = await res.json();
+    if (!data.available) {
+      showToast(t("ui.rawDisks.smartUnavailable", { name: disk.name }), true);
+      return;
+    }
+    const tempPart = data.temperature_c != null ? t("ui.rawDisks.smartTemp", { temp: data.temperature_c }) : "";
+    showToast(t("ui.rawDisks.smartResult", { name: disk.name, health: data.health, temp: tempPart }));
+  } catch (err) {
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+function openDiskActionDialog(disk, kind) {
+  diskActionState = { device: disk.path, name: disk.name, kind };
+  diskActionError.textContent = "";
+  diskActionConfirmInput.value = "";
+  diskActionDevice.textContent = `${disk.name} (${disk.size}, ${disk.model})`;
+
+  if (kind === "format") {
+    diskActionTitle.textContent = t("ui.diskActionDialog.formatTitle");
+    diskActionFsRow.style.display = "block";
+    diskActionWarning.textContent = t("ui.diskActionDialog.formatWarning");
+    diskActionSubmitBtn.textContent = t("ui.diskActionDialog.formatBtn");
+  } else {
+    diskActionTitle.textContent = t("ui.diskActionDialog.wipeTitle");
+    diskActionFsRow.style.display = "none";
+    diskActionWarning.textContent = t("ui.diskActionDialog.wipeWarning");
+    diskActionSubmitBtn.textContent = t("ui.diskActionDialog.wipeBtn");
+  }
+  if (disk.transport === "usb") {
+    diskActionWarning.textContent += " " + t("ui.diskActionDialog.usbWarning");
+  }
+  diskActionConfirmLabel.textContent = t("ui.diskActionDialog.confirmLabel", { name: disk.name });
+  diskActionSubmitBtn.disabled = true;
+  diskActionDialog.showModal();
+}
+
+diskActionConfirmInput.addEventListener("input", () => {
+  diskActionSubmitBtn.disabled = !diskActionState || diskActionConfirmInput.value.trim() !== diskActionState.name;
+});
+
+diskActionCancel.addEventListener("click", () => diskActionDialog.close());
+
+diskActionForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  if (!diskActionState || diskActionConfirmInput.value.trim() !== diskActionState.name) return;
+  diskActionError.textContent = "";
+  diskActionSubmitBtn.disabled = true;
+  const { name, kind } = diskActionState;
+  try {
+    const url = kind === "format" ? `/api/disks/${encodeURIComponent(name)}/format` : `/api/disks/${encodeURIComponent(name)}/wipe`;
+    const body = kind === "format" ? { filesystem: diskActionFsSelect.value } : undefined;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      diskActionError.textContent = apiErrorMessage(data, res);
+      diskActionSubmitBtn.disabled = false;
+      return;
+    }
+    diskActionDialog.close();
+    showToast(kind === "format" ? t("ui.diskActionDialog.formatSuccess", { name }) : t("ui.diskActionDialog.wipeSuccess", { name }));
+    await loadRawDisks();
+    await refresh();
+  } catch (err) {
+    diskActionError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
+    diskActionSubmitBtn.disabled = false;
+  }
+});
+
+// --------------------------------------------------------------------
 // Users
 // --------------------------------------------------------------------
 
@@ -2153,6 +2315,8 @@ loadSshKeys();
 setInterval(loadSshKeys, REFRESH_MS);
 refresh();
 setInterval(refresh, REFRESH_MS);
+loadRawDisks();
+setInterval(loadRawDisks, REFRESH_MS);
 loadStatusbar();
 setInterval(loadStatusbar, STATUSBAR_REFRESH_MS);
 checkForUpdate();

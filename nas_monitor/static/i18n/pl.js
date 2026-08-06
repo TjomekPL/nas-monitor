@@ -72,6 +72,34 @@ window.NAS_I18N.pl = {
       raidHeading: "Macierze RAID",
       disksHeading: "Dyski",
     },
+    rawDisks: {
+      heading: "Surowe dyski",
+      subtitle: "Dyski bez zamontowanego systemu plików i nienależące do żadnej macierzy - tu je sformatujesz, wyczyścisz lub sprawdzisz ich stan.",
+      colName: "Nazwa",
+      colSize: "Rozmiar",
+      colModel: "Model",
+      checkBtn: "Sprawdź stan",
+      checking: "Sprawdzanie...",
+      formatBtn: "Formatuj",
+      wipeBtn: "Wyczyść",
+      smartUnavailable: "Brak danych SMART dla {name}",
+      smartResult: "{name}: stan {health}{temp}",
+      smartTemp: ", {temp}°C",
+    },
+    diskActionDialog: {
+      formatTitle: "Formatuj dysk",
+      wipeTitle: "Wyczyść dysk",
+      fsLabel: "System plików",
+      cancelBtn: "Anuluj",
+      formatBtn: "Formatuj",
+      wipeBtn: "Wyczyść",
+      formatWarning: "To nieodwracalnie usunie wszystkie dane na tym dysku i utworzy nowy system plików.",
+      wipeWarning: "To nieodwracalnie usunie tablicę partycji i wszystkie dane na tym dysku, bez tworzenia nowego systemu plików.",
+      usbWarning: "Ten dysk jest podłączony przez USB - nie jest to zalecana konfiguracja dla macierzy RAID ani długoterminowego przechowywania danych (gorsza obsługa błędów I/O, ryzyko niestabilności portu).",
+      confirmLabel: "Wpisz nazwę dysku ({name}), żeby potwierdzić",
+      formatSuccess: "Sformatowano {name}",
+      wipeSuccess: "Wyczyszczono {name}",
+    },
     usageBar: {
       label: "{used} z {total} zajęte ({percent}%)",
     },
@@ -262,6 +290,7 @@ window.NAS_I18N.pl = {
       shares: "Brak udziałów - dodaj pierwszy przyciskiem powyżej.",
       networkInterfaces: "Brak wykrytych interfejsów sieciowych.",
       log: "Brak zdarzeń do pokazania.",
+      rawDisks: "Brak surowych dysków - wszystkie dyski są zamontowane lub w macierzy.",
     },
     lastUpdated: "zaktualizowano {time}",
     connectionError: "błąd połączenia ({detail})",
@@ -308,6 +337,14 @@ window.NAS_I18N.pl = {
     statusbar: {
       psutil_missing: "biblioteka psutil nie jest zainstalowana",
       read_failed: "nie udało się odczytać danych systemowych",
+    },
+    disks: {
+      not_found: "Nie znaleziono dysku {device}",
+      is_boot_disk: "{device} to dysk systemowy - nie można go sformatować ani wyczyścić",
+      is_mounted: "{device} jest aktualnie zamontowany - odmontuj go najpierw",
+      is_raid_member: "{device} jest częścią macierzy RAID - usuń go z macierzy najpierw",
+      unsupported_filesystem: "Nieobsługiwany system plików: {filesystem}",
+      partition_not_ready: "Partycja {partition} nie pojawiła się po utworzeniu - spróbuj ponownie",
     },
     auth: {
       invalid_credentials: "Nieprawidłowa nazwa użytkownika lub hasło",
@@ -412,6 +449,10 @@ window.NAS_I18N.pl = {
   log: {
     system: {
       error: { failure: "Nieoczekiwany błąd w {path}" },
+    },
+    disks: {
+      format: { success: "Sformatowano {device} ({filesystem})", failure: "Nie udało się sformatować {device}" },
+      wipe: { success: "Wyczyszczono {device}", failure: "Nie udało się wyczyścić {device}" },
     },
     network: {
       apply: { success: "Zmieniono adres IP interfejsu {interface} na {ip}", failure: "Nie udało się zmienić ustawień sieci dla {interface}" },

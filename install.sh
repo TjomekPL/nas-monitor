@@ -11,9 +11,9 @@ fi
 APP_DIR="/opt/nas-monitor"
 REPO_URL="https://github.com/TjomekPL/nas-monitor.git"
 
-echo "==> Instalowanie pakietów systemowych (smartmontools, mdadm, samba, sshpass, python3-venv, git)..."
+echo "==> Instalowanie pakietów systemowych (smartmontools, mdadm, samba, sshpass, python3-venv, git, parted, xfsprogs, btrfs-progs, exfatprogs)..."
 apt-get update -qq
-apt-get install -y smartmontools mdadm samba sshpass openssh-client python3-venv acl git
+apt-get install -y smartmontools mdadm samba sshpass openssh-client python3-venv acl git parted xfsprogs btrfs-progs exfatprogs
 
 # ${APP_DIR} is now a real git checkout, not a plain file copy - that's
 # what lets the "Zainstaluj aktualizację" button in the dashboard later

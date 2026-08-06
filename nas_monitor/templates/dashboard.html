@@ -55,6 +55,12 @@
         <h2 data-i18n="ui.disks.disksHeading">Dyski</h2>
         <div id="disks-container" class="cards"></div>
       </section>
+
+      <section>
+        <h2 data-i18n="ui.rawDisks.heading">Surowe dyski</h2>
+        <p class="subtitle" data-i18n="ui.rawDisks.subtitle">Dyski bez zamontowanego systemu plików i nienależące do żadnej macierzy - tu je sformatujesz, wyczyścisz lub sprawdzisz ich stan.</p>
+        <div id="raw-disks-container" class="user-table"></div>
+      </section>
     </div>
 
     <div class="tab-panel" data-tab="users">
@@ -346,6 +352,32 @@
       <div class="dialog-actions">
         <button type="button" id="confirm-cancel" data-i18n="ui.confirmDialog.cancelBtn">Anuluj</button>
         <button type="submit" id="confirm-ok" class="btn-primary" data-i18n="ui.confirmDialog.okBtn">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="disk-action-dialog">
+    <form id="disk-action-form" method="dialog">
+      <h3 id="disk-action-title" data-i18n="ui.diskActionDialog.formatTitle">Formatuj dysk</h3>
+      <p class="field-hint" id="disk-action-device"></p>
+      <label id="disk-action-fs-row">
+        <span class="label-text" data-i18n="ui.diskActionDialog.fsLabel">System plików</span>
+        <select id="disk-action-fs">
+          <option value="ext4">ext4</option>
+          <option value="btrfs">btrfs</option>
+          <option value="xfs">XFS</option>
+          <option value="exfat">exFAT</option>
+        </select>
+      </label>
+      <p class="form-error" id="disk-action-warning" style="color: var(--crit);"></p>
+      <label>
+        <span class="label-text" id="disk-action-confirm-label"></span>
+        <input type="text" id="disk-action-confirm-input" autocomplete="off">
+      </label>
+      <p class="form-error" id="disk-action-error"></p>
+      <div class="dialog-actions">
+        <button type="button" id="disk-action-cancel" data-i18n="ui.diskActionDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="disk-action-submit" class="btn-primary danger" disabled></button>
       </div>
     </form>
   </dialog>

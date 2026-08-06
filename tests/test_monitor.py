@@ -404,5 +404,44 @@ class TestGetFilesystemUsage(unittest.TestCase):
         self.assertFalse(result["mounted"])
 
 
+class TestGetFullStatusVisibility(unittest.TestCase):
+    """Raw/unformatted disks (nothing mounted, not part of a RAID array)
+    should never appear in get_full_status()'s "disks" list - they show
+    in disk_mutate.list_raw_disks() / the raw-disks table instead. A
+    disk with a real mounted filesystem, or one that's a RAID member,
+    still shows here as before."""
+
+    def _disks(self, name):
+        return [{"name": name, "path": f"/dev/{name}"}]
+
+    @mock.patch("nas_monitor.monitor.get_smart_health", return_value={"available": False})
+    @mock.patch("nas_monitor.monitor.classify_health", return_value="unknown")
+    @mock.patch("nas_monitor.monitor.get_raid_arrays", return_value=[])
+    def test_unmounted_non_raid_disk_is_excluded(self, mock_raid, mock_health, mock_smart):
+        with mock.patch("nas_monitor.monitor.list_disks", return_value=self._disks("sdz")), \
+             mock.patch("nas_monitor.monitor.get_filesystem_usage", return_value={"mounted": False}):
+            status = monitor.get_full_status()
+        self.assertEqual(status["disks"], [])
+
+    @mock.patch("nas_monitor.monitor.get_smart_health", return_value={"available": False})
+    @mock.patch("nas_monitor.monitor.classify_health", return_value="unknown")
+    @mock.patch("nas_monitor.monitor.get_raid_arrays", return_value=[])
+    def test_mounted_disk_is_included(self, mock_raid, mock_health, mock_smart):
+        with mock.patch("nas_monitor.monitor.list_disks", return_value=self._disks("sda")), \
+             mock.patch("nas_monitor.monitor.get_filesystem_usage", return_value={"mounted": True}):
+            status = monitor.get_full_status()
+        self.assertEqual([d["name"] for d in status["disks"]], ["sda"])
+
+    @mock.patch("nas_monitor.monitor.get_smart_health", return_value={"available": False})
+    @mock.patch("nas_monitor.monitor.classify_health", return_value="unknown")
+    def test_unmounted_raid_member_is_still_included(self, mock_health, mock_smart):
+        raid = [{"path": "/dev/md0", "devices": [{"device": "/dev/sdb1"}]}]
+        with mock.patch("nas_monitor.monitor.list_disks", return_value=self._disks("sdb")), \
+             mock.patch("nas_monitor.monitor.get_filesystem_usage", return_value={"mounted": False}), \
+             mock.patch("nas_monitor.monitor.get_raid_arrays", return_value=raid):
+            status = monitor.get_full_status()
+        self.assertEqual([d["name"] for d in status["disks"]], ["sdb"])
+
+
 if __name__ == "__main__":
     unittest.main()
