@@ -28,13 +28,13 @@ from typing import Any
 from nas_monitor import system_tools, errors, monitor
 
 SUPPORTED_FILESYSTEMS = {"ext4", "btrfs", "xfs", "exfat"}
-MOUNT_BASE = "/mnt"
+MOUNT_BASE = "/srv"
 FSTAB_PATH = "/etc/fstab"
 
 # Conservative allowlist a label must satisfy before it's ever handed
 # to mkfs's own -L flag or used to build a mount-point directory name -
 # not because mkfs/mkdir would mishandle other characters, but because
-# this same string becomes a path component (/mnt/<label>) and an
+# this same string becomes a path component (/srv/<label>) and an
 # /etc/fstab field, and there's no reason to accept anything that could
 # be awkward in either place (spaces, slashes, quotes) when a plain
 # alnum/dash/underscore name covers every real use case.
@@ -157,34 +157,38 @@ def _raid_member_disk_names() -> set[str]:
 
 
 def _disk_state(device: str) -> dict[str, Any]:
-    """One lsblk call per disk covering both fstype and mountpoint
-    (whichever partition, or the whole disk itself, actually has
-    them) - used by list_manageable_disks so each row only needs a
-    single lsblk invocation instead of two."""
+    """One lsblk call per disk covering fstype, mountpoint, and the
+    actual device-node name carrying them (whichever partition, or the
+    whole disk itself) - used by list_manageable_disks so each row
+    only needs a single lsblk invocation instead of two, and by
+    mount_disk to know exactly which node to hand to `mount` (a disk
+    can have a filesystem directly on the whole device with no
+    partition table at all - "superfloppy" style - so this can't just
+    always assume _partition_path(device))."""
     lsblk_path = system_tools.find_binary("lsblk")
     if lsblk_path is None:
-        return {"fstype": None, "mountpoint": None}
+        return {"fstype": None, "mountpoint": None, "device_node": None}
     code, out, _ = system_tools.run([lsblk_path, "-J", "-o", "NAME,FSTYPE,MOUNTPOINT", device], timeout=10)
     if code != 0 or not out.strip():
-        return {"fstype": None, "mountpoint": None}
+        return {"fstype": None, "mountpoint": None, "device_node": None}
     try:
         import json
         data = json.loads(out)
     except ValueError:
-        return {"fstype": None, "mountpoint": None}
+        return {"fstype": None, "mountpoint": None, "device_node": None}
 
     def walk(devices):
         for dev in devices:
             fstype = dev.get("fstype")
             mountpoint = dev.get("mountpoint")
             if fstype or mountpoint:
-                return {"fstype": fstype, "mountpoint": mountpoint}
+                return {"fstype": fstype, "mountpoint": mountpoint, "device_node": dev.get("name")}
             found = walk(dev.get("children") or [])
             if found:
                 return found
         return None
 
-    return walk(data.get("blockdevices", [])) or {"fstype": None, "mountpoint": None}
+    return walk(data.get("blockdevices", [])) or {"fstype": None, "mountpoint": None, "device_node": None}
 
 
 _SYSTEM_MOUNTPOINTS = {"/", "/boot", "/boot/efi"}
@@ -275,6 +279,45 @@ def check_disk_safe_to_modify(device: str) -> dict[str, Any]:
     return result
 
 
+def mount_disk(device: str, label: str = "") -> dict[str, Any]:
+    """Mounts a disk's EXISTING filesystem - the non-destructive
+    counterpart to format_disk(): that one always wipes and creates a
+    fresh filesystem, this one never touches the disk's contents at
+    all, just makes an already-formatted-but-currently-unmounted disk
+    available (real report: a disk with a real ext4 filesystem showed
+    "Free" in the table, offering only Format/Wipe - both destructive -
+    with no way to just mount what was already there). Reuses the same
+    UUID-keyed /etc/fstab + immediate-mount machinery format_disk()'s
+    auto-mount uses (_mount_and_persist), so a disk mounted this way
+    behaves identically to one mounted right after formatting."""
+    result: dict[str, Any] = {"device": device, "success": False}
+
+    label = label.strip()
+    if label and not _VALID_LABEL_RE.match(label):
+        return errors.fail(result, "disks.invalid_label", label=label)
+
+    safety = check_disk_safe_to_modify(device)
+    if not safety["safe"]:
+        return errors.propagate(result, safety)
+
+    try:
+        state = _disk_state(device)
+    except Exception as exc:
+        return errors.fail(result, "disks.state_lookup_failed", detail=str(exc))
+
+    if not state["fstype"] or not state["device_node"]:
+        return errors.fail(result, "disks.no_filesystem", device=device)
+
+    target = f"/dev/{state['device_node']}"
+    mount_result = _mount_and_persist(target, state["fstype"], label or _disk_name(device))
+    if not mount_result["success"]:
+        return errors.propagate(result, mount_result)
+
+    result["success"] = True
+    result["mount_point"] = mount_result["mount_point"]
+    return result
+
+
 def unmount_disk(device: str) -> dict[str, Any]:
     """Unmounts a disk this tool previously auto-mounted, and removes
     its /etc/fstab entry so it doesn't try to come back at next boot -
@@ -285,11 +328,11 @@ def unmount_disk(device: str) -> dict[str, Any]:
     this only ever undoes what this tool itself set up.
 
     Also refuses the boot disk outright, even if - on a system that
-    also has a spare partition mounted under /mnt/ on that same
+    also has a spare partition mounted under MOUNT_BASE on that same
     physical disk - _our_mount_point() would otherwise find a
-    legitimate /mnt/ target there: this is a hard rule, not just a
-    consequence of the /mnt/ check, so the button for it can never even
-    appear next to a disk carrying the running system."""
+    legitimate target there: this is a hard rule, not just a
+    consequence of the MOUNT_BASE check, so the button for it can never
+    even appear next to a disk carrying the running system."""
     result: dict[str, Any] = {"device": device, "success": False}
     name = _disk_name(device)
 
@@ -494,7 +537,8 @@ def _get_uuid(partition: str) -> str | None:
 
 
 def _mount_and_persist(partition: str, filesystem: str, mount_name: str) -> dict[str, Any]:
-    """Creates /mnt/<mount_name>, adds a UUID-keyed /etc/fstab entry
+    """Creates MOUNT_BASE/<mount_name> (/srv/<mount_name>), adds a
+    UUID-keyed /etc/fstab entry
     (nofail - a disk that's missing at boot, e.g. an unplugged USB
     drive, must never hang the rest of the system coming up), and
     mounts it immediately rather than waiting for the next reboot.

@@ -612,6 +612,31 @@ function wireCardDragging(container, section) {
   });
 }
 
+async function mountExistingDisk(disk) {
+  // Non-destructive (mounts what's already there, never touches
+  // content), so a lighter confirm than the danger-styled one used
+  // for format/wipe/unmount - still worth a beat before writing a
+  // fstab entry and mounting, just not a "this could lose data" one.
+  if (!(await confirmDialog(t("msg.confirmMountDisk", { name: disk.name })))) return;
+  try {
+    const res = await fetch(`/api/disks/${encodeURIComponent(disk.name)}/mount`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      showToast(apiErrorMessage(data, res), true);
+      return;
+    }
+    showToast(t("msg.mountedDisk", { name: disk.name, path: data.mount_point }));
+    await refresh();
+    await loadRawDisks();
+  } catch (err) {
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
+  }
+}
+
 async function unmountDisk(disk) {
   // Proactive warning, not just the backend's hard block after the
   // fact - if any share's path is under this disk's mount point,
@@ -710,13 +735,18 @@ function renderRawDisks(disks) {
       <td class="mono">${d.fstype || t("ui.rawDisks.fstypeNone")}</td>
     `;
 
-    // Status + actions both depend on the same three states, so they're
+    // Status + actions depend on the same three states, so they're
     // decided together: a RAID member is only ever shown as such here
     // (managing RAID membership is the future Arrays section's job,
-    // not this table's); a disk mounted under /mnt/ shows where and
-    // offers the same Unmount as the disk cards (unmountDisk is shared
-    // with renderDisks - one implementation, two entry points to it);
-    // anything else is genuinely free and gets the destructive actions.
+    // not this table's); a disk mounted under /srv/ shows where and
+    // offers Unmount (unmountDisk is shared with renderDisks - one
+    // implementation, two entry points to it); anything unmounted
+    // splits further - a disk with no filesystem at all is genuinely
+    // Free (Format/Wipe make sense, nothing to just mount), but a disk
+    // that already has one just needs Mount, not the "Free" label a
+    // real report called misleading (it implied Format/Wipe were the
+    // only options, when the disk's existing data could just be
+    // brought online as-is).
     const statusCell = document.createElement("td");
     const actions = document.createElement("td");
     actions.className = "row-actions";
@@ -725,7 +755,7 @@ function renderRawDisks(disks) {
       statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusRaidMember")}</span>`;
     } else if (d.mounted) {
       statusCell.innerHTML = `<span class="pill pill-ok">${t("ui.rawDisks.statusMounted")}</span> <span class="mono">${d.mount_point || ""}</span>`;
-      if (d.mount_point && d.mount_point.startsWith("/mnt/")) {
+      if (d.mount_point && d.mount_point.startsWith("/srv/")) {
         const unmountBtn = document.createElement("button");
         unmountBtn.type = "button";
         unmountBtn.className = "link-btn";
@@ -733,6 +763,22 @@ function renderRawDisks(disks) {
         unmountBtn.addEventListener("click", () => unmountDisk(d));
         actions.appendChild(unmountBtn);
       }
+    } else if (d.fstype) {
+      statusCell.innerHTML = `<span class="pill pill-warn">${t("ui.rawDisks.statusUnmounted")}</span>`;
+
+      const mountBtn = document.createElement("button");
+      mountBtn.type = "button";
+      mountBtn.className = "link-btn";
+      mountBtn.textContent = t("ui.rawDisks.mountBtn");
+      mountBtn.addEventListener("click", () => mountExistingDisk(d));
+      actions.appendChild(mountBtn);
+
+      const wipeBtn2 = document.createElement("button");
+      wipeBtn2.type = "button";
+      wipeBtn2.className = "link-btn danger";
+      wipeBtn2.textContent = t("ui.rawDisks.wipeBtn");
+      wipeBtn2.addEventListener("click", () => openDiskActionDialog(d, "wipe"));
+      actions.appendChild(wipeBtn2);
     } else {
       statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusFree")}</span>`;
 
@@ -1197,7 +1243,7 @@ function renderGroups(groupsList) {
     row.querySelector(".display-name").textContent = g.name;
     row.querySelector(".members").textContent = g.members && g.members.length ? g.members.join(", ") : t("ui.groups.noMembers");
     row.querySelector(".edit-members-btn").addEventListener("click", () => openGroupMembersDialog(g));
-    row.querySelector(".delete-btn").addEventListener("click", () => deleteGroup(g.name));
+    row.querySelector(".delete-btn").addEventListener("click", () => deleteGroup(g));
     tbody.appendChild(row);
   }
   table.appendChild(tbody);
@@ -1252,8 +1298,31 @@ groupForm.addEventListener("submit", async (ev) => {
   }
 });
 
-async function deleteGroup(name) {
-  if (!(await confirmDialog(t("msg.confirmDeleteGroup", { name }), { danger: true }))) return;
+async function deleteGroup(group) {
+  // Proactive warning, same reasoning as unmountDisk's: deleting a
+  // user is comparatively painless (their access just goes away, see
+  // remove_user_from_all_shares's cleanup), but deleting a GROUP that
+  // still has members and/or share grants takes everyone in it down
+  // at once - worth surfacing before the confirm, not just letting
+  // groupdel silently drop it. Uses already-loaded data (lastSharesData)
+  // as a convenience only - the backend doesn't hard-block this (unlike
+  // disk unmount) since losing group-based access is a normal,
+  // reversible consequence of deleting a group, not a data-integrity
+  // risk the way a dangling share mount point would be.
+  const name = group.name;
+  let message = t("msg.confirmDeleteGroup", { name });
+  const memberCount = (group.members || []).length;
+  const affectedShares = lastSharesData
+    .filter((s) => s.group_grants && Object.prototype.hasOwnProperty.call(s.group_grants, name))
+    .map((s) => s.name);
+  if (memberCount || affectedShares.length) {
+    message += " " + t("msg.deleteGroupWarning", {
+      count: memberCount,
+      shares: affectedShares.length ? affectedShares.join(", ") : t("msg.deleteGroupWarningNoShares"),
+    });
+  }
+
+  if (!(await confirmDialog(message, { danger: true }))) return;
   try {
     const res = await fetch(`/api/groups/${encodeURIComponent(name)}/delete`, { method: "POST" });
     const data = await res.json();

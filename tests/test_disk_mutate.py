@@ -113,25 +113,25 @@ class TestDiskNameParsing(unittest.TestCase):
 
 class TestDiskState(unittest.TestCase):
     def test_reports_fstype_and_mountpoint_of_whole_disk(self):
-        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": "ext4", "mountpoint": "/mnt/dane", "children": []}]}'
+        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": "ext4", "mountpoint": "/srv/dane", "children": []}]}'
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
             state = disk_mutate._disk_state("/dev/sdc")
-        self.assertEqual(state, {"fstype": "ext4", "mountpoint": "/mnt/dane"})
+        self.assertEqual(state, {"fstype": "ext4", "mountpoint": "/srv/dane", "device_node": "sdc"})
 
     def test_reports_state_of_first_partition_when_disk_itself_is_bare(self):
-        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": null, "mountpoint": null, "children": [{"name": "sdc1", "fstype": "xfs", "mountpoint": "/mnt/dane"}]}]}'
+        lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": null, "mountpoint": null, "children": [{"name": "sdc1", "fstype": "xfs", "mountpoint": "/srv/dane"}]}]}'
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
             state = disk_mutate._disk_state("/dev/sdc")
-        self.assertEqual(state, {"fstype": "xfs", "mountpoint": "/mnt/dane"})
+        self.assertEqual(state, {"fstype": "xfs", "mountpoint": "/srv/dane", "device_node": "sdc1"})
 
     def test_none_none_when_genuinely_blank(self):
         lsblk_json = '{"blockdevices": [{"name": "sdc", "fstype": null, "mountpoint": null, "children": []}]}'
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
             state = disk_mutate._disk_state("/dev/sdc")
-        self.assertEqual(state, {"fstype": None, "mountpoint": None})
+        self.assertEqual(state, {"fstype": None, "mountpoint": None, "device_node": None})
 
 
 class TestListManageableDisks(unittest.TestCase):
@@ -297,6 +297,97 @@ class TestCheckDiskSafeToModify(unittest.TestCase):
     def test_accepts_genuinely_free_disk(self):
         result = self._run("/dev/sdc")
         self.assertTrue(result["safe"])
+
+
+class TestMountDisk(unittest.TestCase):
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.fstab_path = os.path.join(self.tmpdir, "fstab")
+        open(self.fstab_path, "w").close()
+        self.mount_base = os.path.join(self.tmpdir, "srv")
+        self.mount_base_patch = mock.patch.object(disk_mutate, "MOUNT_BASE", self.mount_base)
+        self.fstab_patch = mock.patch.object(disk_mutate, "FSTAB_PATH", self.fstab_path)
+        self.mount_base_patch.start()
+        self.fstab_patch.start()
+
+    def tearDown(self):
+        self.mount_base_patch.stop()
+        self.fstab_patch.stop()
+        shutil.rmtree(self.tmpdir, ignore_errors=True)
+
+    def test_rejects_a_disk_with_no_filesystem(self):
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": (0, '{"blockdevices": [{"name": "sdc", "fstype": null, "mountpoint": null, "children": []}]}', ""),
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]):
+            result = disk_mutate.mount_disk("/dev/sdc")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "disks.no_filesystem")
+
+    def test_rejects_boot_disk(self):
+        responses = {"findmnt": (0, "/dev/sda2\n", ""), "lsblk": _lsblk_handler}
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]):
+            result = disk_mutate.mount_disk("/dev/sda")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "disks.is_boot_disk")
+
+    def test_rejects_already_mounted_disk(self):
+        responses = {"findmnt": (0, "/dev/sda2\n", ""), "lsblk": _lsblk_handler}
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]):
+            result = disk_mutate.mount_disk("/dev/sdb")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "disks.is_mounted")
+
+    def test_mounts_existing_filesystem_on_a_partition(self):
+        def lsblk_for_call(args):
+            if "PKNAME" in args:
+                return (0, "sda\n", "")
+            device = args[-1] if args and args[-1].startswith("/dev/") else None
+            if device == "/dev/sdc":
+                return (0, '{"blockdevices": [{"name": "sdc", "fstype": null, "mountpoint": null, "children": [{"name": "sdc1", "fstype": "ext4", "mountpoint": null}]}]}', "")
+            return (0, LSBLK_MOUNT_JSON, "")
+
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": lsblk_for_call,
+            "blkid": (0, "1234-ABCD-uuid\n", ""),
+            "mount": (0, "", ""),
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]):
+            result = disk_mutate.mount_disk("/dev/sdc", label="dane")
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["mount_point"], os.path.join(self.mount_base, "dane"))
+        # _mount_and_persist's `mount` call takes just the target path
+        # (relies on the fstab entry it just wrote to resolve the
+        # source) - the partition is what matters in the fstab entry
+        # and the blkid lookup, not the mount invocation itself.
+        with open(self.fstab_path) as f:
+            fstab_content = f.read()
+        self.assertIn("1234-ABCD-uuid", fstab_content)
+        blkid_call = next(c for c in mock_run.call_args_list if os.path.basename(c.args[0][0]) == "blkid")
+        self.assertIn("/dev/sdc1", blkid_call.args[0])
+
+    def test_rejects_invalid_label(self):
+        result = disk_mutate.mount_disk("/dev/sdc", label="bad label!")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "disks.invalid_label")
 
 
 class TestUnmountDisk(unittest.TestCase):

@@ -93,7 +93,7 @@ def list_share_locations() -> list[dict[str, Any]]:
     """Every place a new share can live: the default (BASE_SHARE_PATH,
     on the system disk) plus any disk currently mounted under
     disk_mutate.MOUNT_BASE - i.e. anything format_disk()'s auto-mount
-    (or a manually-set-up mount following the same /mnt/<name>
+    (or a manually-set-up mount following the same MOUNT_BASE/<name>
     convention) has made available. A share's directory always ends up
     as <location>/<share-name> (see share_path). Imported lazily to
     avoid disk_mutate and smb_shares needing to agree on import order
@@ -668,6 +668,31 @@ def create_share(
     if warnings:
         result["warnings"] = warnings
     return result
+
+
+def remove_user_from_all_shares(username: str) -> dict[str, Any]:
+    """Best-effort cleanup called when a user account is deleted - drops
+    them from every MANAGED share's individual permissions (never
+    touches foreign, non-managed shares this tool doesn't own; never
+    touches group_grants, which follow group membership and aren't
+    this function's concern). Deleting the account without this would
+    leave a share's permissions pointing at a username that no longer
+    exists - Samba itself tolerates that harmlessly (it just never
+    resolves), so this is a hygiene cleanup, not a safety requirement,
+    and never blocks or fails the caller: a share that can't be
+    updated for some reason just keeps the stale entry."""
+    updated = []
+    for share in list_shares().get("shares", []):
+        if not share.get("managed"):
+            continue
+        permissions = share.get("permissions") or {}
+        if username not in permissions:
+            continue
+        new_permissions = {u: level for u, level in permissions.items() if u != username}
+        result = update_share(share["name"], permissions=new_permissions)
+        if result["success"]:
+            updated.append(share["name"])
+    return {"success": True, "updated_shares": updated}
 
 
 def update_share(

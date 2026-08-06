@@ -224,6 +224,19 @@ def api_disk_wipe(name):
     return jsonify({"success": True})
 
 
+@app.route("/api/disks/<name>/mount", methods=["POST"])
+def api_disk_mount(name):
+    data = request.get_json(force=True, silent=True) or {}
+    label = (data.get("label") or "").strip()
+    device = f"/dev/{name}"
+    result = disk_mutate.mount_disk(device, label=label)
+    if not result["success"]:
+        oplog.log_event("disks", "mount", "failure", params={"device": device})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("disks", "mount", "success", params={"device": device, "mount_point": result["mount_point"]})
+    return jsonify({"success": True, "mount_point": result["mount_point"]})
+
+
 @app.route("/api/disks/<name>/unmount", methods=["POST"])
 def _shares_blocking_unmount(mount_point: str) -> list[str]:
     """Names of shares whose path is this exact mount point or lives
@@ -518,6 +531,9 @@ def api_users_delete(username):
     # - drop SMB access (less destructive than deleting the account)
     # - remove the local SSH keypair, so it can't be left orphaned under
     #   a now-deleted account's UID
+    # - drop them from every managed share's individual permissions, so
+    #   a share's config never keeps a stale entry pointing at a
+    #   username that no longer exists
     # A pre-existing remote deployment is NOT touched here - revoking it
     # needs that remote host's password, which nobody supplied as part
     # of "delete this user". had_deployments is captured before the
@@ -526,6 +542,7 @@ def api_users_delete(username):
     smb.remove_user(username)
     ssh_keys.delete_key(username)
     ssh_keys.forget_user(username)
+    smb_shares.remove_user_from_all_shares(username)
 
     user_result = users.delete_user(username, remove_home=remove_home)
     if not user_result["success"]:

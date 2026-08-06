@@ -380,7 +380,7 @@ class TestListShareLocations(unittest.TestCase):
 
     def test_includes_disks_mounted_under_mount_base(self, mock_smb):
         disks = [
-            {"name": "sdb", "mounted": True, "mount_point": "/mnt/dane", "fstype": "ext4"},
+            {"name": "sdb", "mounted": True, "mount_point": "/srv/dane", "fstype": "ext4"},
             {"name": "sdc", "mounted": False, "mount_point": None, "fstype": None},
             {"name": "sdd", "mounted": True, "mount_point": "/media/other", "fstype": "ext4"},
         ]
@@ -392,8 +392,8 @@ class TestListShareLocations(unittest.TestCase):
         # excluded. sdd: mounted, but NOT under /mnt/ (some unrelated
         # mount point) - excluded, this table only ever offers locations
         # this tool's own mount convention actually set up.
-        self.assertEqual(paths, {smb_shares.BASE_SHARE_PATH, "/mnt/dane"})
-        sdb_entry = next(loc for loc in locations if loc["path"] == "/mnt/dane")
+        self.assertEqual(paths, {smb_shares.BASE_SHARE_PATH, "/srv/dane"})
+        sdb_entry = next(loc for loc in locations if loc["path"] == "/srv/dane")
         self.assertEqual(sdb_entry["disk"], "sdb")
         self.assertEqual(sdb_entry["fstype"], "ext4")
 
@@ -417,11 +417,11 @@ class TestCreateShareWithLocation(unittest.TestCase):
     @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
     @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
     def test_uses_the_chosen_valid_location(self, mock_dir, mock_apply, mock_smb):
-        disks = [{"name": "sdb", "mounted": True, "mount_point": "/mnt/dane", "fstype": "ext4"}]
+        disks = [{"name": "sdb", "mounted": True, "mount_point": "/srv/dane", "fstype": "ext4"}]
         with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=disks):
-            result = smb_shares.create_share("filmy", base_path="/mnt/dane", managed_conf_path=self.managed)
+            result = smb_shares.create_share("filmy", base_path="/srv/dane", managed_conf_path=self.managed)
         self.assertTrue(result["success"])
-        mock_dir.assert_called_once_with("/mnt/dane/filmy", None)
+        mock_dir.assert_called_once_with("/srv/dane/filmy", None)
 
     def test_rejects_a_location_that_is_not_currently_valid(self, mock_smb):
         # e.g. the disk was unmounted in the time between the page
@@ -817,6 +817,50 @@ class TestUpdateShareFirstEverGroupGrant(unittest.TestCase):
             result = smb_shares.update_share("wakacje", group_grants={"rodzina": "rw"}, managed_conf_path=self.managed)
         self.assertTrue(result["success"])
         mock_ensure.assert_called_once_with("wakacje_access")
+
+
+class TestRemoveUserFromAllShares(unittest.TestCase):
+    def test_removes_the_user_from_every_managed_share_that_has_them(self):
+        shares_result = {"available": True, "shares": [
+            {"name": "dane", "managed": True, "permissions": {"gosia": "rw", "malina": "ro"}},
+            {"name": "filmy", "managed": True, "permissions": {"gosia": "ro"}},
+            {"name": "inny", "managed": True, "permissions": {"malina": "rw"}},
+        ]}
+        with mock.patch.object(smb_shares, "list_shares", return_value=shares_result), \
+             mock.patch.object(smb_shares, "update_share", return_value={"success": True}) as mock_update:
+            result = smb_shares.remove_user_from_all_shares("gosia")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(set(result["updated_shares"]), {"dane", "filmy"})
+        # "inny" never had gosia - update_share must not even be called for it
+        called_names = {c.args[0] for c in mock_update.call_args_list}
+        self.assertEqual(called_names, {"dane", "filmy"})
+        # the OTHER user's access on "dane" must be preserved, not wiped
+        dane_call = next(c for c in mock_update.call_args_list if c.args[0] == "dane")
+        self.assertEqual(dane_call.kwargs["permissions"], {"malina": "ro"})
+
+    def test_never_touches_unmanaged_foreign_shares(self):
+        shares_result = {"available": True, "shares": [
+            {"name": "obcy", "managed": False, "permissions": {"gosia": "rw"}},
+        ]}
+        with mock.patch.object(smb_shares, "list_shares", return_value=shares_result), \
+             mock.patch.object(smb_shares, "update_share") as mock_update:
+            result = smb_shares.remove_user_from_all_shares("gosia")
+
+        self.assertTrue(result["success"])
+        self.assertEqual(result["updated_shares"], [])
+        mock_update.assert_not_called()
+
+    def test_no_op_when_user_has_no_access_anywhere(self):
+        shares_result = {"available": True, "shares": [
+            {"name": "dane", "managed": True, "permissions": {"malina": "rw"}},
+        ]}
+        with mock.patch.object(smb_shares, "list_shares", return_value=shares_result), \
+             mock.patch.object(smb_shares, "update_share") as mock_update:
+            result = smb_shares.remove_user_from_all_shares("gosia")
+
+        self.assertEqual(result["updated_shares"], [])
+        mock_update.assert_not_called()
 
 
 if __name__ == "__main__":
