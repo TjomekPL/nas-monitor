@@ -414,7 +414,15 @@ def get_full_status() -> dict[str, Any]:
     disks = list_disks()
     raid = get_raid_arrays()
     for arr in raid:
-        arr["usage"] = get_filesystem_usage(arr["path"])
+        try:
+            arr["usage"] = get_filesystem_usage(arr["path"])
+        except Exception as exc:
+            # One array's usage lookup failing must never blank out
+            # every other array and disk in the response - see the
+            # matching comment on the disk loop below for why this
+            # matters more than it looks like it should.
+            arr["usage"] = {"mounted": False, "mountpoints": [], "total_bytes": None, "used_bytes": None, "available_bytes": None}
+            arr["error"] = arr.get("error") or f"usage lookup failed: {exc}"
 
     raid_member_names = {
         _disk_name_from_device(dev["device"])
@@ -431,16 +439,31 @@ def get_full_status() -> dict[str, Any]:
     # (disk_mutate.list_raw_disks), where formatting/wiping actually
     # happens. Skipping smartctl for those here too - no point paying
     # for it on a disk this view won't show.
+    #
+    # Each disk is handled inside its own try/except - lsblk/smartctl
+    # dealing with a disk in a genuinely weird transitional state (mid
+    # format, just unplugged, etc.) failing in some way this code
+    # didn't anticipate must never take the whole endpoint down with
+    # it. Before this, one bad disk meant get_full_status() raised,
+    # /api/status came back as a 500, and the frontend showed nothing
+    # at all for RAID *and* every other, perfectly fine disk too - a
+    # single misbehaving disk hid the entire tab.
     visible_disks = []
     for disk in disks:
-        usage = get_filesystem_usage(disk["path"])
-        if not usage["mounted"] and disk["name"] not in raid_member_names:
-            continue
-        disk["usage"] = usage
-        smart = get_smart_health(disk["path"])
-        disk["smart"] = smart
-        disk["health"] = classify_health(smart)
-        visible_disks.append(disk)
+        try:
+            usage = get_filesystem_usage(disk["path"])
+            if not usage["mounted"] and disk["name"] not in raid_member_names:
+                continue
+            disk["usage"] = usage
+            smart = get_smart_health(disk["path"])
+            disk["smart"] = smart
+            disk["health"] = classify_health(smart)
+            visible_disks.append(disk)
+        except Exception as exc:
+            disk["usage"] = {"mounted": False, "mountpoints": [], "total_bytes": None, "used_bytes": None, "available_bytes": None}
+            disk["smart"] = {"available": False, "error": str(exc)}
+            disk["health"] = "unknown"
+            visible_disks.append(disk)
 
     return {
         "disks": visible_disks,

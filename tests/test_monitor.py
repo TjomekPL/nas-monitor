@@ -471,6 +471,36 @@ class TestGetFullStatusVisibility(unittest.TestCase):
             status = monitor.get_full_status()
         self.assertEqual([d["name"] for d in status["disks"]], ["sdb"])
 
+    @mock.patch("nas_monitor.monitor.classify_health", return_value="unknown")
+    @mock.patch("nas_monitor.monitor.get_raid_arrays", return_value=[])
+    def test_one_disk_erroring_does_not_hide_the_others(self, mock_raid, mock_health):
+        # Regression test: before this, an exception raised while
+        # processing any single disk (lsblk/smartctl choking on one in
+        # a weird transitional state) propagated out of
+        # get_full_status() entirely - /api/status came back as a 500,
+        # and the frontend showed a completely empty Disks & Arrays tab
+        # for *every* disk and RAID array, not just the one that was
+        # actually having a problem.
+        disks = [{"name": "sda", "path": "/dev/sda"}, {"name": "sdb", "path": "/dev/sdb"}]
+
+        def usage_side_effect(path):
+            if path == "/dev/sda":
+                raise RuntimeError("lsblk exploded")
+            return {"mounted": True, "mountpoints": ["/mnt/dane"], "total_bytes": 0, "used_bytes": 0, "available_bytes": 0}
+
+        with mock.patch("nas_monitor.monitor.list_disks", return_value=disks), \
+             mock.patch("nas_monitor.monitor.get_filesystem_usage", side_effect=usage_side_effect), \
+             mock.patch("nas_monitor.monitor.get_smart_health", return_value={"available": False}):
+            status = monitor.get_full_status()
+
+        names = {d["name"] for d in status["disks"]}
+        # both still present - the broken one included with an error
+        # flagged on it instead of vanishing, the healthy one unaffected
+        self.assertEqual(names, {"sda", "sdb"})
+        broken = next(d for d in status["disks"] if d["name"] == "sda")
+        self.assertEqual(broken["health"], "unknown")
+        self.assertIn("lsblk exploded", broken["smart"]["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

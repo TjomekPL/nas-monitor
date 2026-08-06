@@ -150,6 +150,25 @@ class TestListRawDisks(unittest.TestCase):
         # sdc: nothing mounted, not boot, not a RAID member - genuinely free.
         self.assertEqual(names, {"sdc"})
 
+    def test_one_disk_fstype_lookup_failing_does_not_hide_the_others(self):
+        # Same regression as monitor.get_full_status()'s equivalent
+        # test - one disk's fstype lookup blowing up must not take the
+        # whole raw-disks table down with it.
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": _lsblk_handler,
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate, "_disk_fstype", side_effect=RuntimeError("lsblk exploded")):
+            raw = disk_mutate.list_raw_disks()
+
+        # sdc is still there (with fstype simply unknown), not vanished
+        self.assertEqual([d["name"] for d in raw], ["sdc"])
+        self.assertIsNone(raw[0]["fstype"])
+
     def test_excludes_raid_member_disk(self):
         responses = {
             "findmnt": (0, "/dev/sda2\n", ""),

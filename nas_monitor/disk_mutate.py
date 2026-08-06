@@ -201,7 +201,16 @@ def list_raw_disks() -> list[dict[str, Any]]:
         if disk["name"] == boot_disk or disk["name"] in mounted or disk["name"] in raid_members:
             continue
         disk = dict(disk)
-        disk["fstype"] = _disk_fstype(disk["path"])
+        # A single disk's fstype lookup failing (lsblk choking on a
+        # disk mid-format, just unplugged, or otherwise in a state this
+        # code didn't anticipate) must never take the rest of this list
+        # down with it - same reasoning as monitor.get_full_status()'s
+        # per-disk try/except, which exists for exactly this failure
+        # mode after it once hid the entire Disks & Arrays tab.
+        try:
+            disk["fstype"] = _disk_fstype(disk["path"])
+        except Exception:
+            disk["fstype"] = None
         raw.append(disk)
     return raw
 
