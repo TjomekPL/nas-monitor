@@ -103,7 +103,7 @@ window.NAS_I18N.pl = {
       formatTitle: "Formatuj dysk",
       wipeTitle: "Wyczyść dysk",
       fsLabel: "System plików",
-      labelLabel: "Etykieta (opcjonalnie)",
+      labelLabel: "Etykieta (opcjonalnie, domyślnie numer seryjny dysku)",
       automountLabel: "Zamontuj automatycznie po sformatowaniu (i przy każdym starcie systemu)",
       mountedAt: "Zamontowano w {path}.",
       cancelBtn: "Anuluj",

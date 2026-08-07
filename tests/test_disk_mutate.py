@@ -88,6 +88,37 @@ def _lsblk_handler(args):
     return (0, _json.dumps({"blockdevices": [match] if match else []}), "")
 
 
+class TestDefaultMountName(unittest.TestCase):
+    def test_uses_serial_when_available(self):
+        disks = [{"name": "sdc", "serial": "G0Z056222"}]
+        with mock.patch.object(disk_mutate.monitor, "list_disks", return_value=disks):
+            self.assertEqual(disk_mutate._default_mount_name("/dev/sdc"), "G0Z056222")
+
+    def test_sanitizes_the_serial_to_the_safe_charset(self):
+        # real serials can contain spaces or other characters that
+        # aren't safe as a bare directory name component
+        disks = [{"name": "sdc", "serial": "WD WCC 4J1234567"}]
+        with mock.patch.object(disk_mutate.monitor, "list_disks", return_value=disks):
+            self.assertEqual(disk_mutate._default_mount_name("/dev/sdc"), "WDWCC4J1234567")
+
+    def test_falls_back_to_disk_name_when_serial_is_the_unknown_placeholder(self):
+        # monitor.list_disks() itself reports "unknown" for a drive
+        # that doesn't expose a serial - using that verbatim as a mount
+        # name would collide the moment a second such drive shows up
+        disks = [{"name": "sdc", "serial": "unknown"}]
+        with mock.patch.object(disk_mutate.monitor, "list_disks", return_value=disks):
+            self.assertEqual(disk_mutate._default_mount_name("/dev/sdc"), "sdc")
+
+    def test_falls_back_to_disk_name_when_serial_is_empty(self):
+        disks = [{"name": "sdc", "serial": ""}]
+        with mock.patch.object(disk_mutate.monitor, "list_disks", return_value=disks):
+            self.assertEqual(disk_mutate._default_mount_name("/dev/sdc"), "sdc")
+
+    def test_falls_back_to_disk_name_when_disk_not_found_at_all(self):
+        with mock.patch.object(disk_mutate.monitor, "list_disks", return_value=[]):
+            self.assertEqual(disk_mutate._default_mount_name("/dev/sdc"), "sdc")
+
+
 class TestDiskNameParsing(unittest.TestCase):
     def test_disk_name_from_sata_partition(self):
         self.assertEqual(disk_mutate._disk_name("/dev/sda1"), "sda")

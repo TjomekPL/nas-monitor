@@ -103,7 +103,7 @@ window.NAS_I18N.en = {
       formatTitle: "Format disk",
       wipeTitle: "Wipe disk",
       fsLabel: "Filesystem",
-      labelLabel: "Label (optional)",
+      labelLabel: "Label (optional, defaults to the disk's serial number)",
       automountLabel: "Mount automatically after formatting (and on every boot)",
       mountedAt: "Mounted at {path}.",
       cancelBtn: "Cancel",

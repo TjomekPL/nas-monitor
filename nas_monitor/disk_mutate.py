@@ -86,6 +86,30 @@ def _disk_name(device_or_partition: str) -> str:
     return base
 
 
+def _default_mount_name(device: str) -> str:
+    """Fallback mount-point name when no label is given: the disk's
+    serial number, sanitized to the same safe charset labels use - not
+    the kernel device name (sda, sdb...), which is exactly the kind of
+    identifier that can point at a completely different physical disk
+    after a reboot or a USB reconnect (a real point he raised: naming
+    a *persistent* mount path after something that isn't itself
+    persistent is backwards). This also matches the Serial column
+    already shown in the management table, so the physical disk and
+    its mount point are recognizable as the same thing without cross-
+    referencing anything else. Falls back to the kernel name only if
+    no usable serial is available at all - monitor.list_disks() itself
+    falls back to the literal string "unknown" when a drive doesn't
+    report one, and using that as a mount name would collide the
+    moment a second such drive shows up."""
+    name = _disk_name(device)
+    known = {d["name"]: d for d in monitor.list_disks()}
+    serial = (known.get(name) or {}).get("serial") or ""
+    sanitized = re.sub(r"[^A-Za-z0-9_-]", "", serial)
+    if sanitized and sanitized.lower() != "unknown":
+        return sanitized
+    return name
+
+
 def _partition_path(device: str) -> str:
     """The single partition format_disk() creates: "/dev/sda" ->
     "/dev/sda1", "/dev/nvme0n1" -> "/dev/nvme0n1p1", "/dev/mmcblk0" ->
@@ -310,7 +334,7 @@ def mount_disk(device: str, label: str = "") -> dict[str, Any]:
         return errors.fail(result, "disks.no_filesystem", device=device)
 
     target = f"/dev/{state['device_node']}"
-    mount_result = _mount_and_persist(target, state["fstype"], label or _disk_name(device))
+    mount_result = _mount_and_persist(target, state["fstype"], label or _default_mount_name(device))
     if not mount_result["success"]:
         return errors.propagate(result, mount_result)
 
@@ -527,7 +551,7 @@ def format_disk(device: str, filesystem: str, label: str = "", auto_mount: bool 
     result["partition"] = partition
 
     if auto_mount:
-        mount_result = _mount_and_persist(partition, filesystem, label or _disk_name(device))
+        mount_result = _mount_and_persist(partition, filesystem, label or _default_mount_name(device))
         result["mount_point"] = mount_result.get("mount_point")
         if not mount_result["success"]:
             errors.warn(result, mount_result["error_code"], **mount_result.get("error_context", {}))
