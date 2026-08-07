@@ -772,6 +772,15 @@ dialog h3 { margin: 0 0 16px; font-size: 17px; }
   font-size: 12.5px !important;
   padding: 4px 6px !important;
 }
+.permission-select:focus-visible {
+  /* Renders the focus ring INSIDE the element's own box instead of
+     bleeding outward past it - a real report showed it still getting
+     clipped at a scrolling container's edge even with the container's
+     own overflow-x/padding fix above (that fix wasn't reliable enough
+     on its own - this one can't be clipped by an ancestor at all,
+     since it never leaves the element's own box in the first place). */
+  outline-offset: -2px;
+}
 
 .groups-checklist,
 #share-users-checklist {

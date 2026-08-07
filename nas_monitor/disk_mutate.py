@@ -223,10 +223,11 @@ def list_manageable_disks() -> list[dict[str, Any]]:
     one place to manage a disk, not just the ones that happen to be
     empty right now. Each entry carries enough state (fstype,
     mount_point, is_raid_member) for the frontend to decide which
-    actions - Format/Wipe (only when genuinely free), Unmount (only
-    when mounted under MOUNT_BASE), or none at all (RAID members -
-    that's the future Arrays section's job) - make sense for that
-    row."""
+    actions - Format/Wipe (only when genuinely free), Unmount (any
+    mounted disk - the boot-disk exclusion above is what actually
+    keeps this safe, not where something happens to be mounted), or
+    none at all (RAID members - that's the future Arrays section's
+    job) - make sense for that row."""
     boot_disk = _boot_disk_name()
     raid_members = _raid_member_disk_names()
 
@@ -319,20 +320,19 @@ def mount_disk(device: str, label: str = "") -> dict[str, Any]:
 
 
 def unmount_disk(device: str) -> dict[str, Any]:
-    """Unmounts a disk this tool previously auto-mounted, and removes
-    its /etc/fstab entry so it doesn't try to come back at next boot -
-    the counterpart to format_disk()'s auto_mount, and the way back
-    into the raw-disks table (format/wipe) for a disk that's currently
-    sitting in the read-only "Disks" view with nothing else you can do
-    to it. Deliberately refuses anything not mounted under MOUNT_BASE -
-    this only ever undoes what this tool itself set up.
+    """Unmounts whatever this disk is currently mounted at (see
+    _current_mount_point - not restricted to MOUNT_BASE, since a
+    legitimately-mounted-elsewhere disk, e.g. via a desktop session's
+    own automounter, still needs a way back into the raw-disks table
+    for format/wipe), and removes any matching /etc/fstab entry so it
+    doesn't try to come back at next boot.
 
-    Also refuses the boot disk outright, even if - on a system that
-    also has a spare partition mounted under MOUNT_BASE on that same
-    physical disk - _our_mount_point() would otherwise find a
-    legitimate target there: this is a hard rule, not just a
-    consequence of the MOUNT_BASE check, so the button for it can never
-    even appear next to a disk carrying the running system."""
+    The actual safety net is the boot-disk and RAID-member checks
+    below, not where the disk happens to be mounted - refuses the boot
+    disk outright even if it also has a spare partition mounted
+    somewhere _current_mount_point() would otherwise find: this is a
+    hard rule of its own, so the button for it can never even appear
+    next to a disk carrying the running system."""
     result: dict[str, Any] = {"device": device, "success": False}
     name = _disk_name(device)
 
@@ -344,9 +344,9 @@ def unmount_disk(device: str) -> dict[str, Any]:
     if name in _raid_member_disk_names():
         return errors.fail(result, "disks.is_raid_member", device=device)
 
-    mount_point = _our_mount_point(device)
+    mount_point = _current_mount_point(device)
     if not mount_point:
-        return errors.fail(result, "disks.not_our_mount", device=device)
+        return errors.fail(result, "disks.not_mounted", device=device)
 
     umount_path = system_tools.find_binary("umount")
     if umount_path is None:
@@ -362,11 +362,19 @@ def unmount_disk(device: str) -> dict[str, Any]:
     return result
 
 
-def _our_mount_point(device: str) -> str | None:
-    """The mount point this device is currently mounted at, if - and
-    only if - it's under MOUNT_BASE (i.e. something format_disk()'s
-    auto-mount could plausibly have set up), via lsblk so it reflects
-    reality regardless of whether an fstab entry exists at all."""
+def _current_mount_point(device: str) -> str | None:
+    """Wherever this device is currently mounted, if anywhere - not
+    restricted to MOUNT_BASE. Originally this only recognized mounts
+    under MOUNT_BASE (i.e. only what format_disk()'s auto-mount could
+    have set up), but that left a disk mounted some other way (a real
+    report: a desktop session's own automounter putting a USB drive at
+    /media/<user>/<label>) with no Unmount option at all - already
+    mounted, so Format/Wipe don't apply either, and not under
+    MOUNT_BASE, so this always returned None. The boot disk exclusion
+    in unmount_disk (checked independently, not by mount location) is
+    the actual safety net here, not which path something happens to be
+    mounted at - once a disk is confirmed non-boot and non-RAID-member,
+    wherever it's mounted is fair game to unmount."""
     lsblk_path = system_tools.find_binary("lsblk")
     if lsblk_path is None:
         return None
@@ -382,7 +390,7 @@ def _our_mount_point(device: str) -> str | None:
     def walk(devices):
         for dev in devices:
             mp = dev.get("mountpoint")
-            if mp and mp.startswith(MOUNT_BASE + os.sep):
+            if mp:
                 return mp
             found = walk(dev.get("children") or [])
             if found:

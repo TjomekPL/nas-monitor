@@ -673,6 +673,9 @@ async function unmountDisk(disk) {
     }
     const deleted = data.deleted_shares || [];
     showToast(deleted.length ? t("msg.unmountedDiskWithShares", { name: disk.name, shares: deleted.join(", ") }) : t("msg.unmountedDisk", { name: disk.name }));
+    if (data.warnings && data.warnings.length) {
+      showToast(warningsText(data.warnings), true);
+    }
     if (deleted.length) await loadShares();
     await refresh();
     await loadRawDisks();
@@ -691,7 +694,7 @@ async function refresh() {
     lastDisksData = data.disks || [];
     renderRaid(lastRaidData);
     renderDisks(lastDisksData);
-    lastUpdatedEl.textContent = t("msg.lastUpdated", { time: new Date().toLocaleTimeString(localeForLang()) });
+    lastUpdatedEl.textContent = t("msg.lastUpdated", { time: new Date().toLocaleTimeString(localeForLang(), { hour12: false }) });
     connDot.classList.remove("stale");
   } catch (err) {
     connDot.classList.add("stale");
@@ -763,7 +766,14 @@ function renderRawDisks(disks) {
       statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusRaidMember")}</span>`;
     } else if (d.mounted) {
       statusCell.innerHTML = `<span class="pill pill-ok">${t("ui.rawDisks.statusMounted")}</span> <span class="mono">${d.mount_point || ""}</span>`;
-      if (d.mount_point && d.mount_point.startsWith("/srv/")) {
+      // Unmount is offered regardless of where the disk happens to be
+      // mounted - not just under /srv/ (a real report: a desktop
+      // session's own automounter had put a USB drive at
+      // /media/<user>/<label>, which used to leave it with no action
+      // at all here). The boot disk is excluded from this whole table
+      // already (see monitor.get_full_status), so nothing unsafe slips
+      // through by widening this.
+      if (d.mount_point) {
         const unmountBtn = document.createElement("button");
         unmountBtn.type = "button";
         unmountBtn.className = "link-btn";
@@ -1281,6 +1291,19 @@ groupForm.addEventListener("submit", async (ev) => {
   ev.preventDefault();
   groupError.textContent = "";
   const name = groupNameInput.value.trim();
+
+  // Validated here first, before the confirm dialog even shows - a
+  // real report: an obviously-invalid name (bad characters) still
+  // triggered "create group X?" and only rejected it *after*
+  // confirming, which reads backwards. The browser's own pattern
+  // attribute on the input should normally catch this before the
+  // submit event even fires, but checking again here doesn't rely on
+  // that alone holding in every browser/path a submit can happen -
+  // it's the same regex the server itself enforces.
+  if (!/^[a-z_][a-z0-9_-]{0,31}$/.test(name)) {
+    groupError.textContent = t("err.users.invalid_group_name", { group: name });
+    return;
+  }
 
   if (!(await confirmDialog(t("msg.confirmCreateGroup", { name })))) return;
 
@@ -2389,12 +2412,16 @@ function localInputToIso(value) {
 
 function fmtLogTime(iso) {
   try {
+    // 24h always, regardless of UI language - his explicit call ("let
+    // the Americans suffer"), not left to whatever hour12 convention
+    // the resolved locale would otherwise default to.
     return new Date(iso).toLocaleString(localeForLang(), {
       day: "2-digit",
       month: "2-digit",
       year: "numeric",
       hour: "2-digit",
       minute: "2-digit",
+      hour12: false,
     });
   } catch {
     return iso;
@@ -2535,6 +2562,7 @@ setInterval(loadLog, REFRESH_MS);
 function rerenderEverything() {
   renderRaid(lastRaidData);
   renderDisks(lastDisksData);
+  loadRawDisks(); // not cache-driven like the others - has no lastX variable of its own, a fresh fetch is cheap and guarantees correctness
   renderUsers(lastKnownUsersData);
   renderGroupsChecklist(lastKnownGroupsData);
   renderShares(lastSharesData);

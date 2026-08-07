@@ -372,7 +372,7 @@ window.NAS_I18N.en = {
       is_boot_disk: "{device} is the system disk - it can't be formatted, wiped, or unmounted",
       is_mounted: "{device} is currently mounted - unmount it first",
       is_raid_member: "{device} is part of a RAID array - remove it from the array first",
-      not_our_mount: "{device} isn't mounted at a location this panel manages - unmount it manually",
+      not_mounted: "{device} isn't currently mounted",
       unmount_blocked_by_shares: "Can't unmount - this disk is in use by share(s): {shares}. Remove or move them first.",
       unsupported_filesystem: "Unsupported filesystem: {filesystem}",
       invalid_label: "Invalid label: {label} (allowed: letters, digits, dash, underscore, max 32 chars)",
@@ -472,6 +472,8 @@ window.NAS_I18N.en = {
       reload_failed: "Configuration saved, but reloading smbd failed.",
       file_delete_failed: "Share removed from Samba, but failed to delete {path}: {detail}",
       group_acl_failed: "Group {group} has Samba access, but granting it filesystem permissions failed ({detail}) - check whether the acl package is installed.",
+      access_group_cleanup_failed: "Share deleted, but couldn't remove its access group {group}: {detail} - it'll be orphaned, remove it manually.",
+      access_group_cleanup_tool_missing: "Share deleted, but the groupdel tool isn't available - access group {group} will be orphaned, remove it manually.",
     },
     disks: {
       uuid_not_found: "Disk formatted successfully, but couldn't read its UUID - mount it manually.",

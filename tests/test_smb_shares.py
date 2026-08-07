@@ -488,6 +488,38 @@ class TestLegacyAccessGroupMigration(unittest.TestCase):
         smb_shares.delete_share("test", managed_conf_path=self.managed)
         mock_run.assert_called_once_with(["/usr/sbin/groupdel", "test_access"])
 
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/sbin/groupdel")
+    @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(1, "", "groupdel: cannot remove the group, it's still used"))
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    def test_delete_warns_but_still_succeeds_when_groupdel_fails(self, mock_apply, mock_run, mock_find, mock_smb):
+        # Regression test for a real report: an access group survived
+        # its share's deletion (groupdel's result used to be silently
+        # ignored) and later "leaked" into the general Groups tab, with
+        # no indication anything had gone wrong. The share deletion
+        # itself must still succeed either way - only the group cleanup
+        # is what's failing, and that's surfaced as a warning now.
+        content = smb_shares._render_managed_shares(
+            [{"name": "test", "path": "/srv/test", "comment": "", "access_group": "test_access", "permissions": {}}]
+        )
+        with open(self.managed, "w") as fh:
+            fh.write(content)
+        result = smb_shares.delete_share("test", managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["warnings"][0]["code"], "shares.access_group_cleanup_failed")
+        self.assertEqual(result["warnings"][0]["context"]["group"], "test_access")
+
+    @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value=None)
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    def test_delete_warns_when_groupdel_binary_missing(self, mock_apply, mock_find, mock_smb):
+        content = smb_shares._render_managed_shares(
+            [{"name": "test", "path": "/srv/test", "comment": "", "access_group": "test_access", "permissions": {}}]
+        )
+        with open(self.managed, "w") as fh:
+            fh.write(content)
+        result = smb_shares.delete_share("test", managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["warnings"][0]["code"], "shares.access_group_cleanup_tool_missing")
+
 
 @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
 class TestUpdateShareWithPermissions(unittest.TestCase):

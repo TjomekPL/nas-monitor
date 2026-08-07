@@ -372,7 +372,7 @@ window.NAS_I18N.pl = {
       is_boot_disk: "{device} to dysk systemowy - nie można go sformatować, wyczyścić ani odmontować",
       is_mounted: "{device} jest aktualnie zamontowany - odmontuj go najpierw",
       is_raid_member: "{device} jest częścią macierzy RAID - usuń go z macierzy najpierw",
-      not_our_mount: "{device} nie jest zamontowany w miejscu zarządzanym przez ten panel - odmontuj go ręcznie",
+      not_mounted: "{device} nie jest aktualnie zamontowany",
       unmount_blocked_by_shares: "Nie można odmontować - ten dysk jest w użyciu przez udział(y): {shares}. Usuń lub przenieś je najpierw.",
       unsupported_filesystem: "Nieobsługiwany system plików: {filesystem}",
       invalid_label: "Nieprawidłowa etykieta: {label} (dozwolone: litery, cyfry, myślnik, podkreślenie, max 32 znaki)",
@@ -472,6 +472,8 @@ window.NAS_I18N.pl = {
       reload_failed: "Konfiguracja zapisana, ale przeładowanie smbd nie powiodło się.",
       file_delete_failed: "Udział usunięty z Samby, ale nie udało się skasować {path}: {detail}",
       group_acl_failed: "Grupa {group} ma dostęp w Sambie, ale nie udało się nadać jej uprawnień do plików ({detail}) - sprawdź czy pakiet acl jest zainstalowany.",
+      access_group_cleanup_failed: "Udział usunięty, ale nie udało się skasować jego grupy dostępu {group}: {detail} - grupa zostanie osierocona, usuń ją ręcznie.",
+      access_group_cleanup_tool_missing: "Udział usunięty, ale narzędzie groupdel nie jest dostępne - grupa dostępu {group} zostanie osierocona, usuń ją ręcznie.",
     },
     disks: {
       uuid_not_found: "Dysk sformatowany poprawnie, ale nie udało się odczytać jego UUID - zamontuj go ręcznie.",

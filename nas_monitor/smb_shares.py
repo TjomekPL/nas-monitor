@@ -841,8 +841,21 @@ def delete_share(
         # existing group - e.g. someone's own personal account group -
         # and that must never be touched here.
         groupdel_path = system_tools.find_binary("groupdel")
-        if groupdel_path is not None:
-            system_tools.run([groupdel_path, access_group])  # best-effort, ignore result
+        if groupdel_path is None:
+            errors.warn(result, "shares.access_group_cleanup_tool_missing", group=access_group)
+        else:
+            code, out, err = system_tools.run([groupdel_path, access_group])
+            if code != 0:
+                # Real report: a share's access group survived its
+                # share's deletion (groupdel's result used to be
+                # silently ignored here) and then "leaked" into the
+                # general Groups tab, since the exclusion filter there
+                # only hides a group while some *existing* share still
+                # points at it as its access_group - once the share's
+                # gone, an orphaned group looks like any other. Warning
+                # now, so this is visible and actionable instead of a
+                # silent mystery leftover.
+                errors.warn(result, "shares.access_group_cleanup_failed", group=access_group, detail=(err or out).strip()[:300])
 
     for granted_group in (match.get("group_grants") or {}):
         _remove_group_acl(match["path"], granted_group)  # best-effort, ignore result

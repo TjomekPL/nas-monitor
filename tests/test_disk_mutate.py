@@ -430,9 +430,26 @@ class TestUnmountDisk(unittest.TestCase):
         self.assertNotIn(mount_point, content)
         self.assertIn("OTHER-UUID", content)  # unrelated entries untouched
 
-    def test_refuses_disk_not_mounted_under_our_base(self):
-        # mounted somewhere else entirely - not something this tool set up
-        lsblk_json = '{"blockdevices": [{"name": "sdc", "mountpoint": null, "children": [{"name": "sdc1", "mountpoint": "/media/somewhere"}]}]}'
+    def test_unmounts_a_disk_mounted_outside_our_own_convention(self):
+        # Real report: a desktop session's own automounter mounting a
+        # USB drive at /media/<user>/<label> left it with no Unmount
+        # option at all - already mounted (so Format/Wipe don't apply),
+        # and not under MOUNT_BASE (so the old, stricter check refused
+        # it too) - a dead end. The boot-disk/RAID-member checks are
+        # the actual safety net, not the mount path.
+        lsblk_json = '{"blockdevices": [{"name": "sdc", "mountpoint": null, "children": [{"name": "sdc1", "mountpoint": "/media/tomek/Test"}]}]}'
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, ""), "umount": (0, "", "")})) as mock_run, \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate, "_raid_member_disk_names", return_value=set()):
+            result = disk_mutate.unmount_disk("/dev/sdc")
+
+        self.assertTrue(result["success"])
+        umount_call = next(c for c in mock_run.call_args_list if os.path.basename(c.args[0][0]) == "umount")
+        self.assertIn("/media/tomek/Test", umount_call.args[0])
+
+    def test_refuses_a_disk_that_is_not_mounted_at_all(self):
+        lsblk_json = '{"blockdevices": [{"name": "sdc", "mountpoint": null, "children": []}]}'
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})), \
              mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
@@ -440,7 +457,7 @@ class TestUnmountDisk(unittest.TestCase):
             result = disk_mutate.unmount_disk("/dev/sdc")
 
         self.assertFalse(result["success"])
-        self.assertEqual(result["error_code"], "disks.not_our_mount")
+        self.assertEqual(result["error_code"], "disks.not_mounted")
 
     def test_refuses_raid_member(self):
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \

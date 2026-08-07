@@ -274,6 +274,7 @@ def api_disk_unmount(name):
     manageable_by_name = {d["name"]: d for d in disk_mutate.list_manageable_disks()}
     mount_point = manageable_by_name.get(name, {}).get("mount_point")
     deleted_shares = []
+    unmount_warnings = []
     if mount_point:
         blocking = _shares_blocking_unmount(mount_point)
         if blocking:
@@ -289,6 +290,14 @@ def api_disk_unmount(name):
                 if del_result["success"]:
                     deleted_shares.append(share_name)
                     oplog.log_event("shares", "delete", "success", params={"name": share_name, "reason": "disk_unmount"})
+                    # e.g. groupdel failing to remove the share's own
+                    # access group - forwarded to the client the same
+                    # way a normal (non-cascaded) share delete already
+                    # does, so this doesn't quietly drop something
+                    # worth knowing about just because it happened as
+                    # part of an unmount instead of a direct delete.
+                    for w in del_result.get("warnings", []):
+                        unmount_warnings.append(w)
                 else:
                     oplog.log_event("shares", "delete", "failure", params={"name": share_name, "reason": "disk_unmount"})
 
@@ -302,7 +311,7 @@ def api_disk_unmount(name):
             "deleted_shares": deleted_shares,
         }), 400
     oplog.log_event("disks", "unmount", "success", params={"device": device, "deleted_shares": ", ".join(deleted_shares)})
-    return jsonify({"success": True, "deleted_shares": deleted_shares})
+    return jsonify({"success": True, "deleted_shares": deleted_shares, "warnings": unmount_warnings})
 
 
 @app.route("/api/system-stats")
