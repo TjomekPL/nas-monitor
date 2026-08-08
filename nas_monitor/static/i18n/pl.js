@@ -231,6 +231,7 @@ window.NAS_I18N.pl = {
       locationLabel: "Lokalizacja",
       locationDefault: "{path} (dysk systemowy)",
       locationDisk: "{path} (dysk {disk}, {fstype})",
+      recoverableDirsHint: "Znalezione istniejące foldery w tej lokalizacji - kliknij, żeby użyć:",
       commentLabel: "Komentarz (opcjonalnie)",
       accessLegend: "Dostęp",
       groupAccessLegend: "Grupy",

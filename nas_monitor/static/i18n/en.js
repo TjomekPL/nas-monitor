@@ -231,6 +231,7 @@ window.NAS_I18N.en = {
       locationLabel: "Location",
       locationDefault: "{path} (system disk)",
       locationDisk: "{path} (disk {disk}, {fstype})",
+      recoverableDirsHint: "Found existing folders at this location - click to use one:",
       commentLabel: "Comment (optional)",
       accessLegend: "Access",
       groupAccessLegend: "Groups",

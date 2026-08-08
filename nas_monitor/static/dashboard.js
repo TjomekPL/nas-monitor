@@ -1477,6 +1477,8 @@ const shareNameInput = document.getElementById("share-name");
 const sharePathPreview = document.getElementById("share-path-preview");
 const shareLocationRow = document.getElementById("share-location-row");
 const shareLocationSelect = document.getElementById("share-location");
+const shareRecoverableDirsRow = document.getElementById("share-recoverable-dirs-row");
+const shareRecoverableDirsList = document.getElementById("share-recoverable-dirs-list");
 const shareCommentInput = document.getElementById("share-comment");
 const sharePermissionsList = document.getElementById("share-permissions-list");
 const shareGroupGrantsList = document.getElementById("share-group-grants-list");
@@ -1820,7 +1822,39 @@ function updateSharePathPreview() {
   sharePathPreview.textContent = t("ui.shareDialog.pathPreview", { path: `${base}/${raw}` });
 }
 shareNameInput.addEventListener("input", updateSharePathPreview);
-shareLocationSelect.addEventListener("change", updateSharePathPreview);
+shareLocationSelect.addEventListener("change", () => {
+  updateSharePathPreview();
+  loadRecoverableDirectories();
+});
+
+async function loadRecoverableDirectories() {
+  shareRecoverableDirsRow.style.display = "none";
+  shareRecoverableDirsList.innerHTML = "";
+  const path = shareLocationSelect.value;
+  if (!path) return;
+  try {
+    const res = await fetch(`/api/shares/locations/directories?path=${encodeURIComponent(path)}`);
+    const data = await res.json();
+    const dirs = data.directories || [];
+    if (!dirs.length) return;
+    for (const dir of dirs) {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      chip.className = "chip";
+      chip.textContent = dir;
+      chip.addEventListener("click", () => {
+        shareNameInput.value = dir;
+        updateSharePathPreview();
+        shareNameInput.focus();
+      });
+      shareRecoverableDirsList.appendChild(chip);
+    }
+    shareRecoverableDirsRow.style.display = "block";
+  } catch (err) {
+    // Purely a convenience picker - a failed fetch just means nothing
+    // shows here, never blocks typing a name by hand as usual.
+  }
+}
 
 async function loadShareLocations() {
   shareLocationSelect.innerHTML = "";
@@ -1842,6 +1876,7 @@ async function loadShareLocations() {
     // entirely over a location list that failed to load.
   }
   updateSharePathPreview();
+  await loadRecoverableDirectories();
 }
 
 function openShareDialog(mode, share) {
@@ -1856,6 +1891,7 @@ function openShareDialog(mode, share) {
     shareNameInput.value = share.name;
     shareNameInput.disabled = true; // renaming not supported - delete + recreate instead
     shareLocationRow.style.display = "none"; // location is fixed at creation - see smb_shares.create_share's docstring on why
+    shareRecoverableDirsRow.style.display = "none";
     sharePathPreview.textContent = t("ui.shareDialog.pathPreviewFixed", { path: share.path });
     shareCommentInput.value = share.comment || "";
     shareSubmitBtn.textContent = t("ui.shareDialog.saveBtn");

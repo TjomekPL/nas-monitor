@@ -109,6 +109,48 @@ def list_share_locations() -> list[dict[str, Any]]:
     return locations
 
 
+def list_recoverable_directories(base_path: str) -> list[str]:
+    """Top-level subdirectories at a share location that aren't already
+    claimed by a managed share - what the "existing folders here"
+    picker in the create-share dialog offers, so a directory left
+    behind on a disk that was unmounted (its share deleted, files
+    preserved - see disk_mutate.unmount_disk's cascade-delete) can be
+    picked back up without retyping its exact name from memory.
+
+    Two deliberate limits, both his call:
+    - First level only - never descends into the directory tree.
+    - Only for a location backed by a disk whose filesystem this tool
+      can itself create (ext4/btrfs/xfs/exfat, see
+      disk_mutate.SUPPORTED_FILESYSTEMS). An NTFS disk, say, could
+      never have held a share THIS tool created - format_disk() never
+      offers NTFS - so anything found there has nothing to do with a
+      past installation of this system and shouldn't be suggested as
+      if it did. The default /srv location (the system disk, not one
+      of list_share_locations()'s disk-backed entries at all) is out
+      of scope for the same underlying reason - it was never a
+      removable disk that could have come from "elsewhere"."""
+    from nas_monitor import disk_mutate
+
+    location = next((loc for loc in list_share_locations() if loc["path"] == base_path), None)
+    if location is None or location.get("disk") is None:
+        return []
+    if location.get("fstype") not in disk_mutate.SUPPORTED_FILESYSTEMS:
+        return []
+
+    if not os.path.isdir(base_path):
+        return []
+    used_paths = {s["path"] for s in list_shares().get("shares", [])}
+    entries = []
+    for name in sorted(os.listdir(base_path)):
+        full = os.path.join(base_path, name)
+        if not os.path.isdir(full) or name.startswith("."):
+            continue
+        if full in used_paths:
+            continue
+        entries.append(name)
+    return entries
+
+
 # --------------------------------------------------------------------------
 # Reading/writing the managed shares file
 # --------------------------------------------------------------------------
