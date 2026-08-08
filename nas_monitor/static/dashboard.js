@@ -1832,8 +1832,25 @@ const RECOVERABLE_MAX_LEAF = 15;
 const RECOVERABLE_MAX_BUTTONS = 8;
 
 function recoverableRangeLabel(a, b) {
-  const ai = a[0].toUpperCase();
-  const bi = b[0].toUpperCase();
+  // Grows the shown prefix until the two boundary names actually
+  // differ (capped for readability), instead of always comparing just
+  // the first letter - a real report: at deeper recursion levels,
+  // sub-ranges often share their first letter with each other AND with
+  // the parent range that just got clicked into (e.g. "A" and "A-B"
+  // inside an "A-B" bucket), which looks like nothing changed even
+  // though the actual folders are different. One shared letter isn't
+  // enough to tell two sub-ranges apart once you're this deep.
+  const CAP = 10;
+  let n = 1;
+  while (
+    n < CAP &&
+    n < Math.min(a.length, b.length) &&
+    a.slice(0, n).toLowerCase() === b.slice(0, n).toLowerCase()
+  ) {
+    n++;
+  }
+  const ai = a.slice(0, n).toUpperCase();
+  const bi = b.slice(0, n).toUpperCase();
   return ai === bi ? ai : `${ai}\u2013${bi}`;
 }
 
@@ -1931,6 +1948,8 @@ async function loadRecoverableDirectories() {
 
     if (data.truncated) {
       shareRecoverableDirsHint.textContent = t("ui.shareDialog.recoverableDirsTruncated", { count: dirs.length });
+    } else {
+      shareRecoverableDirsHint.textContent = t("ui.shareDialog.recoverableDirsHintCount", { count: dirs.length });
     }
     recoverableRoot = buildRecoverableTree(dirs);
     renderRecoverableLevel(recoverableRoot, []);
