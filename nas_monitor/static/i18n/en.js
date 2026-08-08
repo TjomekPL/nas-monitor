@@ -232,6 +232,8 @@ window.NAS_I18N.en = {
       locationDefault: "{path} (system disk)",
       locationDisk: "{path} (disk {disk}, {fstype})",
       recoverableDirsHint: "Found existing folders at this location - click to use one:",
+      recoverableDirsTruncated: "Showing the first {count} folders alphabetically - if the one you want isn't listed, type its name manually.",
+      recoverableDirsBack: "\u2190 back",
       commentLabel: "Comment (optional)",
       accessLegend: "Access",
       groupAccessLegend: "Groups",

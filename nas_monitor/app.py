@@ -604,7 +604,7 @@ def api_shares_locations():
 @app.route("/api/shares/locations/directories")
 def api_shares_location_directories():
     path = (request.args.get("path") or "").strip()
-    return jsonify({"directories": smb_shares.list_recoverable_directories(path)})
+    return jsonify(smb_shares.list_recoverable_directories(path))
 
 
 @app.route("/api/shares/create", methods=["POST"])

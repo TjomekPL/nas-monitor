@@ -638,6 +638,13 @@ h2 {
   color: var(--text);
   cursor: pointer;
 }
+.chip-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
 .chip:hover { border-color: var(--accent); }
 
 .row-actions { white-space: nowrap; text-align: right; }

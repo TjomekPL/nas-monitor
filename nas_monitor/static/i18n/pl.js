@@ -232,6 +232,8 @@ window.NAS_I18N.pl = {
       locationDefault: "{path} (dysk systemowy)",
       locationDisk: "{path} (dysk {disk}, {fstype})",
       recoverableDirsHint: "Znalezione istniejące foldery w tej lokalizacji - kliknij, żeby użyć:",
+      recoverableDirsTruncated: "Pokazano pierwsze {count} folderów alfabetycznie - jeśli szukanego nie ma na liście, wpisz jego nazwę ręcznie.",
+      recoverableDirsBack: "\u2190 wstecz",
       commentLabel: "Komentarz (opcjonalnie)",
       accessLegend: "Dostęp",
       groupAccessLegend: "Grupy",

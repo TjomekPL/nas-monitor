@@ -1478,6 +1478,7 @@ const sharePathPreview = document.getElementById("share-path-preview");
 const shareLocationRow = document.getElementById("share-location-row");
 const shareLocationSelect = document.getElementById("share-location");
 const shareRecoverableDirsRow = document.getElementById("share-recoverable-dirs-row");
+const shareRecoverableDirsHint = document.getElementById("share-recoverable-dirs-hint");
 const shareRecoverableDirsList = document.getElementById("share-recoverable-dirs-list");
 const shareCommentInput = document.getElementById("share-comment");
 const sharePermissionsList = document.getElementById("share-permissions-list");
@@ -1827,17 +1828,61 @@ shareLocationSelect.addEventListener("change", () => {
   loadRecoverableDirectories();
 });
 
-async function loadRecoverableDirectories() {
-  shareRecoverableDirsRow.style.display = "none";
+const RECOVERABLE_MAX_LEAF = 15;
+const RECOVERABLE_MAX_BUTTONS = 8;
+
+function recoverableRangeLabel(a, b) {
+  const ai = a[0].toUpperCase();
+  const bi = b[0].toUpperCase();
+  return ai === bi ? ai : `${ai}\u2013${bi}`;
+}
+
+// Splits a sorted name list into a tree of ≤15-item leaves, grouped by
+// up to 8 alphabetical ranges per level (recursing into any range
+// that's still too big) - his call, after trying it live in a widget
+// first: a flat wall of chips stopped being usable well before
+// hundreds of folders, and boundaries computed from the ACTUAL sorted
+// data (not a fixed A-M/N-Z split) avoid one enormous bucket when
+// names cluster unevenly (e.g. many folders starting with the same
+// letter).
+function buildRecoverableTree(items) {
+  if (items.length <= RECOVERABLE_MAX_LEAF) return { leaf: true, items };
+  const groupCount = Math.min(RECOVERABLE_MAX_BUTTONS, Math.ceil(items.length / RECOVERABLE_MAX_LEAF));
+  const size = Math.ceil(items.length / groupCount);
+  const groups = [];
+  for (let i = 0; i < items.length; i += size) {
+    const chunk = items.slice(i, i + size);
+    groups.push({ label: recoverableRangeLabel(chunk[0], chunk[chunk.length - 1]), items: chunk });
+  }
+  return { leaf: false, groups };
+}
+
+function renderRecoverableLevel(node, breadcrumb) {
   shareRecoverableDirsList.innerHTML = "";
-  const path = shareLocationSelect.value;
-  if (!path) return;
-  try {
-    const res = await fetch(`/api/shares/locations/directories?path=${encodeURIComponent(path)}`);
-    const data = await res.json();
-    const dirs = data.directories || [];
-    if (!dirs.length) return;
-    for (const dir of dirs) {
+
+  if (breadcrumb.length) {
+    const crumbRow = document.createElement("div");
+    crumbRow.className = "chip-breadcrumb";
+    const backBtn = document.createElement("button");
+    backBtn.type = "button";
+    backBtn.className = "link-btn";
+    backBtn.textContent = t("ui.shareDialog.recoverableDirsBack");
+    backBtn.addEventListener("click", () => {
+      breadcrumb.pop();
+      renderRecoverableLevel(breadcrumb.length ? breadcrumb[breadcrumb.length - 1].node : recoverableRoot, breadcrumb);
+    });
+    crumbRow.appendChild(backBtn);
+    const path = document.createElement("span");
+    path.className = "field-hint";
+    path.textContent = breadcrumb.map((b) => b.label).join(" \u203a ");
+    crumbRow.appendChild(path);
+    shareRecoverableDirsList.appendChild(crumbRow);
+  }
+
+  if (node.leaf) {
+    const wrap = document.createElement("div");
+    wrap.className = "chip-list";
+    for (const dir of node.items) {
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className = "chip";
@@ -1847,8 +1892,48 @@ async function loadRecoverableDirectories() {
         updateSharePathPreview();
         shareNameInput.focus();
       });
-      shareRecoverableDirsList.appendChild(chip);
+      wrap.appendChild(chip);
     }
+    shareRecoverableDirsList.appendChild(wrap);
+    return;
+  }
+
+  const wrap = document.createElement("div");
+  wrap.className = "chip-list";
+  for (const g of node.groups) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "chip";
+    btn.textContent = `${g.label} (${g.items.length})`;
+    btn.addEventListener("click", () => {
+      const childNode = buildRecoverableTree(g.items);
+      breadcrumb.push({ label: g.label, node: childNode });
+      renderRecoverableLevel(childNode, breadcrumb);
+    });
+    wrap.appendChild(btn);
+  }
+  shareRecoverableDirsList.appendChild(wrap);
+}
+
+let recoverableRoot = null;
+
+async function loadRecoverableDirectories() {
+  shareRecoverableDirsRow.style.display = "none";
+  shareRecoverableDirsList.innerHTML = "";
+  shareRecoverableDirsHint.textContent = t("ui.shareDialog.recoverableDirsHint");
+  const path = shareLocationSelect.value;
+  if (!path) return;
+  try {
+    const res = await fetch(`/api/shares/locations/directories?path=${encodeURIComponent(path)}`);
+    const data = await res.json();
+    const dirs = data.directories || [];
+    if (!dirs.length) return;
+
+    if (data.truncated) {
+      shareRecoverableDirsHint.textContent = t("ui.shareDialog.recoverableDirsTruncated", { count: dirs.length });
+    }
+    recoverableRoot = buildRecoverableTree(dirs);
+    renderRecoverableLevel(recoverableRoot, []);
     shareRecoverableDirsRow.style.display = "block";
   } catch (err) {
     // Purely a convenience picker - a failed fetch just means nothing

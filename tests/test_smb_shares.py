@@ -419,18 +419,19 @@ class TestListRecoverableDirectories(unittest.TestCase):
         shares = {"available": True, "shares": []}
         with mock.patch.object(smb_shares, "list_share_locations", return_value=self._locations()), \
              mock.patch.object(smb_shares, "list_shares", return_value=shares):
-            dirs = smb_shares.list_recoverable_directories(self.tmpdir)
-        self.assertEqual(set(dirs), {"dane", "filmy", "already_used"})
-        self.assertNotIn("not_a_directory", dirs)
-        self.assertNotIn(".hidden", dirs)
+            result = smb_shares.list_recoverable_directories(self.tmpdir)
+        self.assertEqual(set(result["directories"]), {"dane", "filmy", "already_used"})
+        self.assertFalse(result["truncated"])
+        self.assertNotIn("not_a_directory", result["directories"])
+        self.assertNotIn(".hidden", result["directories"])
 
     def test_excludes_directories_already_used_by_a_managed_share(self, mock_smb):
         shares = {"available": True, "shares": [{"name": "x", "path": os.path.join(self.tmpdir, "already_used")}]}
         with mock.patch.object(smb_shares, "list_share_locations", return_value=self._locations()), \
              mock.patch.object(smb_shares, "list_shares", return_value=shares):
-            dirs = smb_shares.list_recoverable_directories(self.tmpdir)
-        self.assertNotIn("already_used", dirs)
-        self.assertIn("dane", dirs)
+            result = smb_shares.list_recoverable_directories(self.tmpdir)
+        self.assertNotIn("already_used", result["directories"])
+        self.assertIn("dane", result["directories"])
 
     def test_empty_for_the_default_srv_location(self, mock_smb):
         # Never in scope, regardless of what's actually sitting in
@@ -438,21 +439,43 @@ class TestListRecoverableDirectories(unittest.TestCase):
         # have come from "elsewhere", so recovering directories there
         # doesn't apply the same way.
         with mock.patch.object(smb_shares, "list_share_locations", return_value=self._locations()):
-            dirs = smb_shares.list_recoverable_directories(smb_shares.BASE_SHARE_PATH)
-        self.assertEqual(dirs, [])
+            result = smb_shares.list_recoverable_directories(smb_shares.BASE_SHARE_PATH)
+        self.assertEqual(result["directories"], [])
 
     def test_empty_for_a_filesystem_this_tool_could_never_have_created(self, mock_smb):
         # His explicit reasoning: an NTFS disk could never have held a
         # share this tool made (format_disk never offers NTFS), so
         # anything on it has nothing to do with a past installation.
         with mock.patch.object(smb_shares, "list_share_locations", return_value=self._locations(fstype="ntfs")):
-            dirs = smb_shares.list_recoverable_directories(self.tmpdir)
-        self.assertEqual(dirs, [])
+            result = smb_shares.list_recoverable_directories(self.tmpdir)
+        self.assertEqual(result["directories"], [])
 
     def test_empty_for_an_unknown_location(self, mock_smb):
         with mock.patch.object(smb_shares, "list_share_locations", return_value=self._locations()):
-            dirs = smb_shares.list_recoverable_directories("/srv/not-a-real-location")
-        self.assertEqual(dirs, [])
+            result = smb_shares.list_recoverable_directories("/srv/not-a-real-location")
+        self.assertEqual(result["directories"], [])
+
+    def test_caps_results_and_flags_truncation(self, mock_smb):
+        # Patch the cap down for the test itself - creating thousands of
+        # real directories just to prove the cap logic works would be
+        # wasteful; the behavior being tested doesn't depend on the
+        # actual production value.
+        with mock.patch.object(smb_shares, "MAX_RECOVERABLE_DIRECTORIES", 20):
+            many_dir = tempfile.mkdtemp()
+            try:
+                for i in range(30):
+                    os.makedirs(os.path.join(many_dir, f"folder{i:03d}"))
+                locations = [{"path": many_dir, "disk": "sdb", "fstype": "ext4"}]
+                shares = {"available": True, "shares": []}
+                with mock.patch.object(smb_shares, "list_share_locations", return_value=locations), \
+                     mock.patch.object(smb_shares, "list_shares", return_value=shares):
+                    result = smb_shares.list_recoverable_directories(many_dir)
+                self.assertTrue(result["truncated"])
+                self.assertEqual(len(result["directories"]), 20)
+                # alphabetically first, not some arbitrary OS-listing order
+                self.assertEqual(result["directories"][0], "folder000")
+            finally:
+                shutil.rmtree(many_dir)
 
 
 @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})

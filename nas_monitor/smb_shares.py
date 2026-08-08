@@ -109,7 +109,10 @@ def list_share_locations() -> list[dict[str, Any]]:
     return locations
 
 
-def list_recoverable_directories(base_path: str) -> list[str]:
+MAX_RECOVERABLE_DIRECTORIES = 2000
+
+
+def list_recoverable_directories(base_path: str) -> dict[str, Any]:
     """Top-level subdirectories at a share location that aren't already
     claimed by a managed share - what the "existing folders here"
     picker in the create-share dialog offers, so a directory left
@@ -117,7 +120,7 @@ def list_recoverable_directories(base_path: str) -> list[str]:
     preserved - see disk_mutate.unmount_disk's cascade-delete) can be
     picked back up without retyping its exact name from memory.
 
-    Two deliberate limits, both his call:
+    Deliberate limits, all his call:
     - First level only - never descends into the directory tree.
     - Only for a location backed by a disk whose filesystem this tool
       can itself create (ext4/btrfs/xfs/exfat, see
@@ -128,17 +131,28 @@ def list_recoverable_directories(base_path: str) -> list[str]:
       if it did. The default /srv location (the system disk, not one
       of list_share_locations()'s disk-backed entries at all) is out
       of scope for the same underlying reason - it was never a
-      removable disk that could have come from "elsewhere"."""
+      removable disk that could have come from "elsewhere".
+    - Capped at MAX_RECOVERABLE_DIRECTORIES (alphabetical) - a much
+      higher backstop than it used to be (50): the frontend now
+      recursively buckets the results into alphabetical groups of
+      ≤15 rather than showing a flat wall of chips, so it comfortably
+      handles hundreds or low thousands on its own. This cap exists
+      only to bound worst-case I/O and response size, not because the
+      UI needs it kept small anymore. "truncated" tells the caller
+      there were more, so it can say so instead of silently showing a
+      partial list as if it were everything."""
     from nas_monitor import disk_mutate
+
+    result: dict[str, Any] = {"directories": [], "truncated": False}
 
     location = next((loc for loc in list_share_locations() if loc["path"] == base_path), None)
     if location is None or location.get("disk") is None:
-        return []
+        return result
     if location.get("fstype") not in disk_mutate.SUPPORTED_FILESYSTEMS:
-        return []
+        return result
 
     if not os.path.isdir(base_path):
-        return []
+        return result
     used_paths = {s["path"] for s in list_shares().get("shares", [])}
     entries = []
     for name in sorted(os.listdir(base_path)):
@@ -148,7 +162,10 @@ def list_recoverable_directories(base_path: str) -> list[str]:
         if full in used_paths:
             continue
         entries.append(name)
-    return entries
+
+    result["truncated"] = len(entries) > MAX_RECOVERABLE_DIRECTORIES
+    result["directories"] = entries[:MAX_RECOVERABLE_DIRECTORIES]
+    return result
 
 
 # --------------------------------------------------------------------------
