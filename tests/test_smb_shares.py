@@ -40,6 +40,21 @@ class TestValidShareName(unittest.TestCase):
         for name in ("", "Dane", "1dane", "dane share", "dane;rm -rf /"):
             self.assertFalse(smb_shares.is_valid_share_name(name), name)
 
+    def test_max_length_leaves_room_for_the_access_group_suffix(self):
+        # Real report: a 32-char share name (the old max) plus
+        # "_access" made a 39-char group name, and groupadd rejects
+        # anything over its own 32-char limit ("not a valid group
+        # name") - deep inside share creation, with the actual problem
+        # (the share name itself) never flagged up front. The longest
+        # name this accepts must always leave access_group_name(name)
+        # at or under 32.
+        longest_ok = "a" * 25
+        self.assertTrue(smb_shares.is_valid_share_name(longest_ok))
+        self.assertLessEqual(len(smb_shares.access_group_name(longest_ok)), 32)
+
+        too_long = "a" * 26
+        self.assertFalse(smb_shares.is_valid_share_name(too_long))
+
 
 class TestManagedFileRoundTrip(unittest.TestCase):
     """Uses real temp files (not mocks) for the read/render logic - it's
@@ -394,7 +409,8 @@ class TestCreateShareWithPermissions(unittest.TestCase):
 @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
 class TestListShareLocations(unittest.TestCase):
     def test_always_includes_the_default_location(self, mock_smb):
-        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=[]):
+        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=[]), \
+             mock.patch("nas_monitor.disk_mutate.list_mounted_raid_arrays", return_value=[]):
             locations = smb_shares.list_share_locations()
         self.assertEqual(locations, [{"path": smb_shares.BASE_SHARE_PATH, "disk": None, "fstype": None, "label": ""}])
 
@@ -404,7 +420,8 @@ class TestListShareLocations(unittest.TestCase):
             {"name": "sdc", "mounted": False, "mount_point": None, "fstype": None},
             {"name": "sdd", "mounted": True, "mount_point": "/media/other", "fstype": "ext4"},
         ]
-        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=disks):
+        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=disks), \
+             mock.patch("nas_monitor.disk_mutate.list_mounted_raid_arrays", return_value=[]):
             locations = smb_shares.list_share_locations()
 
         paths = {loc["path"] for loc in locations}
@@ -413,9 +430,21 @@ class TestListShareLocations(unittest.TestCase):
         # mount point) - excluded, this table only ever offers locations
         # this tool's own mount convention actually set up.
         self.assertEqual(paths, {smb_shares.BASE_SHARE_PATH, "/srv/dane"})
-        sdb_entry = next(loc for loc in locations if loc["path"] == "/srv/dane")
-        self.assertEqual(sdb_entry["disk"], "sdb")
-        self.assertEqual(sdb_entry["fstype"], "ext4")
+
+    def test_includes_a_mounted_raid_array(self, mock_smb):
+        # Real report: an existing, already-mounted array wasn't
+        # offered as a share location at all - only individual disks
+        # were. Deliberately narrow (see list_mounted_raid_arrays'
+        # docstring): recognizing an already-assembled array's mount
+        # point, not array creation/management itself.
+        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=[]), \
+             mock.patch("nas_monitor.disk_mutate.list_mounted_raid_arrays",
+                         return_value=[{"name": "md0", "mount_point": "/srv/raid-dane", "fstype": "ext4"}]):
+            locations = smb_shares.list_share_locations()
+
+        raid_loc = next(loc for loc in locations if loc["path"] == "/srv/raid-dane")
+        self.assertEqual(raid_loc["disk"], "md0")
+        self.assertEqual(raid_loc["fstype"], "ext4")
 
 
 @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
@@ -634,7 +663,8 @@ class TestCreateShareWithLocation(unittest.TestCase):
     @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
     def test_uses_the_chosen_valid_location(self, mock_dir, mock_apply, mock_smb):
         disks = [{"name": "sdb", "mounted": True, "mount_point": "/srv/dane", "fstype": "ext4"}]
-        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=disks):
+        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=disks), \
+             mock.patch("nas_monitor.disk_mutate.list_mounted_raid_arrays", return_value=[]):
             result = smb_shares.create_share("filmy", base_path="/srv/dane", managed_conf_path=self.managed)
         self.assertTrue(result["success"])
         mock_dir.assert_called_once_with("/srv/dane/filmy", None)
@@ -644,7 +674,8 @@ class TestCreateShareWithLocation(unittest.TestCase):
         # loading the location list and the form actually being
         # submitted - re-checked server-side, never trusted from the
         # client.
-        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=[]):
+        with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=[]), \
+             mock.patch("nas_monitor.disk_mutate.list_mounted_raid_arrays", return_value=[]):
             result = smb_shares.create_share("filmy", base_path="/mnt/dane", managed_conf_path=self.managed)
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "shares.invalid_location")

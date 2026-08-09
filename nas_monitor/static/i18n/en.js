@@ -242,7 +242,8 @@ window.NAS_I18N.en = {
       accessLegend: "Access",
       groupAccessLegend: "Groups",
       addPersonBtn: "+ Add person",
-      pickPlaceholder: "Choose...",
+      addSelectedBtn: "Add selected",
+      cancelPickBtn: "Cancel",
       addGroupBtn: "+ Add group",
       removeBtn: "Remove",
       cancelBtn: "Cancel",
@@ -433,7 +434,7 @@ window.NAS_I18N.en = {
       empty_password: "Empty password",
     },
     shares: {
-      invalid_name: "Invalid share name (letters/digits/_/-, must start with a letter, max 32 characters, can't be a reserved name)",
+      invalid_name: "Invalid share name (letters/digits/_/-, must start with a letter, max 25 characters, can't be a reserved name)",
       invalid_location: "Invalid location: {location} (the disk may have been unmounted since the page last loaded)",
       system_disk_not_allowed: "Shares can't be created on the system disk - connect and pick a separate disk.",
       already_exists: "Share '{name}' already exists",

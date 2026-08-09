@@ -165,6 +165,46 @@ class TestDiskState(unittest.TestCase):
         self.assertEqual(state, {"fstype": None, "mountpoint": None, "device_node": None})
 
 
+class TestListMountedRaidArrays(unittest.TestCase):
+    def test_includes_an_array_mounted_under_srv(self):
+        arrays = [{"name": "md0", "path": "/dev/md0", "error": None}]
+        lsblk_json = '{"blockdevices": [{"name": "md0", "fstype": "ext4", "mountpoint": "/srv/dane-raid", "children": []}]}'
+        with mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=arrays), \
+             mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
+            result = disk_mutate.list_mounted_raid_arrays()
+        self.assertEqual(result, [{"name": "md0", "mount_point": "/srv/dane-raid", "fstype": "ext4"}])
+
+    def test_excludes_an_array_not_mounted_under_srv(self):
+        arrays = [{"name": "md0", "path": "/dev/md0", "error": None}]
+        lsblk_json = '{"blockdevices": [{"name": "md0", "fstype": "ext4", "mountpoint": "/mnt/elsewhere", "children": []}]}'
+        with mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=arrays), \
+             mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
+            result = disk_mutate.list_mounted_raid_arrays()
+        self.assertEqual(result, [])
+
+    def test_excludes_an_unmounted_array(self):
+        arrays = [{"name": "md0", "path": "/dev/md0", "error": None}]
+        lsblk_json = '{"blockdevices": [{"name": "md0", "fstype": null, "mountpoint": null, "children": []}]}'
+        with mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=arrays), \
+             mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
+            result = disk_mutate.list_mounted_raid_arrays()
+        self.assertEqual(result, [])
+
+    def test_skips_an_array_that_failed_detection(self):
+        arrays = [{"name": "md0", "path": "/dev/md0", "error": "mdadm not installed"}]
+        with mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=arrays), \
+             mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary):
+            result = disk_mutate.list_mounted_raid_arrays()
+        self.assertEqual(result, [])
+
+    def test_no_arrays_at_all(self):
+        with mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]):
+            self.assertEqual(disk_mutate.list_mounted_raid_arrays(), [])
+
+
 class TestListManageableDisks(unittest.TestCase):
     def test_excludes_a_non_boot_disk_carrying_a_stray_system_partition(self):
         # Regression test for a real report: a disk that was NOT the

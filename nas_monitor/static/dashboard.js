@@ -1742,56 +1742,59 @@ function wireShareGrantAdder({ addBtn, listContainer, candidatesFn, keyFn, label
     refresh();
   }
 
+  // A real checklist (checkbox per candidate, like the group-members
+  // dialog he pointed at) rather than a single-select dropdown picked
+  // one at a time - his explicit want: check several people/groups,
+  // then add them all in one action, not repeat "pick, reopen, pick
+  // again" for each one.
   addBtn.addEventListener("click", () => {
-    const picker = document.createElement("select");
-    picker.className = "grant-picker";
+    const left = remaining();
+    if (!left.length) return;
 
-    function fillOptions() {
-      const left = remaining();
-      picker.innerHTML = "";
-      const placeholder = document.createElement("option");
-      placeholder.value = "";
-      placeholder.textContent = t("ui.shareDialog.pickPlaceholder");
-      placeholder.disabled = true;
-      placeholder.selected = true;
-      picker.appendChild(placeholder);
-      for (const c of left) {
-        const opt = document.createElement("option");
-        opt.value = keyFn(c);
-        opt.textContent = labelFn(c);
-        picker.appendChild(opt);
-      }
-      return left;
-    }
+    const picker = document.createElement("div");
+    picker.className = "grant-picker-checklist";
 
-    function closePicker() {
-      if (picker.isConnected) picker.remove();
-      addBtn.style.display = "inline-block";
-    }
-
-    const initial = fillOptions();
-    if (!initial.length) return;
-
-    // Stays open across picks (his explicit want: pick several people
-    // in one go, not re-click "+Add" once per person) - each choice
-    // adds a row and immediately refills the same dropdown with
-    // whoever's left, closing on its own once nobody remains or the
-    // user clicks away.
-    picker.addEventListener("change", () => {
-      const left = remaining();
-      const chosen = left.find((c) => keyFn(c) === picker.value);
-      if (chosen) addRow(chosen);
-      const stillLeft = fillOptions();
-      if (!stillLeft.length) {
-        closePicker();
-      } else {
-        picker.focus();
-      }
+    const boxes = left.map((candidate) => {
+      const label = document.createElement("label");
+      label.className = "inline";
+      const cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.value = keyFn(candidate);
+      label.appendChild(cb);
+      label.append(" " + labelFn(candidate));
+      picker.appendChild(label);
+      return { cb, candidate };
     });
-    picker.addEventListener("blur", closePicker);
+
+    const actionsRow = document.createElement("div");
+    actionsRow.className = "grant-picker-actions";
+
+    const confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.className = "link-btn";
+    confirmBtn.textContent = t("ui.shareDialog.addSelectedBtn");
+    confirmBtn.addEventListener("click", () => {
+      for (const { cb, candidate } of boxes) {
+        if (cb.checked) addRow(candidate);
+      }
+      picker.remove();
+      refresh();
+    });
+    actionsRow.appendChild(confirmBtn);
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "link-btn";
+    cancelBtn.textContent = t("ui.shareDialog.cancelPickBtn");
+    cancelBtn.addEventListener("click", () => {
+      picker.remove();
+      addBtn.style.display = "inline-block";
+    });
+    actionsRow.appendChild(cancelBtn);
+
+    picker.appendChild(actionsRow);
     addBtn.insertAdjacentElement("afterend", picker);
     addBtn.style.display = "none";
-    picker.focus();
   });
 
   return { refresh };
@@ -1892,6 +1895,8 @@ async function loadShares() {
 
 const POLISH_DIACRITICS = { "ą": "a", "ć": "c", "ę": "e", "ł": "l", "ń": "n", "ó": "o", "ś": "s", "ź": "z", "ż": "z" };
 
+const SHARE_NAME_MAX_LENGTH = 25; // groupadd's own 32-char ceiling minus "_access" (7 chars) - a longer technical name would make access_group_name(name) invalid, rejected deep inside group setup with no hint the *name* was ever the problem (a real report)
+
 function sanitizeShareName(raw) {
   // Auto-corrects as you type instead of just rejecting on submit - a
   // real report: he typed a name with a space and a Polish diacritic
@@ -1908,7 +1913,7 @@ function sanitizeShareName(raw) {
   s = s.replace(/\s+/g, "_");
   s = s.replace(/[^a-z0-9_-]/g, "");
   s = s.replace(/^[^a-z]+/, "");
-  return s.slice(0, 32);
+  return s.slice(0, SHARE_NAME_MAX_LENGTH);
 }
 
 // Field itself stays exactly as typed (his correction - my first
@@ -2175,7 +2180,7 @@ shareForm.addEventListener("submit", async (ev) => {
     // separately-computed technical `name`, catching the empty-after-
     // sanitizing case (e.g. a name that was nothing but spaces/
     // disallowed characters once stripped down to the technical form).
-    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(name)) {
+    if (!/^[a-z][a-z0-9_-]{0,24}$/.test(name)) {
       shareError.textContent = t("err.shares.invalid_name", { name });
       return;
     }

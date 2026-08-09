@@ -38,7 +38,19 @@ MANAGED_CONF_PATH = os.path.join(MANAGED_CONF_DIR, "nas-monitor-shares.conf")
 # which is a real footgun (confirmed by hand), not a hypothetical one.
 _RESERVED_NAMES = {"global", "homes", "printers", "print$", "netlogon", "profiles"}
 
-_VALID_SHARE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+_ACCESS_GROUP_SUFFIX = "_access"
+_LINUX_GROUP_NAME_MAX = 32  # groupadd's own hard limit, confirmed via its man page
+_VALID_SHARE_NAME_RE = re.compile(
+    r"^[a-z][a-z0-9_-]{0,%d}$" % (_LINUX_GROUP_NAME_MAX - len(_ACCESS_GROUP_SUFFIX) - 1)
+)
+# Real report: a 32-character share name (this regex's old max) plus
+# "_access" produced a 39-character group name, and groupadd rejected
+# it outright ("not a valid group name") - a share name that's valid
+# on its own could still make share creation fail later, deep inside
+# group setup, with no hint the *name* was ever the actual problem.
+# Capped short enough that access_group_name(name) can never exceed
+# groupadd's own 32-character ceiling, so this is caught immediately
+# by ordinary name validation instead.
 DISPLAY_NAME_MAX_LENGTH = 64
 
 
@@ -66,7 +78,7 @@ def access_group_name(share_name: str) -> str:
     that makes that work at the Samba/filesystem level (valid users,
     force group, folder ownership), not something the admin manages
     directly."""
-    return f"{share_name}_access"
+    return f"{share_name}{_ACCESS_GROUP_SUFFIX}"
 
 
 def _missing_smb_password_warning(usernames: list[str]) -> dict[str, Any] | None:
@@ -126,6 +138,18 @@ def list_share_locations() -> list[dict[str, Any]]:
                 "fstype": disk.get("fstype"),
                 "label": disk.get("label", ""),
             })
+    for arr in disk_mutate.list_mounted_raid_arrays():
+        # Reuses the "disk" key to mean "backed by some manageable
+        # block device, not the bare system disk" - the distinction
+        # that actually matters everywhere this field is checked
+        # (create_share's system-disk block, list_recoverable_directories's
+        # fstype gate) is disk-vs-system, not disk-vs-array.
+        locations.append({
+            "path": arr["mount_point"],
+            "disk": arr["name"],
+            "fstype": arr.get("fstype"),
+            "label": "",
+        })
     return locations
 
 

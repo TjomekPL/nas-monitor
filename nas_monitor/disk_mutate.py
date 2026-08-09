@@ -231,6 +231,36 @@ def _is_system_partition(mountpoint: str | None) -> bool:
     return mountpoint in _SYSTEM_MOUNTPOINTS or mountpoint == "[SWAP]"
 
 
+def list_mounted_raid_arrays() -> list[dict[str, Any]]:
+    """RAID arrays currently mounted under MOUNT_BASE, with enough state
+    (fstype, mount_point) to let an array's existing mount point be
+    used as a share location - the same way an individual disk's
+    mount point already can be. Deliberately narrow: this is NOT array
+    creation/management (still deferred, needs its own async design
+    for the long initial sync) - just recognizing an array that's
+    already assembled and mounted, so a real gap doesn't block him
+    (a real report: an existing, working RAID array wasn't offered as
+    a share location at all, only plain disks were). Reuses
+    _disk_state - lsblk reports fstype/mountpoint for /dev/mdX exactly
+    the same way it does for a plain disk, no special-casing needed."""
+    arrays = []
+    for arr in monitor.get_raid_arrays():
+        if arr.get("error"):
+            continue
+        try:
+            state = _disk_state(arr["path"])
+        except Exception:
+            continue
+        mount_point = state.get("mountpoint") or ""
+        if mount_point.startswith(MOUNT_BASE + os.sep):
+            arrays.append({
+                "name": arr["name"],
+                "mount_point": mount_point,
+                "fstype": state.get("fstype"),
+            })
+    return arrays
+
+
 def list_manageable_disks() -> list[dict[str, Any]]:
     """Every disk except the boot disk and anything else carrying a
     system partition (see _is_system_partition) - the boot disk never

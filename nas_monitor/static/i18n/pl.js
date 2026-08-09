@@ -242,7 +242,8 @@ window.NAS_I18N.pl = {
       accessLegend: "Dostęp",
       groupAccessLegend: "Grupy",
       addPersonBtn: "+ Dodaj osobę",
-      pickPlaceholder: "Wybierz...",
+      addSelectedBtn: "Dodaj zaznaczonych",
+      cancelPickBtn: "Anuluj",
       addGroupBtn: "+ Dodaj grupę",
       removeBtn: "Usuń",
       cancelBtn: "Anuluj",
@@ -433,7 +434,7 @@ window.NAS_I18N.pl = {
       empty_password: "Puste hasło",
     },
     shares: {
-      invalid_name: "Nieprawidłowa nazwa udziału (litery/cyfry/_/-, musi zaczynać się literą, max 32 znaki, nie może być nazwą zarezerwowaną)",
+      invalid_name: "Nieprawidłowa nazwa udziału (litery/cyfry/_/-, musi zaczynać się literą, max 25 znaków, nie może być nazwą zarezerwowaną)",
       invalid_location: "Nieprawidłowa lokalizacja: {location} (dysk mógł zostać odmontowany od czasu odświeżenia strony)",
       system_disk_not_allowed: "Udziały nie mogą być tworzone na dysku systemowym - podłącz i wybierz osobny dysk.",
       already_exists: "Udział '{name}' już istnieje",
