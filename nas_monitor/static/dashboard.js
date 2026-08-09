@@ -1542,19 +1542,40 @@ function renderPermissionsSummary(container, permissions, groupGrants) {
 
 function groupNameForShare(sharePath) {
   // Longest-prefix match against known share locations (system /srv
-  // plus any disk currently mounted under it) - whichever location's
-  // path the share's own path actually falls under. Falls back to the
-  // system-disk label if nothing disk-backed matches (covers /srv
-  // itself, and any share this tool doesn't recognize the location of
-  // at all - safer to lump it under "system" than silently drop it).
+  // plus any disk/array currently mounted under it) - whichever
+  // location's path the share's own path actually falls under. The
+  // system disk ("/srv" itself) only counts as a match when the share
+  // is a DIRECT child (no extra path segment in between) - otherwise
+  // "/srv" as a bare prefix would wrongly swallow every nested,
+  // disk-backed path too (a real bug this fix caught: a share under
+  // an unrecognized disk's own subdirectory was matching "/srv" as a
+  // prefix and showing as the system disk).
   let best = null;
   for (const loc of lastShareLocationsData) {
-    if (sharePath === loc.path || sharePath.startsWith(loc.path + "/")) {
-      if (!best || loc.path.length > best.path.length) best = loc;
+    const isMatch = sharePath === loc.path || sharePath.startsWith(loc.path + "/");
+    if (!isMatch) continue;
+    if (loc.disk === null) {
+      const remainder = sharePath.slice(loc.path.length + 1);
+      if (remainder.includes("/")) continue; // nested deeper than a direct child - not really "the system disk"
     }
+    if (!best || loc.path.length > best.path.length) best = loc;
   }
-  if (!best || !best.disk) return t("ui.shares.groupSystemDisk");
-  return best.label || best.disk;
+  if (best && best.disk) return best.label || best.disk;
+  if (best) return t("ui.shares.groupSystemDisk");
+
+  // No location matched at all - the share lives under some disk/array
+  // that isn't currently reflected in lastShareLocationsData
+  // (unmounted right now, or not yet recognized). If the path has an
+  // extra segment between /srv/ and the share's own directory, that
+  // segment is very likely a disk/array identifier (e.g. a serial
+  // number) - show that raw segment (his explicit want: /dev/sdX or
+  // even "unknown", never a false "System disk") rather than
+  // mislabeling it. Only a share genuinely directly under /srv/ with
+  // nothing in between falls back to "System disk".
+  const relative = sharePath.startsWith("/srv/") ? sharePath.slice(5) : sharePath;
+  const segments = relative.split("/").filter(Boolean);
+  if (segments.length > 1) return segments[0];
+  return t("ui.shares.groupSystemDisk");
 }
 
 function buildShareTable(shares) {

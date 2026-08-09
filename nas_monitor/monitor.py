@@ -374,9 +374,33 @@ def get_raid_arrays() -> list[dict[str, Any]]:
             devices.append({"device": dev_path, "role": role})
             i += 1
         entry["devices"] = devices
+        # A genuinely present, working member has both a real device
+        # path AND a numeric role (an active RAID slot) - a "spare" or
+        # "faulty" role, or an empty/missing device path, means that
+        # slot isn't actually contributing to array redundancy right
+        # now, whatever the array's own summary state says about it.
+        entry["working_devices"] = sum(
+            1 for d in devices if d.get("device") and (d.get("role") or "").isdigit()
+        )
+        entry["failed_devices"] = len(devices) - entry["working_devices"]
+        try:
+            entry["expected_devices"] = int(entry["num_devices"]) if entry["num_devices"] else None
+        except ValueError:
+            entry["expected_devices"] = None
 
         state = (entry["array_state"] or "").lower()
-        if "degraded" in state or "failed" in state:
+        # Real report: an array missing a disk (3 of 4 connected) still
+        # showed healthy - a single string-match against MD_ARRAY_STATE
+        # (mdadm's --export summary field) isn't reliable enough on its
+        # own to catch every case a degraded array can present as, so
+        # this also independently compares how many members are
+        # actually working against how many the array expects,
+        # regardless of what the state string itself says.
+        device_shortfall = (
+            entry["expected_devices"] is not None
+            and entry["working_devices"] < entry["expected_devices"]
+        )
+        if "degraded" in state or "failed" in state or device_shortfall:
             entry["health"] = "critical"
         elif entry["progress_percent"] is not None:
             entry["health"] = "warning"
@@ -475,9 +499,20 @@ def get_full_status() -> dict[str, Any]:
     # single misbehaving disk hid the entire tab.
     visible_disks = []
     for disk in disks:
+        if disk["name"] in raid_member_names:
+            # The array's own card already represents this disk's
+            # storage - showing it again here too was a real report
+            # (his explicit ask): several individually-identical-
+            # looking cards for one array's members is confusing, not
+            # informative. This was previously backwards - the
+            # condition below used to KEEP a raid member visible even
+            # while unmounted (bypassing the "must be mounted" check
+            # specifically for members), the opposite of what this
+            # function's own comment already said should happen.
+            continue
         try:
             usage = get_filesystem_usage(disk["path"])
-            if not usage["mounted"] and disk["name"] not in raid_member_names:
+            if not usage["mounted"]:
                 continue
             disk["usage"] = usage
             disk["is_boot_disk"] = disk["name"] == boot_disk

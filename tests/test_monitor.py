@@ -246,6 +246,68 @@ class TestGetRaidArrays(unittest.TestCase):
         self.assertEqual(arrays[0]["array_state"], "clean")
         self.assertEqual(len(arrays[0]["devices"]), 2)
         self.assertEqual(arrays[0]["health"], "ok")
+        self.assertEqual(arrays[0]["working_devices"], 2)
+        self.assertEqual(arrays[0]["failed_devices"], 0)
+
+    @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/sbin/mdadm")
+    @mock.patch("nas_monitor.monitor._run")
+    @mock.patch("nas_monitor.monitor._parse_mdstat")
+    def test_missing_member_flags_critical_even_when_state_string_says_clean(self, mock_mdstat, mock_run, mock_which):
+        # Real report: an array with a disk physically disconnected (3
+        # of 4 present) still showed as healthy. A single substring
+        # check against MD_ARRAY_STATE ("degraded" in state) isn't
+        # reliable on its own - this fixture deliberately keeps
+        # MD_ARRAY_STATE at "clean" (as some mdadm versions/situations
+        # report it) while only listing 3 of the 4 expected devices, to
+        # prove the independent device-count comparison catches this
+        # regardless of what the state string itself claims.
+        export = (
+            "MD_LEVEL=raid5\n"
+            "MD_DEVICES=4\n"
+            "MD_METADATA=1.2\n"
+            "MD_ARRAY_STATE=clean\n"
+            "MD_DEVICE_dev0_DEV=/dev/sda1\n"
+            "MD_DEVICE_dev0_ROLE=0\n"
+            "MD_DEVICE_dev1_DEV=/dev/sdb1\n"
+            "MD_DEVICE_dev1_ROLE=1\n"
+            "MD_DEVICE_dev2_DEV=/dev/sdc1\n"
+            "MD_DEVICE_dev2_ROLE=2\n"
+        )
+        mock_mdstat.return_value = {
+            "md0": {"active": True, "level": "raid5", "members_raw": "", "progress_percent": None, "progress_action": None}
+        }
+        mock_run.return_value = (0, export, "")
+        arrays = monitor.get_raid_arrays()
+        self.assertEqual(arrays[0]["working_devices"], 3)
+        self.assertEqual(arrays[0]["expected_devices"], 4)
+        self.assertEqual(arrays[0]["health"], "critical")
+
+    @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/sbin/mdadm")
+    @mock.patch("nas_monitor.monitor._run")
+    @mock.patch("nas_monitor.monitor._parse_mdstat")
+    def test_faulty_spare_role_does_not_count_as_working(self, mock_mdstat, mock_run, mock_which):
+        # A device slot can be PRESENT (has a device path) but not
+        # actually contributing - mdadm marks it with a non-numeric
+        # role ("spare"/"faulty spare") rather than a plain RAID slot
+        # number once it's failed out of the array.
+        export = (
+            "MD_LEVEL=raid1\n"
+            "MD_DEVICES=2\n"
+            "MD_METADATA=1.2\n"
+            "MD_ARRAY_STATE=clean\n"
+            "MD_DEVICE_dev0_DEV=/dev/sda1\n"
+            "MD_DEVICE_dev0_ROLE=0\n"
+            "MD_DEVICE_dev1_DEV=/dev/sdb1\n"
+            "MD_DEVICE_dev1_ROLE=faulty spare\n"
+        )
+        mock_mdstat.return_value = {
+            "md0": {"active": True, "level": "raid1", "members_raw": "", "progress_percent": None, "progress_action": None}
+        }
+        mock_run.return_value = (0, export, "")
+        arrays = monitor.get_raid_arrays()
+        self.assertEqual(arrays[0]["working_devices"], 1)
+        self.assertEqual(arrays[0]["failed_devices"], 1)
+        self.assertEqual(arrays[0]["health"], "critical")
 
     @mock.patch("nas_monitor.monitor._find_binary", return_value=None)
     @mock.patch("nas_monitor.monitor._parse_mdstat")
@@ -463,13 +525,21 @@ class TestGetFullStatusVisibility(unittest.TestCase):
 
     @mock.patch("nas_monitor.monitor.get_smart_health", return_value={"available": False})
     @mock.patch("nas_monitor.monitor.classify_health", return_value="unknown")
-    def test_unmounted_raid_member_is_still_included(self, mock_health, mock_smart):
+    def test_raid_member_is_excluded_even_when_mounted(self, mock_health, mock_smart):
+        # His explicit ask: the array's own card already represents
+        # this storage - showing each member disk again too, all with
+        # identical-looking usage numbers, is confusing rather than
+        # informative. This used to be backwards (the "still_included"
+        # name this test had before described the very bug being
+        # fixed) - a raid member used to bypass the "must be mounted"
+        # check and stay visible unconditionally; now it's excluded
+        # unconditionally instead, mounted or not.
         raid = [{"path": "/dev/md0", "devices": [{"device": "/dev/sdb1"}]}]
         with mock.patch("nas_monitor.monitor.list_disks", return_value=self._disks("sdb")), \
-             mock.patch("nas_monitor.monitor.get_filesystem_usage", return_value={"mounted": False}), \
+             mock.patch("nas_monitor.monitor.get_filesystem_usage", return_value={"mounted": True, "mountpoints": ["/srv/dane-raid"]}), \
              mock.patch("nas_monitor.monitor.get_raid_arrays", return_value=raid):
             status = monitor.get_full_status()
-        self.assertEqual([d["name"] for d in status["disks"]], ["sdb"])
+        self.assertEqual(status["disks"], [])
 
     @mock.patch("nas_monitor.monitor.classify_health", return_value="unknown")
     @mock.patch("nas_monitor.monitor.get_raid_arrays", return_value=[])
