@@ -25,20 +25,11 @@ import re
 import time
 from typing import Any
 
-from nas_monitor import system_tools, errors, monitor
+from nas_monitor import system_tools, errors, monitor, disk_labels
 
 SUPPORTED_FILESYSTEMS = {"ext4", "btrfs", "xfs", "exfat"}
 MOUNT_BASE = "/srv"
 FSTAB_PATH = "/etc/fstab"
-
-# Conservative allowlist a label must satisfy before it's ever handed
-# to mkfs's own -L flag or used to build a mount-point directory name -
-# not because mkfs/mkdir would mishandle other characters, but because
-# this same string becomes a path component (/srv/<label>) and an
-# /etc/fstab field, and there's no reason to accept anything that could
-# be awkward in either place (spaces, slashes, quotes) when a plain
-# alnum/dash/underscore name covers every real use case.
-_VALID_LABEL_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 
 _MKFS_BINARY = {
     "ext4": "mkfs.ext4",
@@ -86,28 +77,35 @@ def _disk_name(device_or_partition: str) -> str:
     return base
 
 
-def _default_mount_name(device: str) -> str:
-    """Fallback mount-point name when no label is given: the disk's
-    serial number, sanitized to the same safe charset labels use - not
-    the kernel device name (sda, sdb...), which is exactly the kind of
-    identifier that can point at a completely different physical disk
-    after a reboot or a USB reconnect (a real point he raised: naming
-    a *persistent* mount path after something that isn't itself
-    persistent is backwards). This also matches the Serial column
-    already shown in the management table, so the physical disk and
-    its mount point are recognizable as the same thing without cross-
-    referencing anything else. Falls back to the kernel name only if
-    no usable serial is available at all - monitor.list_disks() itself
-    falls back to the literal string "unknown" when a drive doesn't
-    report one, and using that as a mount name would collide the
-    moment a second such drive shows up."""
+def _disk_serial(device: str) -> str:
+    """Raw serial number for this device, or "" if unavailable/the
+    "unknown" placeholder monitor.list_disks() itself falls back to
+    for a drive that doesn't report one. Shared by _default_mount_name
+    (the actual mount-path source of truth, always /srv/<serial> - see
+    format_disk/mount_disk) and label-saving (disk_labels is keyed by
+    this same serial, so a label always finds its way back to the
+    right physical disk regardless of what /dev/sdX it's on today)."""
     name = _disk_name(device)
     known = {d["name"]: d for d in monitor.list_disks()}
     serial = (known.get(name) or {}).get("serial") or ""
-    sanitized = re.sub(r"[^A-Za-z0-9_-]", "", serial)
-    if sanitized and sanitized.lower() != "unknown":
-        return sanitized
-    return name
+    if serial.lower() == "unknown":
+        return ""
+    return serial
+
+
+def _default_mount_name(device: str) -> str:
+    """The mount-point name: the disk's serial number, sanitized to a
+    filesystem-safe charset - not the kernel device name (sda, sdb...),
+    which is exactly the kind of identifier that can point at a
+    completely different physical disk after a reboot or a USB
+    reconnect (his point: naming a *persistent* mount path after
+    something that isn't itself persistent is backwards), and not a
+    user-chosen label either (his later refinement, v0.14.4 - a label
+    is meant to be renamed freely, which a path other things depend on
+    can't safely be). Falls back to the kernel device name only if no
+    usable serial is available at all."""
+    sanitized = re.sub(r"[^A-Za-z0-9_-]", "", _disk_serial(device))
+    return sanitized if sanitized else _disk_name(device)
 
 
 def _partition_path(device: str) -> str:
@@ -276,6 +274,7 @@ def list_manageable_disks() -> list[dict[str, Any]]:
         disk["mount_point"] = state["mountpoint"]
         disk["mounted"] = bool(state["mountpoint"])
         disk["is_raid_member"] = disk["name"] in raid_members
+        disk["label"] = disk_labels.get_label(disk.get("serial", ""))
         manageable.append(disk)
     return manageable
 
@@ -314,14 +313,21 @@ def mount_disk(device: str, label: str = "") -> dict[str, Any]:
     with no way to just mount what was already there). Reuses the same
     UUID-keyed /etc/fstab + immediate-mount machinery format_disk()'s
     auto-mount uses (_mount_and_persist), so a disk mounted this way
-    behaves identically to one mounted right after formatting."""
+    behaves identically to one mounted right after formatting.
+
+    The mount point is always /srv/<serial number> (_default_mount_name)
+    - never a name the label supplies. His explicit design call: a
+    mount path is something else (fstab, share locations) comes to
+    depend on, so it has to stay put; a serial never changes for a
+    given physical disk and isn't something anyone would want to
+    rename, unlike a label. label, if given, is purely cosmetic - saved
+    via disk_labels for display next to the device name, never used to
+    build any path."""
     result: dict[str, Any] = {"device": device, "success": False}
 
     label = label.strip()
-    if not label:
-        return errors.fail(result, "disks.label_required")
-    if not _VALID_LABEL_RE.match(label):
-        return errors.fail(result, "disks.invalid_label", label=label)
+    if len(label) > disk_labels.MAX_LABEL_LENGTH:
+        return errors.fail(result, "disks.label_too_long", max_length=disk_labels.MAX_LABEL_LENGTH)
 
     safety = check_disk_safe_to_modify(device)
     if not safety["safe"]:
@@ -336,9 +342,12 @@ def mount_disk(device: str, label: str = "") -> dict[str, Any]:
         return errors.fail(result, "disks.no_filesystem", device=device)
 
     target = f"/dev/{state['device_node']}"
-    mount_result = _mount_and_persist(target, state["fstype"], label or _default_mount_name(device))
+    mount_result = _mount_and_persist(target, state["fstype"], _default_mount_name(device))
     if not mount_result["success"]:
         return errors.propagate(result, mount_result)
+
+    if label:
+        disk_labels.set_label(_disk_serial(device), label)
 
     result["success"] = True
     result["mount_point"] = mount_result["mount_point"]
@@ -483,17 +492,20 @@ def format_disk(device: str, filesystem: str, label: str = "", auto_mount: bool 
     if either step fails, that failure comes back as a warning on an
     otherwise-successful result, not a hard failure - the disk is
     correctly formatted either way, and can always be mounted by hand
-    afterward."""
+    afterward.
+
+    label, if given, is purely cosmetic (see mount_disk's docstring for
+    why it's decoupled from the mount path itself) - saved via
+    disk_labels once the format succeeds, never used to name anything
+    on disk."""
     result: dict[str, Any] = {"device": device, "filesystem": filesystem, "success": False}
 
     if filesystem not in SUPPORTED_FILESYSTEMS:
         return errors.fail(result, "disks.unsupported_filesystem", filesystem=filesystem)
 
     label = label.strip()
-    if auto_mount and not label:
-        return errors.fail(result, "disks.label_required")
-    if label and not _VALID_LABEL_RE.match(label):
-        return errors.fail(result, "disks.invalid_label", label=label)
+    if len(label) > disk_labels.MAX_LABEL_LENGTH:
+        return errors.fail(result, "disks.label_too_long", max_length=disk_labels.MAX_LABEL_LENGTH)
 
     safety = check_disk_safe_to_modify(device)
     if not safety["safe"]:
@@ -554,8 +566,11 @@ def format_disk(device: str, filesystem: str, label: str = "", auto_mount: bool 
     result["success"] = True
     result["partition"] = partition
 
+    if label:
+        disk_labels.set_label(_disk_serial(device), label)
+
     if auto_mount:
-        mount_result = _mount_and_persist(partition, filesystem, label or _default_mount_name(device))
+        mount_result = _mount_and_persist(partition, filesystem, _default_mount_name(device))
         result["mount_point"] = mount_result.get("mount_point")
         if not mount_result["success"]:
             errors.warn(result, mount_result["error_code"], **mount_result.get("error_context", {}))

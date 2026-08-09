@@ -101,11 +101,16 @@ def list_share_locations() -> list[dict[str, Any]]:
     needs this, disk_mutate has no reason to know shares exist at all."""
     from nas_monitor import disk_mutate
 
-    locations: list[dict[str, Any]] = [{"path": BASE_SHARE_PATH, "disk": None, "fstype": None}]
+    locations: list[dict[str, Any]] = [{"path": BASE_SHARE_PATH, "disk": None, "fstype": None, "label": ""}]
     for disk in disk_mutate.list_manageable_disks():
         mount_point = disk.get("mount_point") or ""
         if disk.get("mounted") and mount_point.startswith(disk_mutate.MOUNT_BASE + os.sep):
-            locations.append({"path": mount_point, "disk": disk["name"], "fstype": disk.get("fstype")})
+            locations.append({
+                "path": mount_point,
+                "disk": disk["name"],
+                "fstype": disk.get("fstype"),
+                "label": disk.get("label", ""),
+            })
     return locations
 
 

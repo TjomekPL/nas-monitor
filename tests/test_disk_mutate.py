@@ -382,7 +382,7 @@ class TestMountDisk(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "disks.is_mounted")
 
-    def test_mounts_existing_filesystem_on_a_partition(self):
+    def test_mounts_at_serial_based_path_regardless_of_label(self):
         def lsblk_for_call(args):
             if "PKNAME" in args:
                 return (0, "sda\n", "")
@@ -397,37 +397,54 @@ class TestMountDisk(unittest.TestCase):
             "blkid": (0, "1234-ABCD-uuid\n", ""),
             "mount": (0, "", ""),
         }
+        disks_with_serial = [dict(d) for d in DISKS]
+        disks_with_serial[2]["serial"] = "G0Z056222"  # sdc
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
-             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
-             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]):
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=disks_with_serial), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate.disk_labels, "set_label") as mock_set_label:
+            # a label IS given, but must never influence the path itself
+            # (his explicit design call, v0.14.4) - it only gets saved
+            # as a cosmetic display name via disk_labels
             result = disk_mutate.mount_disk("/dev/sdc", label="dane")
 
         self.assertTrue(result["success"], result)
-        self.assertEqual(result["mount_point"], os.path.join(self.mount_base, "dane"))
-        # _mount_and_persist's `mount` call takes just the target path
-        # (relies on the fstab entry it just wrote to resolve the
-        # source) - the partition is what matters in the fstab entry
-        # and the blkid lookup, not the mount invocation itself.
+        self.assertEqual(result["mount_point"], os.path.join(self.mount_base, "G0Z056222"))
+        mock_set_label.assert_called_once_with("G0Z056222", "dane")
         with open(self.fstab_path) as f:
             fstab_content = f.read()
         self.assertIn("1234-ABCD-uuid", fstab_content)
         blkid_call = next(c for c in mock_run.call_args_list if os.path.basename(c.args[0][0]) == "blkid")
         self.assertIn("/dev/sdc1", blkid_call.args[0])
 
-    def test_rejects_invalid_label(self):
-        result = disk_mutate.mount_disk("/dev/sdc", label="bad label!")
+    def test_rejects_overly_long_label(self):
+        result = disk_mutate.mount_disk("/dev/sdc", label="x" * 100)
         self.assertFalse(result["success"])
-        self.assertEqual(result["error_code"], "disks.invalid_label")
+        self.assertEqual(result["error_code"], "disks.label_too_long")
 
-    def test_rejects_missing_label(self):
-        # Mount is non-destructive, but the mount point's *name* is
-        # meant to be a deliberate, stable choice (v0.13.7 - his
-        # preference against ever silently falling back to something
-        # like a serial number without being asked first).
-        result = disk_mutate.mount_disk("/dev/sdc")
-        self.assertFalse(result["success"])
-        self.assertEqual(result["error_code"], "disks.label_required")
+    def test_label_is_entirely_optional(self):
+        # No label at all is completely fine now - mounting always uses
+        # the serial (or disk name, with no serial available in this
+        # fixture) regardless, so there's nothing a label is required
+        # for anymore.
+        def lsblk_for_call(args):
+            if "PKNAME" in args:
+                return (0, "sda\n", "")
+            device = args[-1] if args and args[-1].startswith("/dev/") else None
+            if device == "/dev/sdc":
+                return (0, '{"blockdevices": [{"name": "sdc", "fstype": null, "mountpoint": null, "children": [{"name": "sdc1", "fstype": "ext4", "mountpoint": null}]}]}', "")
+            return (0, LSBLK_MOUNT_JSON, "")
+
+        responses = {"findmnt": (0, "/dev/sda2\n", ""), "lsblk": lsblk_for_call, "blkid": (0, "1234-ABCD-uuid\n", ""), "mount": (0, "", "")}
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]):
+            result = disk_mutate.mount_disk("/dev/sdc")
+
+        self.assertTrue(result["success"], result)
+        self.assertEqual(result["mount_point"], os.path.join(self.mount_base, "sdc"))  # no serial in fixture -> falls back to disk name
 
 
 class TestUnmountDisk(unittest.TestCase):
@@ -609,11 +626,6 @@ class TestFormatDisk(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "disks.unsupported_filesystem")
 
-    def test_rejects_invalid_label(self):
-        result = disk_mutate.format_disk("/dev/sdc", "ext4", label="not a valid label!")
-        self.assertFalse(result["success"])
-        self.assertEqual(result["error_code"], "disks.invalid_label")
-
     def test_passes_label_to_mkfs(self):
         responses = {
             "findmnt": (0, "/dev/sda2\n", ""),
@@ -666,17 +678,22 @@ class TestFormatDisk(unittest.TestCase):
             "blkid": (0, "1234-ABCD-uuid\n", ""),
             "mount": (0, "", ""),
         }
+        disks_with_serial = [dict(d) for d in DISKS]
+        disks_with_serial[2]["serial"] = "G0Z056222"  # sdc
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
-             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=disks_with_serial), \
              mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
-             mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub):
+             mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub), \
+             mock.patch.object(disk_mutate.disk_labels, "set_label") as mock_set_label:
+            # a label IS given, but must never influence the path itself
             result = disk_mutate.format_disk("/dev/sdc", "ext4", label="dane")
 
         self.assertTrue(result["success"])
         self.assertNotIn("warnings", result)
-        self.assertEqual(result["mount_point"], os.path.join(self.mount_base, "dane"))
+        self.assertEqual(result["mount_point"], os.path.join(self.mount_base, "G0Z056222"))
         self.assertTrue(os.path.isdir(result["mount_point"]))
+        mock_set_label.assert_called_once_with("G0Z056222", "dane")
         with open(self.fstab_path) as f:
             fstab_content = f.read()
         self.assertIn("1234-ABCD-uuid", fstab_content)
@@ -685,7 +702,7 @@ class TestFormatDisk(unittest.TestCase):
         mount_call = next(c for c in mock_run.call_args_list if os.path.basename(c.args[0][0]) == "mount")
         self.assertIn(result["mount_point"], mount_call.args[0])
 
-    def test_auto_mount_uses_disk_name_when_no_label_given(self):
+    def test_auto_mount_uses_disk_name_when_no_serial_or_label(self):
         responses = {
             "findmnt": (0, "/dev/sda2\n", ""),
             "lsblk": _lsblk_handler,
@@ -700,19 +717,17 @@ class TestFormatDisk(unittest.TestCase):
              mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
              mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
              mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub):
-            result = disk_mutate.format_disk("/dev/sdc", "ext4", label="dane")  # label now required whenever auto_mount is on
+            # No label at all - completely fine now (v0.14.4), never
+            # required, since the mount path never came from it anyway.
+            result = disk_mutate.format_disk("/dev/sdc", "ext4")
 
-        self.assertEqual(result["mount_point"], os.path.join(self.mount_base, "dane"))
+        self.assertTrue(result["success"])
+        self.assertEqual(result["mount_point"], os.path.join(self.mount_base, "sdc"))
 
-    def test_rejects_missing_label_when_auto_mount_is_on(self):
-        # His explicit preference (v0.13.7): require a deliberate label
-        # rather than silently falling back to anything (device name or
-        # serial) - only relevant when a mount is actually about to
-        # happen; auto_mount=False (see the earlier test) still needs no
-        # label at all, since nothing gets mounted in that case.
-        result = disk_mutate.format_disk("/dev/sdc", "ext4")  # no label, auto_mount defaults True
+    def test_rejects_overly_long_label(self):
+        result = disk_mutate.format_disk("/dev/sdc", "ext4", label="x" * 100)
         self.assertFalse(result["success"])
-        self.assertEqual(result["error_code"], "disks.label_required")
+        self.assertEqual(result["error_code"], "disks.label_too_long")
 
     def test_auto_mount_failure_is_a_warning_not_a_failure(self):
         # blkid failing (or missing) means no UUID, which means no safe

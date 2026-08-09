@@ -376,7 +376,7 @@ class TestListShareLocations(unittest.TestCase):
     def test_always_includes_the_default_location(self, mock_smb):
         with mock.patch("nas_monitor.disk_mutate.list_manageable_disks", return_value=[]):
             locations = smb_shares.list_share_locations()
-        self.assertEqual(locations, [{"path": smb_shares.BASE_SHARE_PATH, "disk": None, "fstype": None}])
+        self.assertEqual(locations, [{"path": smb_shares.BASE_SHARE_PATH, "disk": None, "fstype": None, "label": ""}])
 
     def test_includes_disks_mounted_under_mount_base(self, mock_smb):
         disks = [

@@ -710,12 +710,13 @@ function renderRawDisks(disks) {
     return;
   }
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr><th>${t("ui.rawDisks.colName")}</th><th>${t("ui.rawDisks.colSize")}</th><th>${t("ui.rawDisks.colModel")}</th><th>${t("ui.rawDisks.colSerial")}</th><th>${t("ui.rawDisks.colFstype")}</th><th>${t("ui.rawDisks.colStatus")}</th><th></th></tr></thead>`;
+  table.innerHTML = `<thead><tr><th>${t("ui.rawDisks.colName")}</th><th>${t("ui.rawDisks.colLabel")}</th><th>${t("ui.rawDisks.colSize")}</th><th>${t("ui.rawDisks.colModel")}</th><th>${t("ui.rawDisks.colSerial")}</th><th>${t("ui.rawDisks.colFstype")}</th><th>${t("ui.rawDisks.colStatus")}</th><th></th></tr></thead>`;
   const tbody = document.createElement("tbody");
   for (const d of disks) {
     const row = document.createElement("tr");
     row.innerHTML = `
       <td class="mono">${d.name}</td>
+      <td>${d.label || ""}</td>
       <td>${d.size}</td>
       <td>${d.model}${d.transport === "usb" ? ` <span class="pill pill-warn">USB</span>` : ""}</td>
       <td class="mono">${d.serial}</td>
@@ -904,17 +905,18 @@ function openDiskActionDialog(disk, kind) {
   // that warning belongs in the future Arrays/RAID creation flow
   // instead (see ui.diskActionDialog.usbWarning, kept for reuse there).
   diskActionConfirmLabel.textContent = t("ui.diskActionDialog.confirmLabel", { name: disk.name });
-  diskActionSubmitBtn.disabled = true;
+  diskActionSubmitBtn.disabled = !diskActionCanSubmit();
   diskActionDialog.showModal();
 }
 
 function diskActionCanSubmit() {
   if (!diskActionState) return false;
   const { name, kind } = diskActionState;
-  const labelFilled = Boolean(diskActionLabelInput.value.trim());
-  if (kind === "mount") return labelFilled;
+  // Label is purely cosmetic now (v0.14.4) - never required, since it
+  // no longer determines the mount path (always /srv/<serial>).
+  if (kind === "mount") return true;
   const nameConfirmed = diskActionConfirmInput.value.trim() === name;
-  if (kind === "format") return nameConfirmed && labelFilled;
+  if (kind === "format") return nameConfirmed;
   return nameConfirmed; // wipe
 }
 
@@ -1829,6 +1831,15 @@ shareLocationSelect.addEventListener("change", () => {
 });
 
 const RECOVERABLE_MAX_LEAF = 15;
+// A small buffer above the leaf threshold before bucketing kicks in
+// at all - his call: 15 items and 19 items don't feel meaningfully
+// different to scan by eye, so grouping only 4 over threshold just
+// adds a click for no real benefit. Only the flat-vs-bucketed
+// decision uses this; once bucketing has actually started, each
+// individual bucket still targets RECOVERABLE_MAX_LEAF on its own
+// (no buffer at that point - keeping this simple for now, per his
+// note that the deeper mechanism can be refined later if it matters).
+const RECOVERABLE_LEAF_BUFFER = 4;
 const RECOVERABLE_MAX_BUTTONS = 8;
 
 function recoverableRangeLabel(a, b) {
@@ -1863,7 +1874,7 @@ function recoverableRangeLabel(a, b) {
 // names cluster unevenly (e.g. many folders starting with the same
 // letter).
 function buildRecoverableTree(items) {
-  if (items.length <= RECOVERABLE_MAX_LEAF) return { leaf: true, items };
+  if (items.length <= RECOVERABLE_MAX_LEAF + RECOVERABLE_LEAF_BUFFER) return { leaf: true, items };
   const groupCount = Math.min(RECOVERABLE_MAX_BUTTONS, Math.ceil(items.length / RECOVERABLE_MAX_LEAF));
   const size = Math.ceil(items.length / groupCount);
   const groups = [];
@@ -1969,7 +1980,9 @@ async function loadShareLocations() {
       const opt = document.createElement("option");
       opt.value = loc.path;
       opt.textContent = loc.disk
-        ? t("ui.shareDialog.locationDisk", { path: loc.path, disk: loc.disk, fstype: loc.fstype || "?" })
+        ? t(loc.label ? "ui.shareDialog.locationDiskLabeled" : "ui.shareDialog.locationDisk", {
+            path: loc.path, disk: loc.disk, fstype: loc.fstype || "?", label: loc.label || "",
+          })
         : t("ui.shareDialog.locationDefault", { path: loc.path });
       shareLocationSelect.appendChild(opt);
     }
