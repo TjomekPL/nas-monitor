@@ -118,5 +118,80 @@ class TestCreateRaidArray(unittest.TestCase):
         self.assertEqual(result["error_code"], "system.command_failed")
 
 
+class TestDetachMember(unittest.TestCase):
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value=None)
+    def test_reports_missing_mdadm_tool(self, mock_find):
+        result = raid_mutate.detach_member("md0", "/dev/sdb")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.tool_missing")
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_fails_then_removes_the_device(self, mock_run, mock_find):
+        mock_run.return_value = (0, "", "")
+        result = raid_mutate.detach_member("md0", "/dev/sdb")
+        self.assertTrue(result["success"])
+        mock_run.assert_any_call(["/sbin/mdadm", "--manage", "/dev/md0", "--fail", "/dev/sdb"], timeout=30)
+        mock_run.assert_any_call(["/sbin/mdadm", "--manage", "/dev/md0", "--remove", "/dev/sdb"], timeout=30)
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_tolerates_fail_no_op_but_not_remove_failure(self, mock_run, mock_find):
+        # --fail can legitimately no-op (device already gone/marked
+        # failed) - only --remove actually failing should be an error.
+        mock_run.side_effect = [(1, "", "mdadm: set device faulty failed"), (0, "", "")]
+        result = raid_mutate.detach_member("md0", "/dev/sdb")
+        self.assertTrue(result["success"])
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_surfaces_remove_failure(self, mock_run, mock_find):
+        mock_run.side_effect = [(0, "", ""), (1, "", "mdadm: hot remove failed for /dev/sdb: Device or resource busy")]
+        result = raid_mutate.detach_member("md0", "/dev/sdb")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+
+
+class TestAddMember(unittest.TestCase):
+    def test_rejects_a_device_this_tool_does_not_manage(self):
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=FREE_DISKS):
+            result = raid_mutate.add_member("md0", "/dev/sdzz")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "raid.unknown_device")
+
+    def test_rejects_a_device_that_is_not_free(self):
+        disks = [dict(d) for d in FREE_DISKS]
+        disks[0]["fstype"] = "ext4"
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=disks):
+            result = raid_mutate.add_member("md0", "/dev/sdb")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "raid.device_not_free")
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value=None)
+    def test_reports_missing_mdadm_tool(self, mock_find):
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=FREE_DISKS):
+            result = raid_mutate.add_member("md0", "/dev/sdb")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.tool_missing")
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_adds_the_device(self, mock_run, mock_find):
+        mock_run.return_value = (0, "", "")
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=FREE_DISKS):
+            result = raid_mutate.add_member("md0", "/dev/sdb")
+        self.assertTrue(result["success"])
+        mock_run.assert_called_once_with(["/sbin/mdadm", "--manage", "/dev/md0", "--add", "/dev/sdb"], timeout=30)
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_surfaces_add_failure(self, mock_run, mock_find):
+        mock_run.return_value = (1, "", "mdadm: add new device failed for /dev/sdb: Invalid argument")
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=FREE_DISKS):
+            result = raid_mutate.add_member("md0", "/dev/sdb")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+
+
 if __name__ == "__main__":
     unittest.main()

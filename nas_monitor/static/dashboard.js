@@ -712,8 +712,38 @@ function renderRawDisks(disks) {
   const table = document.createElement("table");
   table.innerHTML = `<thead><tr><th>${t("ui.rawDisks.colName")}</th><th>${t("ui.rawDisks.colLabel")}</th><th>${t("ui.rawDisks.colSize")}</th><th>${t("ui.rawDisks.colModel")}</th><th>${t("ui.rawDisks.colSerial")}</th><th>${t("ui.rawDisks.colFstype")}</th><th>${t("ui.rawDisks.colStatus")}</th><th></th></tr></thead>`;
   const tbody = document.createElement("tbody");
+
+  // Arrays first, each immediately followed by its own member disks
+  // (indented) - his explicit want, so a member's relationship to its
+  // array is visible at a glance instead of being scattered through
+  // the table in whatever order lsblk happened to report disks.
+  // Everything else (standalone disks, and any member whose array
+  // isn't in this same list for some reason) keeps its original
+  // relative order at the end.
+  const arrays = disks.filter((d) => d.transport === "raid");
+  const membersByArray = new Map();
   for (const d of disks) {
+    if (d.is_raid_member && d.raid_array) {
+      if (!membersByArray.has(d.raid_array)) membersByArray.set(d.raid_array, []);
+      membersByArray.get(d.raid_array).push(d);
+    }
+  }
+  const arrayNames = new Set(arrays.map((a) => a.name));
+  const ordered = [];
+  for (const arr of arrays) {
+    ordered.push(arr);
+    for (const member of membersByArray.get(arr.name) || []) ordered.push(member);
+  }
+  for (const d of disks) {
+    if (d.transport === "raid") continue;
+    if (d.is_raid_member && d.raid_array && arrayNames.has(d.raid_array)) continue; // already placed under its array above
+    ordered.push(d);
+  }
+
+  for (const d of ordered) {
     const row = document.createElement("tr");
+    const isMember = d.is_raid_member && d.raid_array && arrayNames.has(d.raid_array);
+    if (isMember) row.className = "disk-row-member";
     row.innerHTML = `
       <td class="mono">${d.name}</td>
       <td>${d.label || ""}</td>
@@ -723,24 +753,29 @@ function renderRawDisks(disks) {
       <td class="mono">${d.fstype || t("ui.rawDisks.fstypeNone")}</td>
     `;
 
-    // Status + actions depend on the same three states, so they're
-    // decided together: a RAID member is only ever shown as such here
-    // (managing RAID membership is the future Arrays section's job,
-    // not this table's); a disk mounted under /srv/ shows where and
-    // offers Unmount (unmountDisk is shared with renderDisks - one
-    // implementation, two entry points to it); anything unmounted
-    // splits further - a disk with no filesystem at all is genuinely
-    // Free (Format/Wipe make sense, nothing to just mount), but a disk
-    // that already has one just needs Mount, not the "Free" label a
-    // real report called misleading (it implied Format/Wipe were the
-    // only options, when the disk's existing data could just be
-    // brought online as-is).
     const statusCell = document.createElement("td");
     const actions = document.createElement("td");
     actions.className = "row-actions";
 
-    if (d.is_raid_member) {
-      statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusRaidMember")}</span>`;
+    if (isMember) {
+      // A member disk's own Format/Wipe/Mount never make sense (its
+      // filesystem-shaped content is the array's, not something to
+      // manage on its own) - the only thing that belongs here is
+      // deliberately pulling it out (his explicit want: "Detach"),
+      // e.g. before physically swapping it. Repair (adding a
+      // replacement) lives on the ARRAY's own row instead, below.
+      statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusRaidMember", { array: d.raid_array })}</span>`;
+      const detachBtn = document.createElement("button");
+      detachBtn.type = "button";
+      detachBtn.className = "link-btn danger";
+      detachBtn.textContent = t("ui.rawDisks.detachBtn");
+      detachBtn.addEventListener("click", () => detachRaidMember(d));
+      actions.appendChild(detachBtn);
+    } else if (d.is_raid_member) {
+      // Fallback for the rare case a member's own array didn't come
+      // back in this same list (detection hiccup) - no action makes
+      // sense without knowing which array to operate on.
+      statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusRaidMemberUnknownArray")}</span>`;
     } else if (d.mounted) {
       statusCell.innerHTML = `<span class="pill pill-ok">${t("ui.rawDisks.statusMounted")}</span> <span class="mono">${d.mount_point || ""}</span>`;
       // Unmount is offered regardless of where the disk happens to be
@@ -813,12 +848,107 @@ function renderRawDisks(disks) {
       actions.appendChild(wipeBtn);
     }
 
+    if (d.transport === "raid") {
+      // Repair - adding a disk to replace a missing/failed member
+      // (his real scenario) - deliberately available regardless of
+      // the array's own format/mount state, since a degraded array
+      // needing a replacement disk is completely independent of
+      // whether it currently has a filesystem or is mounted.
+      const repairBtn = document.createElement("button");
+      repairBtn.type = "button";
+      repairBtn.className = "link-btn";
+      repairBtn.textContent = t("ui.rawDisks.repairBtn");
+      repairBtn.addEventListener("click", () => openRaidRepairPicker(d, repairBtn));
+      actions.appendChild(repairBtn);
+    }
+
     row.appendChild(statusCell);
     row.appendChild(actions);
     tbody.appendChild(row);
   }
   table.appendChild(tbody);
   rawDisksContainer.appendChild(table);
+}
+
+async function detachRaidMember(disk) {
+  const confirmed = await confirmDialog(t("msg.confirmDetachRaidMember", { device: disk.name, array: disk.raid_array }), { danger: true });
+  if (!confirmed) return;
+  try {
+    const res = await fetch(`/api/raid/${encodeURIComponent(disk.raid_array)}/detach`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ device: disk.path }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      showToast(apiErrorMessage(data, res), true);
+      return;
+    }
+    await refresh();
+    await loadRawDisks();
+  } catch (err) {
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
+  }
+}
+
+async function openRaidRepairPicker(array, anchorBtn) {
+  await fetchManageableDisks();
+  const freeDisks = (lastManageableDisksData || []).filter(
+    (d) => !d.fstype && !d.mounted && !d.is_raid_member && d.transport !== "raid"
+  );
+  if (!freeDisks.length) {
+    showToast(t("msg.noFreeDisksForRepair"), true);
+    return;
+  }
+
+  const picker = document.createElement("select");
+  picker.className = "grant-picker";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = t("ui.shareDialog.pickPlaceholder");
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  picker.appendChild(placeholder);
+  for (const disk of freeDisks) {
+    const opt = document.createElement("option");
+    opt.value = disk.path;
+    opt.textContent = `${disk.name} - ${disk.size}, ${disk.model}`;
+    picker.appendChild(opt);
+  }
+
+  function closePicker() {
+    if (picker.isConnected) picker.remove();
+    anchorBtn.style.display = "inline-block";
+  }
+
+  picker.addEventListener("change", async () => {
+    const device = picker.value;
+    closePicker();
+    if (!device) return;
+    const confirmed = await confirmDialog(t("msg.confirmRepairRaid", { array: array.name, device }), { danger: true });
+    if (!confirmed) return;
+    try {
+      const res = await fetch(`/api/raid/${encodeURIComponent(array.name)}/add`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showToast(apiErrorMessage(data, res), true);
+        return;
+      }
+      showToast(t("msg.raidRepairStarted", { array: array.name }));
+      await refresh();
+      await loadRawDisks();
+    } catch (err) {
+      showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
+    }
+  });
+  picker.addEventListener("blur", closePicker);
+  anchorBtn.insertAdjacentElement("afterend", picker);
+  anchorBtn.style.display = "none";
+  picker.focus();
 }
 
 const addRaidBtn = document.getElementById("add-raid-btn");

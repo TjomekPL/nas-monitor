@@ -178,6 +178,32 @@ def api_raid_create():
     return jsonify({"success": True, "name": result["name"], "path": result["path"]})
 
 
+@app.route("/api/raid/<array_name>/detach", methods=["POST"])
+def api_raid_detach(array_name):
+    data = request.get_json(force=True, silent=True) or {}
+    device = (data.get("device") or "").strip()
+
+    result = raid_mutate.detach_member(array_name, device)
+    if not result["success"]:
+        oplog.log_event("raid", "detach", "failure", params={"array": array_name, "device": device})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("raid", "detach", "success", params={"array": array_name, "device": device})
+    return jsonify({"success": True})
+
+
+@app.route("/api/raid/<array_name>/add", methods=["POST"])
+def api_raid_add(array_name):
+    data = request.get_json(force=True, silent=True) or {}
+    device = (data.get("device") or "").strip()
+
+    result = raid_mutate.add_member(array_name, device)
+    if not result["success"]:
+        oplog.log_event("raid", "add_member", "failure", params={"array": array_name, "device": device})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("raid", "add_member", "success", params={"array": array_name, "device": device})
+    return jsonify({"success": True})
+
+
 @app.route("/api/layout/<section>")
 def api_layout_get(section):
     return jsonify({"order": layout.get_order(section)})

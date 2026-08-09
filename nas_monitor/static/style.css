@@ -601,6 +601,16 @@ h2 {
   padding: 10px 14px;
   border-top: 1px solid var(--border);
 }
+.disk-row-member td:first-child {
+  padding-left: 32px;
+  position: relative;
+}
+.disk-row-member td:first-child::before {
+  content: "\21b3";
+  position: absolute;
+  left: 12px;
+  color: var(--text-muted);
+}
 .share-group-table {
   table-layout: fixed;
 }

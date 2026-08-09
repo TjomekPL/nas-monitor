@@ -98,3 +98,61 @@ def create_raid_array(devices: list[str], level: str) -> dict[str, Any]:
     result["name"] = array_name
     result["path"] = f"/dev/{array_name}"
     return result
+
+
+def detach_member(array_name: str, device: str) -> dict[str, Any]:
+    """Removes a disk from a RAID array - mdadm requires a member to be
+    marked failed before it can be removed, so this does both in
+    sequence (his explicit want: a per-member "Detach" action, for
+    deliberately pulling a disk rather than waiting for it to fail on
+    its own - e.g. before physically swapping it out). The array
+    itself keeps running afterward on its remaining members, degraded
+    by one - this never touches the array as a whole, only this one
+    member's participation in it. --fail is allowed to no-op (a
+    disk that's already gone/marked failed has nothing left to fail);
+    only --remove actually failing is treated as an error."""
+    result: dict[str, Any] = {"success": False}
+
+    mdadm_path = system_tools.find_binary("mdadm")
+    if mdadm_path is None:
+        return errors.tool_missing(result, "mdadm")
+
+    array_path = f"/dev/{array_name}"
+    system_tools.run([mdadm_path, "--manage", array_path, "--fail", device], timeout=30)
+    code, out, err = system_tools.run([mdadm_path, "--manage", array_path, "--remove", device], timeout=30)
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "mdadm")
+
+    result["success"] = True
+    return result
+
+
+def add_member(array_name: str, device: str) -> dict[str, Any]:
+    """Adds a disk to an existing array - the repair/replace flow (his
+    real scenario: an array missing a disk, wanting to add a new one
+    back in). mdadm automatically starts rebuilding onto it if the
+    array is currently degraded; if the array's already at full
+    strength, it's added as a spare instead. The device must be
+    genuinely free - the same checks create_raid_array uses, since
+    adding a disk that still has real data on it would destroy that
+    data without any of that function's up-front confirmation."""
+    result: dict[str, Any] = {"success": False}
+
+    known = {d["path"]: d for d in disk_mutate.list_manageable_disks()}
+    disk = known.get(device)
+    if disk is None:
+        return errors.fail(result, "raid.unknown_device", device=device)
+    if disk.get("fstype") or disk.get("mounted") or disk.get("is_raid_member"):
+        return errors.fail(result, "raid.device_not_free", device=device)
+
+    mdadm_path = system_tools.find_binary("mdadm")
+    if mdadm_path is None:
+        return errors.tool_missing(result, "mdadm")
+
+    array_path = f"/dev/{array_name}"
+    code, out, err = system_tools.run([mdadm_path, "--manage", array_path, "--add", device], timeout=30)
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "mdadm")
+
+    result["success"] = True
+    return result

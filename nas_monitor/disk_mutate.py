@@ -192,6 +192,20 @@ def _raid_member_disk_names() -> set[str]:
     return members
 
 
+def _raid_member_to_array_map() -> dict[str, str]:
+    """Maps each RAID member disk's name to the array it belongs to -
+    e.g. {"sdb": "md0", "sdc": "md0"}. Used to group member disks under
+    their array in the management table, and to know which array a
+    "detach" action on a given disk should actually operate on."""
+    mapping: dict[str, str] = {}
+    for array in monitor.get_raid_arrays():
+        for dev in array.get("devices", []):
+            path = dev.get("device")
+            if path:
+                mapping[_disk_name(path)] = array["name"]
+    return mapping
+
+
 def _disk_state(device: str) -> dict[str, Any]:
     """One lsblk call per disk covering fstype, mountpoint, and the
     actual device-node name carrying them (whichever partition, or the
@@ -279,12 +293,23 @@ def list_manageable_raid_arrays() -> list[dict[str, Any]]:
             state = _disk_state(arr["path"])
         except Exception:
             state = {"fstype": None, "mountpoint": None}
-        member_count = len(arr.get("devices") or [])
+        # devices comes straight from monitor.get_raid_arrays() (mdadm
+        # --detail --export, or the /proc/mdstat fallback) - working_devices
+        # falls back to it if the device list itself came back empty for
+        # some reason (e.g. a transient mdadm hiccup right after
+        # --create), so the count shown here doesn't silently regress to
+        # "(0 disks)" when the array card elsewhere still knows the real
+        # number.
+        member_count = len(arr.get("devices") or []) or arr.get("working_devices") or 0
+        # arr["level"] is already a full string ("raid0", "raid5", ...)
+        # from mdadm/mdstat, not a bare number - a real display bug from
+        # prepending "RAID" again on top of it ("RAIDraid0").
+        level_label = (arr.get("level") or "?").upper()
         arrays.append({
             "name": arr["name"],
             "path": arr["path"],
             "size": size,
-            "model": f"RAID{arr.get('level', '?')} ({member_count} {'disk' if member_count == 1 else 'disks'})",
+            "model": f"{level_label} ({member_count} {'disk' if member_count == 1 else 'disks'})",
             "serial": arr["name"],  # arrays have no serial of their own - the /dev/mdN name is the stable identifier instead
             "transport": "raid",
             "fstype": state["fstype"],
@@ -346,7 +371,7 @@ def list_manageable_disks() -> list[dict[str, Any]]:
     none at all (RAID members - that's the future Arrays section's
     job) - make sense for that row."""
     boot_disk = _boot_disk_name()
-    raid_members = _raid_member_disk_names()
+    raid_member_map = _raid_member_to_array_map()
 
     manageable = []
     for disk in monitor.list_disks():
@@ -368,7 +393,8 @@ def list_manageable_disks() -> list[dict[str, Any]]:
         disk["fstype"] = state["fstype"]
         disk["mount_point"] = state["mountpoint"]
         disk["mounted"] = bool(state["mountpoint"])
-        disk["is_raid_member"] = disk["name"] in raid_members
+        disk["is_raid_member"] = disk["name"] in raid_member_map
+        disk["raid_array"] = raid_member_map.get(disk["name"])
         disk["label"] = disk_labels.get_label(disk.get("serial", ""))
         manageable.append(disk)
     return manageable

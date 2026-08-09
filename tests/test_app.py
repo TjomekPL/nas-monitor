@@ -101,5 +101,45 @@ class TestApiDiskUnmount(unittest.TestCase):
         mock_delete.assert_not_called()
 
 
+class TestApiRaidRoutes(unittest.TestCase):
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.client = app_module.app.test_client()
+
+    def test_create_success(self):
+        with mock.patch.object(app_module.raid_mutate, "create_raid_array",
+                                return_value={"success": True, "name": "md0", "path": "/dev/md0"}) as mock_create:
+            res = self.client.post("/api/raid/create", json={"devices": ["/dev/sdb", "/dev/sdc"], "level": "1"})
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.get_json(), {"success": True, "name": "md0", "path": "/dev/md0"})
+        mock_create.assert_called_once_with(["/dev/sdb", "/dev/sdc"], "1")
+
+    def test_create_failure_returns_400_with_error_code(self):
+        with mock.patch.object(app_module.raid_mutate, "create_raid_array",
+                                return_value={"success": False, "error_code": "raid.not_enough_devices", "error_context": {}}):
+            res = self.client.post("/api/raid/create", json={"devices": ["/dev/sdb"], "level": "5"})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.get_json()["error_code"], "raid.not_enough_devices")
+
+    def test_detach_success(self):
+        with mock.patch.object(app_module.raid_mutate, "detach_member", return_value={"success": True}) as mock_detach:
+            res = self.client.post("/api/raid/md0/detach", json={"device": "/dev/sdb"})
+        self.assertEqual(res.status_code, 200)
+        mock_detach.assert_called_once_with("md0", "/dev/sdb")
+
+    def test_add_success(self):
+        with mock.patch.object(app_module.raid_mutate, "add_member", return_value={"success": True}) as mock_add:
+            res = self.client.post("/api/raid/md0/add", json={"device": "/dev/sdb"})
+        self.assertEqual(res.status_code, 200)
+        mock_add.assert_called_once_with("md0", "/dev/sdb")
+
+    def test_add_failure_returns_400(self):
+        with mock.patch.object(app_module.raid_mutate, "add_member",
+                                return_value={"success": False, "error_code": "raid.device_not_free", "error_context": {"device": "/dev/sdb"}}):
+            res = self.client.post("/api/raid/md0/add", json={"device": "/dev/sdb"})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.get_json()["error_code"], "raid.device_not_free")
+
+
 if __name__ == "__main__":
     unittest.main()

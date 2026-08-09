@@ -177,7 +177,7 @@ class TestDiskState(unittest.TestCase):
 
 class TestListManageableRaidArrays(unittest.TestCase):
     def test_shape_matches_manageable_disks_for_shared_ui_rendering(self):
-        arrays = [{"name": "md0", "path": "/dev/md0", "level": "5", "devices": [{"device": "/dev/sdb"}, {"device": "/dev/sdc"}, {"device": "/dev/sdd"}], "error": None}]
+        arrays = [{"name": "md0", "path": "/dev/md0", "level": "raid5", "devices": [{"device": "/dev/sdb"}, {"device": "/dev/sdc"}, {"device": "/dev/sdd"}], "error": None}]
         lsblk_json = '{"blockdevices": [{"name": "md0", "fstype": "ext4", "mountpoint": "/srv/md0", "children": []}]}'
         size_json = '{"blockdevices": [{"size": 4000000000000}]}'
 
@@ -206,6 +206,28 @@ class TestListManageableRaidArrays(unittest.TestCase):
         # them identically without special-casing
         for key in ("name", "path", "size", "model", "serial", "transport", "fstype", "mount_point", "mounted", "is_raid_member", "label"):
             self.assertIn(key, entry)
+
+    def test_model_does_not_double_up_the_raid_prefix(self):
+        # Real report: arr["level"] from mdadm/mdstat is already a full
+        # string ("raid0", not bare "0"), so prepending "RAID" again on
+        # top of it produced a visible "RAIDraid0" in the table.
+        arrays = [{"name": "md0", "path": "/dev/md0", "level": "raid0", "devices": [{"device": "/dev/sdb"}], "error": None}]
+        with mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=arrays), \
+             mock.patch.object(disk_mutate.system_tools, "find_binary", return_value=None):
+            result = disk_mutate.list_manageable_raid_arrays()
+        self.assertEqual(result[0]["model"], "RAID0 (1 disk)")
+
+    def test_falls_back_to_working_devices_count_when_device_list_is_empty(self):
+        # Real report: right after mdadm --create, the device list came
+        # back empty on one call while the array's own card (a separate
+        # fetch) still correctly showed 5 members - a likely transient
+        # mdadm race, but the count shown here shouldn't regress to
+        # "(0 disks)" when other data already knows the real number.
+        arrays = [{"name": "md0", "path": "/dev/md0", "level": "raid0", "devices": [], "working_devices": 5, "error": None}]
+        with mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=arrays), \
+             mock.patch.object(disk_mutate.system_tools, "find_binary", return_value=None):
+            result = disk_mutate.list_manageable_raid_arrays()
+        self.assertEqual(result[0]["model"], "RAID0 (5 disks)")
 
     def test_skips_an_array_that_failed_detection(self):
         arrays = [{"name": "md0", "path": "/dev/md0", "error": "mdadm not installed"}]
@@ -346,7 +368,7 @@ class TestListManageableDisks(unittest.TestCase):
             "findmnt": (0, "/dev/sda2\n", ""),
             "lsblk": _lsblk_handler,
         }
-        raid_arrays = [{"devices": [{"device": "/dev/sdc1"}]}]
+        raid_arrays = [{"name": "md0", "devices": [{"device": "/dev/sdc1"}]}]
         with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
              mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
@@ -355,7 +377,9 @@ class TestListManageableDisks(unittest.TestCase):
 
         by_name = {d["name"]: d for d in manageable}
         self.assertTrue(by_name["sdc"]["is_raid_member"])
+        self.assertEqual(by_name["sdc"]["raid_array"], "md0")
         self.assertFalse(by_name["sdb"]["is_raid_member"])
+        self.assertIsNone(by_name["sdb"]["raid_array"])
 
     def test_one_disk_state_lookup_failing_does_not_hide_the_others(self):
         # Same regression as monitor.get_full_status()'s equivalent
