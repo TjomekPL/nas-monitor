@@ -1890,6 +1890,33 @@ async function loadShares() {
   }
 }
 
+const POLISH_DIACRITICS = { "ą": "a", "ć": "c", "ę": "e", "ł": "l", "ń": "n", "ó": "o", "ś": "s", "ź": "z", "ż": "z" };
+
+function sanitizeShareName(raw) {
+  // Auto-corrects as you type instead of just rejecting on submit - a
+  // real report: he typed a name with a space and a Polish diacritic
+  // ("Wiesława"), and the space made it invalid while the "ł" was
+  // silently dropped with no explanation once it reached the strict
+  // [a-z0-9_-] pattern share names are limited to (Samba/smb.conf
+  // compatibility reasons, kept as-is here - this only makes typing
+  // toward a valid name smoother, not widens what's ultimately
+  // accepted). Spaces become underscores (his explicit ask); Polish
+  // diacritics transliterate to their closest plain letter rather than
+  // vanishing invisibly; anything else still not in the allowed set
+  // is dropped; must still start with a letter, same as the server.
+  let s = raw.toLowerCase().replace(/[ąćęłńóśźż]/g, (ch) => POLISH_DIACRITICS[ch] || ch);
+  s = s.replace(/\s+/g, "_");
+  s = s.replace(/[^a-z0-9_-]/g, "");
+  s = s.replace(/^[^a-z]+/, "");
+  return s.slice(0, 32);
+}
+
+shareNameInput.addEventListener("input", () => {
+  const sanitized = sanitizeShareName(shareNameInput.value);
+  if (sanitized !== shareNameInput.value) shareNameInput.value = sanitized;
+  updateSharePathPreview();
+});
+
 function updateSharePathPreview() {
   const raw = shareNameInput.value.trim().toLowerCase();
   if (!raw) {
@@ -1899,7 +1926,6 @@ function updateSharePathPreview() {
   const base = shareLocationSelect.value || "/srv";
   sharePathPreview.textContent = t("ui.shareDialog.pathPreview", { path: `${base}/${raw}` });
 }
-shareNameInput.addEventListener("input", updateSharePathPreview);
 shareLocationSelect.addEventListener("change", () => {
   updateSharePathPreview();
   loadRecoverableDirectories();
@@ -2124,6 +2150,15 @@ shareForm.addEventListener("submit", async (ev) => {
     body = { comment, permissions, group_grants: groupGrants };
   } else {
     const name = shareNameInput.value.trim().toLowerCase();
+    // Validated before the confirm dialog even shows (same fix as
+    // group creation, v0.13.4) - shareNameInput.addEventListener
+    // above already sanitizes most invalid input away as it's typed,
+    // but this still catches the empty-after-sanitizing case (e.g. a
+    // name that was nothing but spaces/disallowed characters).
+    if (!/^[a-z][a-z0-9_-]{0,31}$/.test(name)) {
+      shareError.textContent = t("err.shares.invalid_name", { name });
+      return;
+    }
     confirmMsg = t("msg.confirmCreateShare", { name, summary });
     url = "/api/shares/create";
     body = { name, comment, permissions, group_grants: groupGrants, base_path: shareLocationSelect.value || "" };
