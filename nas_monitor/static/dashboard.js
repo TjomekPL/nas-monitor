@@ -1560,22 +1560,30 @@ function groupNameForShare(sharePath) {
     }
     if (!best || loc.path.length > best.path.length) best = loc;
   }
-  if (best && best.disk) return best.label || best.disk;
-  if (best) return t("ui.shares.groupSystemDisk");
+  if (best && best.disk) return { name: best.label || best.disk, warning: false };
+  if (best) return { name: t("ui.shares.groupSystemDisk"), warning: false };
 
-  // No location matched at all - the share lives under some disk/array
-  // that isn't currently reflected in lastShareLocationsData
-  // (unmounted right now, or not yet recognized). If the path has an
-  // extra segment between /srv/ and the share's own directory, that
-  // segment is very likely a disk/array identifier (e.g. a serial
-  // number) - show that raw segment (his explicit want: /dev/sdX or
-  // even "unknown", never a false "System disk") rather than
-  // mislabeling it. Only a share genuinely directly under /srv/ with
-  // nothing in between falls back to "System disk".
+  // No mounted location matched at all. Before assuming this is just
+  // an unrecognized path, check whether the raw identifier segment
+  // actually matches a REAL disk this tool knows about that's simply
+  // not mounted right now (list_share_locations only ever includes
+  // MOUNTED locations, by design - it has to, for creating new shares
+  // - but that means it can't distinguish "never existed" from
+  // "exists, just currently unmounted"). A real report: shares were
+  // silently still pointing at a disk that had gone unmounted, likely
+  // from outside this tool entirely (a USB drive not ready at boot is
+  // a common way this happens) - nothing on this tab said so before.
   const relative = sharePath.startsWith("/srv/") ? sharePath.slice(5) : sharePath;
   const segments = relative.split("/").filter(Boolean);
-  if (segments.length > 1) return segments[0];
-  return t("ui.shares.groupSystemDisk");
+  if (segments.length > 1) {
+    const identifier = segments[0];
+    const knownDisk = lastManageableDisksData.find((d) => d.serial === identifier || d.name === identifier);
+    if (knownDisk && !knownDisk.mounted) {
+      return { name: t("ui.shares.groupDiskUnmounted", { disk: knownDisk.label || knownDisk.name }), warning: true };
+    }
+    return { name: identifier, warning: false };
+  }
+  return { name: t("ui.shares.groupSystemDisk"), warning: false };
 }
 
 function buildShareTable(shares) {
@@ -1645,26 +1653,31 @@ function renderShares(sharesList) {
   // heading + table, no affordance to hide something that short.
   const groups = new Map();
   for (const sh of sharesList) {
-    const name = groupNameForShare(sh.path);
-    if (!groups.has(name)) groups.set(name, []);
-    groups.get(name).push(sh);
+    const { name, warning } = groupNameForShare(sh.path);
+    if (!groups.has(name)) groups.set(name, { shares: [], warning: false });
+    const g = groups.get(name);
+    g.shares.push(sh);
+    g.warning = g.warning || warning;
   }
 
-  for (const [groupName, shares] of groups) {
+  for (const [groupName, { shares, warning }] of groups) {
     const section = document.createElement("section");
     section.className = "share-group";
+    const headingText = `${groupName} (${shares.length})`;
 
     if (shares.length > SHARE_GROUP_COLLAPSE_THRESHOLD) {
       const details = document.createElement("details");
       details.open = true;
       const summary = document.createElement("summary");
-      summary.textContent = `${groupName} (${shares.length})`;
+      summary.textContent = headingText;
+      if (warning) summary.classList.add("share-group-warning");
       details.appendChild(summary);
       details.appendChild(buildShareTable(shares));
       section.appendChild(details);
     } else {
       const heading = document.createElement("h3");
-      heading.textContent = `${groupName} (${shares.length})`;
+      heading.textContent = headingText;
+      if (warning) heading.classList.add("share-group-warning");
       section.appendChild(heading);
       section.appendChild(buildShareTable(shares));
     }
@@ -1899,6 +1912,19 @@ function collectShareGroupGrants() {
   return grants;
 }
 
+let lastManageableDisksData = [];
+
+async function fetchManageableDisks() {
+  try {
+    const res = await fetch("/api/disks/manageable");
+    const data = await res.json();
+    lastManageableDisksData = data.disks || [];
+  } catch (err) {
+    lastManageableDisksData = [];
+  }
+  return lastManageableDisksData;
+}
+
 async function loadShares() {
   if (shareDialog.open) return;
   try {
@@ -1906,7 +1932,13 @@ async function loadShares() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     lastSharesData = data.shares || [];
-    await fetchShareLocations(); // kept fresh for grouping - mount state/labels can change between polls
+    // Both kept fresh for grouping/warnings - mount state/labels can
+    // change between polls (his real report: shares were still
+    // pointing at a disk that had gone unmounted - possibly from
+    // outside this tool entirely, e.g. a USB drive not ready in time
+    // at boot - and nothing on this tab said so).
+    await fetchShareLocations();
+    await fetchManageableDisks();
     renderShares(lastSharesData);
   } catch (err) {
     emptyState(sharesContainer, t("msg.loadErrorShares", { detail: err.message }));

@@ -183,6 +183,7 @@ window.NAS_I18N.pl = {
       addBtn: "+ Dodaj udział",
       colShare: "Udział",
       groupSystemDisk: "Dysk systemowy (/srv)",
+      groupDiskUnmounted: "\u26a0 {disk} (dysk niezamontowany - te udziały nie działają!)",
       colComment: "Komentarz",
       colAccess: "Dostęp",
       editBtn: "Edytuj",

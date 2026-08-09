@@ -183,6 +183,7 @@ window.NAS_I18N.en = {
       addBtn: "+ Add share",
       colShare: "Share",
       groupSystemDisk: "System disk (/srv)",
+      groupDiskUnmounted: "\u26a0 {disk} (disk unmounted - these shares aren't working!)",
       colComment: "Comment",
       colAccess: "Access",
       editBtn: "Edit",

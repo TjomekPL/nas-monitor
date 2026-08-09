@@ -658,6 +658,9 @@ h2 {
 .share-group details[open] > summary::before {
   transform: rotate(90deg);
 }
+.share-group-warning {
+  color: var(--crit) !important;
+}
 .share-group details > summary:hover {
   color: var(--text);
 }
