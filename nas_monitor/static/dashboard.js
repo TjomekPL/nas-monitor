@@ -1895,7 +1895,7 @@ const RECOVERABLE_MAX_LEAF = 15;
 // individual bucket still targets RECOVERABLE_MAX_LEAF on its own
 // (no buffer at that point - keeping this simple for now, per his
 // note that the deeper mechanism can be refined later if it matters).
-const RECOVERABLE_LEAF_BUFFER = 4;
+const RECOVERABLE_LEAF_BUFFER = 5;
 const RECOVERABLE_MAX_BUTTONS = 8;
 
 function recoverableRangeLabel(a, b) {

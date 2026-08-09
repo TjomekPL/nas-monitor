@@ -601,6 +601,18 @@ h2 {
   padding: 10px 14px;
   border-top: 1px solid var(--border);
 }
+.user-table td.comment {
+  /* A long comment used to freely stretch the whole column (and with
+     it the whole table) - a real report where a deliberately long
+     test comment made the Share/Access columns visibly uneven between
+     one group's table and another's, since each table sizes its own
+     columns independently by default. Capping the width and wrapping
+     means one long comment can only ever grow *taller*, never wider
+     than its neighbors across every group. */
+  max-width: 260px;
+  overflow-wrap: break-word;
+  word-break: break-word;
+}
 
 .share-group {
   margin-bottom: 20px;
