@@ -613,6 +613,7 @@ def api_shares_create():
     name = (data.get("name") or "").strip().lower()
     comment = (data.get("comment") or "").strip()
     base_path = (data.get("base_path") or "").strip() or None
+    display_name = data.get("display_name")
     permissions = {
         u.strip(): level
         for u, level in (data.get("permissions") or {}).items()
@@ -624,7 +625,10 @@ def api_shares_create():
         if g.strip() and level in ("rw", "ro")
     }
 
-    result = smb_shares.create_share(name, comment=comment, permissions=permissions, group_grants=group_grants, base_path=base_path)
+    result = smb_shares.create_share(
+        name, comment=comment, permissions=permissions, group_grants=group_grants,
+        base_path=base_path, display_name=display_name,
+    )
     if not result["success"]:
         oplog.log_event("shares", "create", "failure", params={"name": name})
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
@@ -636,6 +640,7 @@ def api_shares_create():
 def api_shares_update(name):
     data = request.get_json(force=True, silent=True) or {}
     comment = data.get("comment")
+    display_name = data.get("display_name")
     raw_permissions = data.get("permissions")
     permissions = None
     if raw_permissions is not None:
@@ -654,6 +659,7 @@ def api_shares_update(name):
         comment=comment,
         permissions=permissions,
         group_grants=group_grants,
+        display_name=display_name,
     )
     if not result["success"]:
         oplog.log_event("shares", "update", "failure", params={"name": name})

@@ -39,10 +39,25 @@ MANAGED_CONF_PATH = os.path.join(MANAGED_CONF_DIR, "nas-monitor-shares.conf")
 _RESERVED_NAMES = {"global", "homes", "printers", "print$", "netlogon", "profiles"}
 
 _VALID_SHARE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+DISPLAY_NAME_MAX_LENGTH = 64
 
 
 def is_valid_share_name(name: str) -> bool:
     return bool(_VALID_SHARE_NAME_RE.match(name)) and name not in _RESERVED_NAMES
+
+
+def sanitize_display_name(raw: str) -> str:
+    """The share's Samba-visible name - what Explorer/Finder/Dolphin
+    actually show when browsing the network share (his explicit want,
+    separate from `name`, the sanitized technical identifier used for
+    the directory/access-group/this tool's own API). Deliberately far
+    more permissive than a share `name` has to be: Samba's section
+    header handles spaces, capitals, and Unicode natively. Only strips
+    what would genuinely break smb.conf syntax - '[' and ']' (section
+    delimiters) and newlines/control characters - plus leading/
+    trailing whitespace, and caps length."""
+    cleaned = re.sub(r"[\[\]\r\n\t]", "", raw).strip()
+    return cleaned[:DISPLAY_NAME_MAX_LENGTH]
 
 
 def access_group_name(share_name: str) -> str:
@@ -189,8 +204,20 @@ def _read_managed_shares(managed_conf_path: str = MANAGED_CONF_PATH) -> list[dic
         return []  # a hand-corrupted managed file shouldn't crash detection
 
     shares = []
-    for name in cp.sections():
-        section = cp[name]
+    for section_name in cp.sections():
+        section = cp[section_name]
+        path = section.get("path", "")
+        # The technical name comes from the PATH's own last component,
+        # not the section header - the header is now free to be a
+        # human-readable display_name (see _render_managed_shares) that
+        # has nothing to do with the directory/access-group naming this
+        # tool itself relies on internally. share_path() always builds
+        # path as base/<name>, so this is a reliable round-trip, not a
+        # guess - and for a share predating display_name entirely, the
+        # header WAS the name, so path's basename still equals it.
+        name = os.path.basename(path.rstrip("/")) if path else section_name
+        display_name = section_name if section_name != name else None
+
         valid_users = section.get("valid users", "").split()
         group_refs = [_group_ref_name(u) for u in valid_users if _is_group_ref(u)]
         # The share's own dedicated group (<name>_access) is distinct
@@ -223,7 +250,8 @@ def _read_managed_shares(managed_conf_path: str = MANAGED_CONF_PATH) -> list[dic
         shares.append(
             {
                 "name": name,
-                "path": section.get("path", ""),
+                "display_name": display_name or name,
+                "path": path,
                 "comment": section.get("comment", ""),
                 "permissions": permissions,
                 "group_grants": group_grants,
@@ -253,7 +281,16 @@ def _render_managed_shares(shares: list[dict[str, Any]]) -> str:
         "",
     ]
     for s in shares:
-        lines.append(f"[{s['name']}]")
+        # The section header is what Explorer/Finder/Dolphin actually
+        # show when browsing the network share (his explicit want) -
+        # display_name is free-form (spaces, capitals, Unicode all
+        # fine, Samba itself handles a UTF-8 section header natively),
+        # completely separate from `name` (the technical, sanitized
+        # identifier used for the directory, the access group, and this
+        # tool's own API/uniqueness checks). Falls back to `name` when
+        # no display_name was ever set, so an old share dict without
+        # the key still renders exactly as it always did.
+        lines.append(f"[{s.get('display_name') or s['name']}]")
         lines.append(f"   path = {s['path']}")
         if s.get("comment"):
             lines.append(f"   comment = {s['comment']}")
@@ -509,6 +546,7 @@ def list_shares(
         others.append(
             {
                 "name": name,
+                "display_name": name,
                 "path": section.get("path", ""),
                 "comment": section.get("comment", ""),
                 "permissions": permissions,
@@ -635,6 +673,7 @@ def create_share(
     permissions: dict[str, str] | None = None,
     group_grants: dict[str, str] | None = None,
     base_path: str | None = None,
+    display_name: str | None = None,
     managed_conf_path: str = MANAGED_CONF_PATH,
 ) -> dict[str, Any]:
     """permissions maps username -> "rw" or "ro" (individual grants, via
@@ -652,7 +691,16 @@ def create_share(
     impossible than tempting). Deliberately not something update_share
     can change later: moving a share's location after the fact means
     moving its actual file contents, a different (and much riskier)
-    operation than anything else this function does."""
+    operation than anything else this function does.
+
+    display_name, if given, is what Explorer/Finder/Dolphin actually
+    show when browsing the network share (his explicit want) - free-
+    form (spaces, capitals, Unicode all fine, see sanitize_display_name)
+    and completely separate from `name`, which stays the sanitized
+    technical identifier behind the directory, the access group, and
+    this tool's own API/uniqueness checks. Unlike base_path, THIS can
+    be changed later via update_share - renaming it never touches the
+    directory or any file."""
     result: dict[str, Any] = {"name": name, "success": False}
 
     if not is_valid_share_name(name):
@@ -667,6 +715,8 @@ def create_share(
     existing = _read_managed_shares(managed_conf_path)
     if any(s["name"] == name for s in existing):
         return errors.fail(result, "shares.already_exists", name=name)
+
+    display_name = sanitize_display_name(display_name) if display_name else ""
 
     permissions = dict(permissions or {})
     for u, level in permissions.items():
@@ -713,6 +763,7 @@ def create_share(
 
     new_share = {
         "name": name,
+        "display_name": display_name,
         "path": path,
         "comment": comment,
         "permissions": permissions,
@@ -726,6 +777,7 @@ def create_share(
 
     result["success"] = True
     result["path"] = path
+    result["display_name"] = display_name or name
     result["permissions"] = permissions
     result["group_grants"] = group_grants
     warnings = list(apply_result.get("warnings") or []) + acl_warnings
@@ -790,8 +842,16 @@ def update_share(
     comment: str | None = None,
     permissions: dict[str, str] | None = None,
     group_grants: dict[str, str] | None = None,
+    display_name: str | None = None,
     managed_conf_path: str = MANAGED_CONF_PATH,
 ) -> dict[str, Any]:
+    """display_name can be changed freely, unlike base_path/the
+    directory itself - renaming what Explorer/Finder/Dolphin show for
+    this share is just a smb.conf section-header rewrite, never a file
+    move (see create_share's docstring for the full reasoning). Pass ""
+    explicitly to clear a custom display name back to the technical
+    `name`; None (the default) leaves whatever's already set alone,
+    same convention as comment/permissions/group_grants."""
     result: dict[str, Any] = {"name": name, "success": False}
 
     existing = _read_managed_shares(managed_conf_path)
@@ -801,6 +861,9 @@ def update_share(
 
     if comment is not None:
         match["comment"] = comment
+
+    if display_name is not None:
+        match["display_name"] = sanitize_display_name(display_name) if display_name else ""
 
     if permissions is not None:
         for u, level in permissions.items():
@@ -875,6 +938,7 @@ def update_share(
         return errors.propagate(result, apply_result)
 
     result["success"] = True
+    result["display_name"] = match.get("display_name") or name
     warnings = list(apply_result.get("warnings") or []) + acl_warnings
     pw_warning = _missing_smb_password_warning(list(permissions or {}))
     if pw_warning:

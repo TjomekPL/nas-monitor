@@ -1920,6 +1920,7 @@ function sanitizeShareName(raw) {
 shareNameInput.addEventListener("input", updateSharePathPreview);
 
 function updateSharePathPreview() {
+  if (editingShareName) return; // path is fixed once created - see openShareDialog's pathPreviewFixed, never recomputed from the (now editable) display-name field
   const raw = sanitizeShareName(shareNameInput.value);
   if (!raw) {
     sharePathPreview.textContent = "";
@@ -2122,9 +2123,13 @@ function openShareDialog(mode, share) {
 
   if (mode === "edit") {
     editingShareName = share.name;
-    shareDialogTitle.textContent = t("ui.shareDialog.titleEdit", { name: share.name });
-    shareNameInput.value = share.name;
-    shareNameInput.disabled = true; // renaming not supported - delete + recreate instead
+    shareDialogTitle.textContent = t("ui.shareDialog.titleEdit", { name: share.display_name || share.name });
+    // Editable now (unlike the technical name/path) - his want:
+    // renaming what Explorer/Finder/Dolphin show for a share is just a
+    // smb.conf section-header rewrite, not a file move, so there's no
+    // reason to lock it the way the path genuinely has to be.
+    shareNameInput.value = share.display_name || share.name;
+    shareNameInput.disabled = !share.managed;
     shareLocationRow.style.display = "none"; // location is fixed at creation - see smb_shares.create_share's docstring on why
     shareRecoverableDirsRow.style.display = "none";
     sharePathPreview.textContent = t("ui.shareDialog.pathPreviewFixed", { path: share.path });
@@ -2157,23 +2162,26 @@ shareForm.addEventListener("submit", async (ev) => {
   let url, body, confirmMsg;
   const summary = summarizeGrantedAccess(permissions, groupGrants);
   if (editingShareName) {
-    confirmMsg = t("msg.confirmSaveShare", { name: editingShareName, summary });
+    const displayName = shareNameInput.value.trim();
+    confirmMsg = t("msg.confirmSaveShare", { name: displayName || editingShareName, summary });
     url = `/api/shares/${encodeURIComponent(editingShareName)}/update`;
-    body = { comment, permissions, group_grants: groupGrants };
+    body = { comment, permissions, group_grants: groupGrants, display_name: displayName };
   } else {
+    const displayName = shareNameInput.value.trim();
     const name = sanitizeShareName(shareNameInput.value);
     // Validated before the confirm dialog even shows (same fix as
-    // group creation, v0.13.4) - shareNameInput.addEventListener
-    // above already sanitizes most invalid input away as it's typed,
-    // but this still catches the empty-after-sanitizing case (e.g. a
-    // name that was nothing but spaces/disallowed characters).
+    // group creation, v0.13.4) - shareNameInput itself now holds the
+    // free-form display name (v0.14.9/v0.14.10), so this checks the
+    // separately-computed technical `name`, catching the empty-after-
+    // sanitizing case (e.g. a name that was nothing but spaces/
+    // disallowed characters once stripped down to the technical form).
     if (!/^[a-z][a-z0-9_-]{0,31}$/.test(name)) {
       shareError.textContent = t("err.shares.invalid_name", { name });
       return;
     }
-    confirmMsg = t("msg.confirmCreateShare", { name, summary });
+    confirmMsg = t("msg.confirmCreateShare", { name: displayName || name, summary });
     url = "/api/shares/create";
-    body = { name, comment, permissions, group_grants: groupGrants, base_path: shareLocationSelect.value || "" };
+    body = { name, display_name: displayName, comment, permissions, group_grants: groupGrants, base_path: shareLocationSelect.value || "" };
   }
   if (!(await confirmDialog(confirmMsg))) return;
 

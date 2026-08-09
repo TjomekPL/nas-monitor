@@ -15,6 +15,18 @@ from nas_monitor import smb_shares  # noqa: E402
 TEST_LOCATION = {"path": "/srv/TESTDISK", "disk": "sdb", "fstype": "ext4", "label": ""}
 
 
+def _fake_validate_and_apply(new_content, managed_conf_path=smb_shares.MANAGED_CONF_PATH):
+    """Stand-in for _validate_and_apply in tests that need a real
+    round-trip (create then immediately read back, or create then
+    update) - the real function also runs testparm and touches the
+    actual system smb.conf via _ensure_include_directive, neither of
+    which belongs in a unit test. This keeps just the one thing a
+    round-trip test needs: the content genuinely lands on disk."""
+    with open(managed_conf_path, "w", encoding="utf-8") as fh:
+        fh.write(new_content)
+    return {"success": True}
+
+
 class TestValidShareName(unittest.TestCase):
     def test_accepts_normal_names(self):
         for name in ("dane", "backup", "foto-rodzinne", "udzial_1"):
@@ -484,6 +496,109 @@ class TestListRecoverableDirectories(unittest.TestCase):
                 self.assertEqual(result["directories"][0], "folder000")
             finally:
                 shutil.rmtree(many_dir)
+
+
+@mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
+class TestDisplayName(unittest.TestCase):
+    """His explicit want: the name Explorer/Finder/Dolphin show for a
+    share (the smb.conf section header) is free-form - spaces, capitals,
+    Unicode all fine - completely separate from `name`, the sanitized
+    technical identifier behind the directory/access-group/this tool's
+    own API. Round-trips through render -> read, and is independently
+    renameable later without touching the directory at all."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.managed = os.path.join(self.tmpdir, "shares.conf")
+        open(self.managed, "a").close()
+        self.loc_patcher = mock.patch.object(smb_shares, "list_share_locations", return_value=[TEST_LOCATION])
+        self.loc_patcher.start()
+        self.addCleanup(self.loc_patcher.stop)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_sanitize_strips_only_syntax_breaking_characters(self, mock_smb):
+        self.assertEqual(
+            smb_shares.sanitize_display_name("Dokumenty Pana Wiesława z II piętra"),
+            "Dokumenty Pana Wiesława z II piętra",
+        )
+        self.assertEqual(smb_shares.sanitize_display_name("we[ird]name\n\r\t"), "weirdname")
+        self.assertEqual(smb_shares.sanitize_display_name("  padded  "), "padded")
+
+    def test_sanitize_caps_length(self, mock_smb):
+        long_name = "x" * 200
+        result = smb_shares.sanitize_display_name(long_name)
+        self.assertEqual(len(result), smb_shares.DISPLAY_NAME_MAX_LENGTH)
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", side_effect=_fake_validate_and_apply)
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    def test_create_with_display_name_round_trips_through_render_and_read(self, mock_dir, mock_apply, mock_smb):
+        result = smb_shares.create_share(
+            "dokumenty_pana_wieslawa",
+            display_name="Dokumenty Pana Wiesława z II piętra",
+            base_path=TEST_LOCATION["path"],
+            managed_conf_path=self.managed,
+        )
+        self.assertTrue(result["success"])
+        self.assertEqual(result["display_name"], "Dokumenty Pana Wiesława z II piętra")
+
+        shares = smb_shares._read_managed_shares(self.managed)
+        self.assertEqual(len(shares), 1)
+        self.assertEqual(shares[0]["name"], "dokumenty_pana_wieslawa")
+        self.assertEqual(shares[0]["display_name"], "Dokumenty Pana Wiesława z II piętra")
+        self.assertEqual(shares[0]["path"], os.path.join(TEST_LOCATION["path"], "dokumenty_pana_wieslawa"))
+
+        with open(self.managed, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("[Dokumenty Pana Wiesława z II piętra]", content)
+        self.assertIn(f"path = {TEST_LOCATION['path']}/dokumenty_pana_wieslawa", content)
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", side_effect=_fake_validate_and_apply)
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    def test_no_display_name_falls_back_to_technical_name_everywhere(self, mock_dir, mock_apply, mock_smb):
+        result = smb_shares.create_share("dane", base_path=TEST_LOCATION["path"], managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["display_name"], "dane")
+
+        shares = smb_shares._read_managed_shares(self.managed)
+        self.assertEqual(shares[0]["display_name"], "dane")
+        with open(self.managed, encoding="utf-8") as f:
+            content = f.read()
+        self.assertIn("[dane]", content)
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", side_effect=_fake_validate_and_apply)
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    def test_update_renames_display_name_without_touching_path(self, mock_dir, mock_apply, mock_smb):
+        smb_shares.create_share("dane", display_name="Stare dane", base_path=TEST_LOCATION["path"], managed_conf_path=self.managed)
+        result = smb_shares.update_share("dane", display_name="Nowe dane!", managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["display_name"], "Nowe dane!")
+
+        shares = smb_shares._read_managed_shares(self.managed)
+        self.assertEqual(shares[0]["display_name"], "Nowe dane!")
+        self.assertEqual(shares[0]["name"], "dane")
+        self.assertEqual(shares[0]["path"], os.path.join(TEST_LOCATION["path"], "dane"))
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", side_effect=_fake_validate_and_apply)
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    def test_update_can_clear_a_display_name_back_to_technical_name(self, mock_dir, mock_apply, mock_smb):
+        smb_shares.create_share("dane", display_name="Ładna nazwa", base_path=TEST_LOCATION["path"], managed_conf_path=self.managed)
+        result = smb_shares.update_share("dane", display_name="", managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["display_name"], "dane")
+        shares = smb_shares._read_managed_shares(self.managed)
+        self.assertEqual(shares[0]["display_name"], "dane")
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", side_effect=_fake_validate_and_apply)
+    @mock.patch("nas_monitor.smb_shares._prepare_share_directory", return_value={"success": True})
+    def test_update_leaves_display_name_alone_when_not_passed(self, mock_dir, mock_apply, mock_smb):
+        smb_shares.create_share("dane", display_name="Zostaje", base_path=TEST_LOCATION["path"], managed_conf_path=self.managed)
+        result = smb_shares.update_share("dane", comment="tylko komentarz", managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        shares = smb_shares._read_managed_shares(self.managed)
+        self.assertEqual(shares[0]["display_name"], "Zostaje")
+        self.assertEqual(shares[0]["comment"], "tylko komentarz")
 
 
 @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
