@@ -151,6 +151,15 @@ class TestDiskNameParsing(unittest.TestCase):
     def test_partition_path_sd_card(self):
         self.assertEqual(disk_mutate._partition_path("/dev/mmcblk0"), "/dev/mmcblk0p1")
 
+    def test_partition_path_raid_array(self):
+        # Real report: formatting a RAID array with ext4 failed with
+        # "Partition /dev/md01 didn't appear after being created" -
+        # md0+"1" reads as a different device ("md01"), not partition 1
+        # of md0. Same "needs a p separator" rule as nvme/mmcblk, just
+        # missed when arrays were first wired into this table.
+        self.assertEqual(disk_mutate._partition_path("/dev/md0"), "/dev/md0p1")
+        self.assertEqual(disk_mutate._partition_path("/dev/md127"), "/dev/md127p1")
+
 
 class TestDiskState(unittest.TestCase):
     def test_reports_fstype_and_mountpoint_of_whole_disk(self):

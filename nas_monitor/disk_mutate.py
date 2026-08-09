@@ -125,9 +125,14 @@ def _default_mount_name(device: str) -> str:
 def _partition_path(device: str) -> str:
     """The single partition format_disk() creates: "/dev/sda" ->
     "/dev/sda1", "/dev/nvme0n1" -> "/dev/nvme0n1p1", "/dev/mmcblk0" ->
-    "/dev/mmcblk0p1"."""
+    "/dev/mmcblk0p1", "/dev/md0" -> "/dev/md0p1" (RAID arrays - same
+    "needs a p separator" rule as nvme/mmcblk, missed the first time
+    around when arrays were added: a real report showed formatting an
+    array's ext4 failing with "Partition /dev/md01 didn't appear after
+    being created", because md0+"1" reads as device "md01", not
+    partition 1 of md0)."""
     base = device.rsplit("/", 1)[-1]
-    if re.match(r"^(nvme\d+n\d+|mmcblk\d+)$", base):
+    if re.match(r"^(nvme\d+n\d+|mmcblk\d+|md\d+)$", base):
         return f"{device}p1"
     return f"{device}1"
 
