@@ -813,6 +813,61 @@ class TestLegacyAccessGroupMigration(unittest.TestCase):
         self.assertTrue(result["success"])
         self.assertEqual(result["warnings"][0]["code"], "shares.access_group_cleanup_tool_missing")
 
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    def test_delete_files_false_leaves_the_directory_alone(self, mock_apply, mock_smb):
+        tmpdir = tempfile.mkdtemp()
+        try:
+            share_dir = os.path.join(tmpdir, "test")
+            os.makedirs(share_dir)
+            with open(os.path.join(share_dir, "realdata.txt"), "w") as fh:
+                fh.write("nie ruszaj mnie")
+            content = smb_shares._render_managed_shares(
+                [{"name": "test", "path": share_dir, "comment": "", "access_group": None, "permissions": {}}]
+            )
+            with open(self.managed, "w") as fh:
+                fh.write(content)
+            result = smb_shares.delete_share("test", delete_files=False, managed_conf_path=self.managed)
+            self.assertTrue(result["success"])
+            self.assertTrue(os.path.isdir(share_dir))
+            self.assertTrue(os.path.isfile(os.path.join(share_dir, "realdata.txt")))
+        finally:
+            shutil.rmtree(tmpdir)
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    def test_delete_files_true_removes_the_directory(self, mock_apply, mock_smb):
+        # His explicit ask: a checkbox to also delete the real files,
+        # not just the smb.conf entry - previously delete_files existed
+        # as a backend parameter (used internally by the disk-unmount
+        # cascade, always False there) but was never exposed as a user
+        # choice at all.
+        tmpdir = tempfile.mkdtemp()
+        try:
+            share_dir = os.path.join(tmpdir, "test")
+            os.makedirs(share_dir)
+            with open(os.path.join(share_dir, "realdata.txt"), "w") as fh:
+                fh.write("usun mnie")
+            content = smb_shares._render_managed_shares(
+                [{"name": "test", "path": share_dir, "comment": "", "access_group": None, "permissions": {}}]
+            )
+            with open(self.managed, "w") as fh:
+                fh.write(content)
+            result = smb_shares.delete_share("test", delete_files=True, managed_conf_path=self.managed)
+            self.assertTrue(result["success"])
+            self.assertFalse(os.path.exists(share_dir))
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
+    def test_delete_files_true_warns_but_still_succeeds_if_removal_fails(self, mock_apply, mock_smb):
+        content = smb_shares._render_managed_shares(
+            [{"name": "test", "path": "/srv/nonexistent-parent/test", "comment": "", "access_group": None, "permissions": {}}]
+        )
+        with open(self.managed, "w") as fh:
+            fh.write(content)
+        result = smb_shares.delete_share("test", delete_files=True, managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        self.assertEqual(result["warnings"][0]["code"], "shares.file_delete_failed")
+
 
 @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
 class TestUpdateShareWithPermissions(unittest.TestCase):

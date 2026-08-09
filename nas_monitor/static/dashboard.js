@@ -2214,13 +2214,35 @@ shareForm.addEventListener("submit", async (ev) => {
 });
 
 async function deleteShare(name) {
-  const confirmed = await confirmDialog(t("msg.confirmDeleteShare", { name }), { danger: true });
-  if (!confirmed) return;
+  const match = lastSharesData.find((s) => s.name === name);
+  const shownName = (match && match.display_name) || name;
+  deleteShareNameEl.textContent = shownName;
+  deleteShareFilesCheckbox.checked = false;
+  deleteShareFilesWarning.style.display = "none";
+  deleteShareError.textContent = "";
+  deleteShareDialogEl.showModal();
+
+  const proceed = await new Promise((resolve) => {
+    deleteShareResolve = resolve;
+  });
+  if (!proceed) return;
+
+  const deleteFiles = deleteShareFilesCheckbox.checked;
+  if (deleteFiles) {
+    // A second, explicit confirmation specifically for the
+    // irreversible part (his ask) - the checkbox itself only decides
+    // WHAT gets deleted; this is the actual "are you sure" for the
+    // part that can't be undone, kept separate from the (already
+    // reversible-ish, files stay) plain share deletion above.
+    const reallySure = await confirmDialog(t("msg.confirmDeleteShareFiles", { name: shownName }), { danger: true });
+    if (!reallySure) return;
+  }
+
   try {
     const res = await fetch(`/api/shares/${encodeURIComponent(name)}/delete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ delete_files: false }),
+      body: JSON.stringify({ delete_files: deleteFiles }),
     });
     const data = await res.json();
     if (!res.ok || !data.success) {
@@ -2235,6 +2257,36 @@ async function deleteShare(name) {
     showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
   }
 }
+
+const deleteShareDialogEl = document.getElementById("delete-share-dialog");
+const deleteShareForm = document.getElementById("delete-share-form");
+const deleteShareNameEl = document.getElementById("delete-share-name");
+const deleteShareFilesCheckbox = document.getElementById("delete-share-files-checkbox");
+const deleteShareFilesWarning = document.getElementById("delete-share-files-warning");
+const deleteShareError = document.getElementById("delete-share-error");
+const deleteShareCancelBtn = document.getElementById("delete-share-cancel");
+let deleteShareResolve = null;
+
+function settleDeleteShare(result) {
+  if (deleteShareResolve) {
+    const r = deleteShareResolve;
+    deleteShareResolve = null;
+    r(result);
+  }
+}
+
+deleteShareFilesCheckbox.addEventListener("change", () => {
+  deleteShareFilesWarning.style.display = deleteShareFilesCheckbox.checked ? "block" : "none";
+});
+deleteShareForm.addEventListener("submit", () => {
+  settleDeleteShare(true);
+  deleteShareDialogEl.close();
+});
+deleteShareCancelBtn.addEventListener("click", () => {
+  deleteShareDialogEl.close();
+  settleDeleteShare(false);
+});
+deleteShareDialogEl.addEventListener("close", () => settleDeleteShare(false));
 
 // --------------------------------------------------------------------
 // SSH keys ("Certyfikaty")

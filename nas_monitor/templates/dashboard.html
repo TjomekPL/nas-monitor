@@ -372,6 +372,23 @@
     </form>
   </dialog>
 
+  <dialog id="delete-share-dialog">
+    <form id="delete-share-form" method="dialog">
+      <h3 data-i18n="ui.deleteShareDialog.title">Usuń udział</h3>
+      <p class="field-hint" id="delete-share-name"></p>
+      <label class="inline">
+        <input type="checkbox" id="delete-share-files-checkbox">
+        <span data-i18n="ui.deleteShareDialog.deleteFilesLabel">Usuń też pliki na dysku</span>
+      </label>
+      <p class="field-hint" id="delete-share-files-warning" style="display:none; color: var(--crit);" data-i18n="ui.deleteShareDialog.deleteFilesWarning">Nieodwracalne - wszystkie dane w tym udziale zostaną trwale usunięte z dysku.</p>
+      <p class="form-error" id="delete-share-error"></p>
+      <div class="dialog-actions">
+        <button type="button" id="delete-share-cancel" data-i18n="ui.confirmDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="delete-share-submit" class="btn-primary danger" data-i18n="ui.shares.deleteBtn">Usuń</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="disk-action-dialog">
     <form id="disk-action-form" method="dialog">
       <h3 id="disk-action-title" data-i18n="ui.diskActionDialog.formatTitle">Formatuj dysk</h3>

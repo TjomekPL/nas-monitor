@@ -196,6 +196,11 @@ window.NAS_I18N.en = {
       permSummaryRo: "R",
       permSummaryNa: "NA",
     },
+    deleteShareDialog: {
+      title: "Delete share",
+      deleteFilesLabel: "Also delete files on disk",
+      deleteFilesWarning: "Irreversible - all data in this share will be permanently deleted from disk.",
+    },
     network: {
       heading: "Network",
       subtitle: "Changing IP/gateway/DNS is only available with NetworkManager and needs confirming within 30s, or it reverts to the previous settings automatically.",
@@ -344,7 +349,7 @@ window.NAS_I18N.en = {
     confirmDeleteUser: "Delete user \"{name}\" (account: {username})? This removes the system account and SMB access.\n\nClick OK to delete WITHOUT the home directory (safer), Cancel to abort.",
     confirmSaveShare: "Save changes to share \"{name}\"?\n\nAccess: {summary}",
     confirmCreateShare: "Create share \"{name}\" under /srv/{name}?\n\nAccess: {summary}",
-    confirmDeleteShare: "Delete share \"{name}\"?\n\nOK = remove from Samba only, KEEP the files on disk (safe).\nCancel = abort.\n\n(Deleting the files too isn't available from this dialog yet - on purpose, so nobody's data gets wiped in one click.)",
+    confirmDeleteShareFiles: "FINAL WARNING: this will permanently delete ALL files in share \"{name}\" from disk. This cannot be undone. Continue?",
     confirmCreateGroup: "Create group \"{name}\"?",
     confirmDeleteGroup: "Delete group \"{name}\"? Every member loses whatever access came from it.",
     deleteGroupWarning: "⚠ This WILL REMOVE access for {count} people who have it through this group, and cut off the shares that rely on it ({shares}). This can't be undone with one click.",

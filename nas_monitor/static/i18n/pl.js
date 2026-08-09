@@ -196,6 +196,11 @@ window.NAS_I18N.pl = {
       permSummaryRo: "R",
       permSummaryNa: "NA",
     },
+    deleteShareDialog: {
+      title: "Usuń udział",
+      deleteFilesLabel: "Usuń też pliki na dysku",
+      deleteFilesWarning: "Nieodwracalne - wszystkie dane w tym udziale zostaną trwale usunięte z dysku.",
+    },
     network: {
       heading: "Sieć",
       subtitle: "Zmiana adresu IP/bramy/DNS jest dostępna tylko z NetworkManagerem i wymaga potwierdzenia w ciągu 30s - inaczej wraca automatycznie do poprzednich ustawień.",
@@ -344,7 +349,7 @@ window.NAS_I18N.pl = {
     confirmDeleteUser: "Usunąć użytkownika \"{name}\" (konto: {username})? To usuwa konto systemowe i dostęp SMB.\n\nKliknij OK, aby usunąć BEZ katalogu domowego (bezpieczniej), Anuluj aby przerwać.",
     confirmSaveShare: "Zapisać zmiany dla udziału \"{name}\"?\n\nDostęp: {summary}",
     confirmCreateShare: "Utworzyć udział \"{name}\" pod /srv/{name}?\n\nDostęp: {summary}",
-    confirmDeleteShare: "Usunąć udział \"{name}\"?\n\nOK = usuń tylko z Samby, ZOSTAW pliki na dysku (bezpieczne).\nAnuluj = przerwij.\n\n(Skasowanie też plików nie jest tu jeszcze dostępne z tego dialogu - celowo, żeby nie skasować czyichś danych jednym kliknięciem.)",
+    confirmDeleteShareFiles: "OSTATNIE OSTRZEŻENIE: to trwale usunie WSZYSTKIE pliki w udziale \"{name}\" z dysku. Tej operacji nie da się cofnąć. Kontynuować?",
     confirmCreateGroup: "Utworzyć grupę \"{name}\"?",
     confirmDeleteGroup: "Usunąć grupę \"{name}\"? Wszyscy jej członkowie stracą wynikające z niej uprawnienia.",
     deleteGroupWarning: "⚠ To USUNIE dostęp {count} osobom, które go mają dzięki tej grupie, i odetnie od niej udziały które z niej korzystają ({shares}). Tej operacji nie da się cofnąć jednym kliknięciem.",
