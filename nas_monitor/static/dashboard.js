@@ -1569,9 +1569,9 @@ function buildShareTable(shares) {
   // reacts to whatever's widest in that specific table).
   table.innerHTML = `
     <colgroup>
-      <col style="width: 20%;">
-      <col style="width: 26%;">
-      <col style="width: 40%;">
+      <col style="width: 30%;">
+      <col style="width: 14%;">
+      <col style="width: 42%;">
       <col style="width: 14%;">
     </colgroup>
     <thead><tr><th>${t("ui.shares.colShare")}</th><th>${t("ui.shares.colComment")}</th><th>${t("ui.shares.colAccess")}</th><th></th></tr></thead>`;
@@ -1579,7 +1579,7 @@ function buildShareTable(shares) {
   for (const sh of shares) {
     const row = shareRowTemplate.content.cloneNode(true);
     window.i18n.applyTranslations(row);
-    const shareLabel = sh.name + (sh.managed ? "" : t("ui.shares.notManagedSuffix"));
+    const shareLabel = (sh.display_name || sh.name) + (sh.managed ? "" : t("ui.shares.notManagedSuffix"));
     const shareNameEl = row.querySelector(".display-name");
     shareNameEl.textContent = shareLabel;
     shareNameEl.title = shareLabel;
@@ -1742,29 +1742,33 @@ function wireShareGrantAdder({ addBtn, listContainer, candidatesFn, keyFn, label
     refresh();
   }
 
-  // A real checklist (checkbox per candidate, like the group-members
-  // dialog he pointed at) rather than a single-select dropdown picked
-  // one at a time - his explicit want: check several people/groups,
-  // then add them all in one action, not repeat "pick, reopen, pick
-  // again" for each one.
+  // A native multi-select listbox (ctrl/cmd-click, or shift-click for
+  // a range) - his explicit preference, closer to the original
+  // dropdown he liked but with real multi-selection built in, rather
+  // than a checkbox-per-row checklist.
   addBtn.addEventListener("click", () => {
     const left = remaining();
     if (!left.length) return;
 
-    const picker = document.createElement("div");
-    picker.className = "grant-picker-checklist";
+    const wrapper = document.createElement("div");
+    wrapper.className = "grant-picker-wrapper";
 
-    const boxes = left.map((candidate) => {
-      const label = document.createElement("label");
-      label.className = "inline";
-      const cb = document.createElement("input");
-      cb.type = "checkbox";
-      cb.value = keyFn(candidate);
-      label.appendChild(cb);
-      label.append(" " + labelFn(candidate));
-      picker.appendChild(label);
-      return { cb, candidate };
-    });
+    const picker = document.createElement("select");
+    picker.className = "grant-picker-multiselect";
+    picker.multiple = true;
+    picker.size = Math.min(8, Math.max(3, left.length));
+    for (const candidate of left) {
+      const opt = document.createElement("option");
+      opt.value = keyFn(candidate);
+      opt.textContent = labelFn(candidate);
+      picker.appendChild(opt);
+    }
+    wrapper.appendChild(picker);
+
+    function closePicker() {
+      wrapper.remove();
+      addBtn.style.display = "inline-block";
+    }
 
     const actionsRow = document.createElement("div");
     actionsRow.className = "grant-picker-actions";
@@ -1774,10 +1778,11 @@ function wireShareGrantAdder({ addBtn, listContainer, candidatesFn, keyFn, label
     confirmBtn.className = "link-btn";
     confirmBtn.textContent = t("ui.shareDialog.addSelectedBtn");
     confirmBtn.addEventListener("click", () => {
-      for (const { cb, candidate } of boxes) {
-        if (cb.checked) addRow(candidate);
+      const selectedKeys = new Set(Array.from(picker.selectedOptions).map((o) => o.value));
+      for (const candidate of left) {
+        if (selectedKeys.has(keyFn(candidate))) addRow(candidate);
       }
-      picker.remove();
+      closePicker();
       refresh();
     });
     actionsRow.appendChild(confirmBtn);
@@ -1786,15 +1791,13 @@ function wireShareGrantAdder({ addBtn, listContainer, candidatesFn, keyFn, label
     cancelBtn.type = "button";
     cancelBtn.className = "link-btn";
     cancelBtn.textContent = t("ui.shareDialog.cancelPickBtn");
-    cancelBtn.addEventListener("click", () => {
-      picker.remove();
-      addBtn.style.display = "inline-block";
-    });
+    cancelBtn.addEventListener("click", closePicker);
     actionsRow.appendChild(cancelBtn);
 
-    picker.appendChild(actionsRow);
-    addBtn.insertAdjacentElement("afterend", picker);
+    wrapper.appendChild(actionsRow);
+    addBtn.insertAdjacentElement("afterend", wrapper);
     addBtn.style.display = "none";
+    picker.focus();
   });
 
   return { refresh };

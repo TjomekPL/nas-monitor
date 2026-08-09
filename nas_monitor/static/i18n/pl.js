@@ -441,6 +441,7 @@ window.NAS_I18N.pl = {
       invalid_permission_level: "Nieprawidłowy poziom dostępu dla '{user}': {level} (oczekiwano 'rw' lub 'ro')",
       not_found: "Udział '{name}' nie istnieje (albo nie jest zarządzany przez to narzędzie)",
       group_not_found: "Grupa '{group}' nie istnieje",
+      access_group_name_too_long: "Ten udział ma nazwę techniczną zbyt długą, żeby dało się utworzyć jego grupę dostępu ('{group}', max {max_length} znaków - limit systemu Linux). Udział powstał zanim wprowadziliśmy ograniczenie długości nazw - usuń go i utwórz ponownie z tą samą nazwą wyświetlaną (pliki zostaną, mechanizm wykrywania istniejących folderów pozwoli wskazać ten sam katalog) - nowa nazwa techniczna wygeneruje się już poprawnie.",
       global_section_missing: "Nie znaleziono sekcji [global] w {path}",
       validate_tool_missing: "Nie można zweryfikować zmiany (brak {tool}) - wycofano",
       config_rejected: "testparm odrzucił zmianę, cofnięto: {detail}",

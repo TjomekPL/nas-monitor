@@ -767,6 +767,17 @@ def create_share(
         # (real report: creating a share with only a group grant and no
         # individual permissions failed with "Group 'X_access' doesn't
         # exist", because nothing had created it yet).
+        if len(group) > _LINUX_GROUP_NAME_MAX:
+            # Only reachable for a share that predates the name-length
+            # guard in is_valid_share_name (v0.14.12) - a real report:
+            # a 32-char share name (the old max) made a 40-char access
+            # group name, and groupadd's own raw error ("not a valid
+            # group name") gave no hint the *share name itself* was
+            # the actual problem, on a share created before this tool
+            # would have caught it up front. New shares can't reach
+            # this at all now; this is purely a clear message for an
+            # old one that already exists.
+            return errors.fail(result, "shares.access_group_name_too_long", group=group, max_length=_LINUX_GROUP_NAME_MAX)
         ensure_result = users_mod.ensure_group_exists(group)
         if not ensure_result["success"]:
             return errors.propagate(result, ensure_result, group=group)
@@ -923,6 +934,17 @@ def update_share(
         desired_group_grants = group_grants if group_grants is not None else current_group_grants
         group = dedicated_group
 
+        if len(group) > _LINUX_GROUP_NAME_MAX and (desired_users or desired_group_grants):
+            # Checked here, before anything below even tries to touch
+            # the group (add_user_to_group can end up creating it as a
+            # side effect, which is the actual first thing to fail in
+            # practice - his real report showed groupadd's own raw
+            # error, not the later explicit ensure_group_exists call
+            # below). See create_share's identical guard for the full
+            # story: a share whose technical name predates the
+            # length cap in is_valid_share_name (v0.14.12).
+            return errors.fail(result, "shares.access_group_name_too_long", group=group, max_length=_LINUX_GROUP_NAME_MAX)
+
         if permissions is not None:
             for u in desired_users - current_users:
                 add_result = users_mod.add_user_to_group(u, group)
@@ -943,7 +965,9 @@ def update_share(
             # (e.g. its first-ever access grant is a group_grant with
             # no individual permissions - the loop above never runs in
             # that case, so nothing created the group before
-            # _prepare_share_directory looks it up).
+            # _prepare_share_directory looks it up). The length guard
+            # itself already ran earlier, above, before the
+            # add_user_to_group loop had a chance to hit it first.
             ensure_result = users_mod.ensure_group_exists(group)
             if not ensure_result["success"]:
                 return errors.propagate(result, ensure_result, group=group)

@@ -441,6 +441,7 @@ window.NAS_I18N.en = {
       invalid_permission_level: "Invalid access level for '{user}': {level} (expected 'rw' or 'ro')",
       not_found: "Share '{name}' doesn't exist (or isn't managed by this tool)",
       group_not_found: "Group '{group}' doesn't exist",
+      access_group_name_too_long: "This share's technical name is too long to create its access group ('{group}', max {max_length} characters - a Linux system limit). It was created before this tool started enforcing a name-length limit - delete it and recreate it with the same display name (files stay put, the existing-folders picker will let you point at the same directory) - the new technical name will be generated correctly this time.",
       global_section_missing: "No [global] section found in {path}",
       validate_tool_missing: "Can't validate the change (missing {tool}) - reverted",
       config_rejected: "testparm rejected the change, reverted: {detail}",

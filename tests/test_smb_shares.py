@@ -528,6 +528,52 @@ class TestListRecoverableDirectories(unittest.TestCase):
 
 
 @mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
+class TestGrandfatheredLongShareName(unittest.TestCase):
+    """A real report: a share created before is_valid_share_name enforced
+    the 25-char cap (v0.14.12) already has a technical name near the old
+    32-char max - editing it to add access now fails deep inside
+    ensure_group_exists with a raw, confusing groupadd error. Both
+    create_share (defensive, unreachable via normal validation now) and
+    update_share (the actually-reachable path his report hit) should
+    catch this explicitly with a clear message instead."""
+
+    def setUp(self):
+        self.tmpdir = tempfile.mkdtemp()
+        self.managed = os.path.join(self.tmpdir, "shares.conf")
+        # 32 chars - the old max, now over the 25-char cap
+        self.long_name = "a" * 32
+        content = smb_shares._render_managed_shares(
+            [{"name": self.long_name, "path": f"/srv/TESTDISK/{self.long_name}", "comment": "", "access_group": None, "permissions": {}}]
+        )
+        with open(self.managed, "w") as fh:
+            fh.write(content)
+
+    def tearDown(self):
+        shutil.rmtree(self.tmpdir)
+
+    def test_update_gives_a_clear_error_instead_of_the_raw_groupadd_failure(self, mock_smb):
+        with mock.patch.object(smb_shares.users_mod, "add_user_to_group", return_value={"success": True, "error": None}):
+            result = smb_shares.update_share(self.long_name, permissions={"gosia": "rw"}, managed_conf_path=self.managed)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "shares.access_group_name_too_long")
+        self.assertEqual(result["error_context"]["group"], f"{self.long_name}_access")
+
+    def test_create_would_also_catch_it_defensively(self, mock_smb):
+        # Not reachable through normal validation anymore (is_valid_share_name
+        # itself rejects a 32-char name now) - this proves the guard
+        # itself is correct even if create_share's own validation
+        # already made it unreachable in practice.
+        with mock.patch.object(smb_shares, "is_valid_share_name", return_value=True), \
+             mock.patch.object(smb_shares, "list_share_locations", return_value=[TEST_LOCATION]):
+            result = smb_shares.create_share(
+                self.long_name, permissions={"gosia": "rw"}, base_path=TEST_LOCATION["path"],
+                managed_conf_path=os.path.join(self.tmpdir, "other.conf"),
+            )
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "shares.access_group_name_too_long")
+
+
+@mock.patch("nas_monitor.smb_shares.smb_mod.list_samba_users", return_value={"available": False, "usernames": [], "error": None})
 class TestDisplayName(unittest.TestCase):
     """His explicit want: the name Explorer/Finder/Dolphin show for a
     share (the smb.conf section header) is free-form - spaces, capitals,
