@@ -1,0 +1,941 @@
+"""
+nas_monitor.smb_shares
+------------------------
+SMB share management. Shares created through this tool always live under
+a single base directory (/srv, matching the common NAS convention e.g.
+OpenMediaVault) and are defined in a dedicated, tool-owned config file
+included from the main smb.conf - so the main file (which the admin may
+hand-edit, with its own comments and formatting) is only ever touched
+once, to add a single `include =` line, and never rewritten wholesale.
+
+Every write to the managed file is validated with `testparm` against the
+REAL effective configuration before being kept - on failure, the previous
+content is restored and nothing is left broken. This is the one thing
+that matters most in this module: a bad share definition must never be
+able to take down every other share by breaking the whole config.
+"""
+
+from __future__ import annotations
+
+import configparser
+import grp
+import os
+import re
+from typing import Any
+
+from nas_monitor import system_tools, errors
+from nas_monitor import users as users_mod
+from nas_monitor import smb as smb_mod
+
+BASE_SHARE_PATH = "/srv"
+MAIN_SMB_CONF = "/etc/samba/smb.conf"
+MANAGED_CONF_DIR = "/etc/samba/smb.conf.d"
+MANAGED_CONF_PATH = os.path.join(MANAGED_CONF_DIR, "nas-monitor-shares.conf")
+
+# Reserved Samba section names that must never collide with a share name.
+# testparm does not reject these - a share literally named "global" just
+# silently merges its keys into the [global] section instead of erroring,
+# which is a real footgun (confirmed by hand), not a hypothetical one.
+_RESERVED_NAMES = {"global", "homes", "printers", "print$", "netlogon", "profiles"}
+
+_VALID_SHARE_NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+
+
+def is_valid_share_name(name: str) -> bool:
+    return bool(_VALID_SHARE_NAME_RE.match(name)) and name not in _RESERVED_NAMES
+
+
+def access_group_name(share_name: str) -> str:
+    """Name of the group this module auto-manages for one share's access.
+    Access is granted per-user in the UI/API - this group is the plumbing
+    that makes that work at the Samba/filesystem level (valid users,
+    force group, folder ownership), not something the admin manages
+    directly."""
+    return f"{share_name}_access"
+
+
+def _missing_smb_password_warning(usernames: list[str]) -> dict[str, Any] | None:
+    """Being in a share's access group is not enough to log in - Samba
+    also needs an actual SMB password for the account (smbpasswd). This
+    is easy to miss for a pre-existing system account (e.g. the admin's
+    own desktop login) that was never given one through this tool.
+    Returns a warning {"code", "context"} dict, or None if nothing to
+    warn about."""
+    if not usernames:
+        return None
+    samba_info = smb_mod.list_samba_users()
+    if not samba_info.get("available"):
+        return None
+    has_password = set(samba_info.get("usernames", []))
+    missing = [u for u in usernames if u not in has_password]
+    if not missing:
+        return None
+    return {"code": "shares.missing_smb_password", "context": {"usernames": ", ".join(missing)}}
+
+
+def _is_group_ref(token: str) -> bool:
+    """Samba treats a leading '@' or '+' as marking a group reference in
+    valid users / read list / write list (see _render_managed_shares for
+    why this tool writes '+', but a hand-edited or pre-existing share
+    could use either)."""
+    return token.startswith("@") or token.startswith("+")
+
+
+def _group_ref_name(token: str) -> str:
+    return token[1:]
+
+
+def share_path(name: str, base_path: str | None = None) -> str:
+    return os.path.join(base_path or BASE_SHARE_PATH, name)
+
+
+def list_share_locations() -> list[dict[str, Any]]:
+    """Every place a new share can live: the default (BASE_SHARE_PATH,
+    on the system disk) plus any disk currently mounted under
+    disk_mutate.MOUNT_BASE - i.e. anything format_disk()'s auto-mount
+    (or a manually-set-up mount following the same MOUNT_BASE/<name>
+    convention) has made available. A share's directory always ends up
+    as <location>/<share-name> (see share_path). Imported lazily to
+    avoid disk_mutate and smb_shares needing to agree on import order
+    at module load time - smb_shares is the only one of the two that
+    needs this, disk_mutate has no reason to know shares exist at all."""
+    from nas_monitor import disk_mutate
+
+    locations: list[dict[str, Any]] = [{"path": BASE_SHARE_PATH, "disk": None, "fstype": None, "label": ""}]
+    for disk in disk_mutate.list_manageable_disks():
+        mount_point = disk.get("mount_point") or ""
+        if disk.get("mounted") and mount_point.startswith(disk_mutate.MOUNT_BASE + os.sep):
+            locations.append({
+                "path": mount_point,
+                "disk": disk["name"],
+                "fstype": disk.get("fstype"),
+                "label": disk.get("label", ""),
+            })
+    return locations
+
+
+MAX_RECOVERABLE_DIRECTORIES = 2000
+
+
+def list_recoverable_directories(base_path: str) -> dict[str, Any]:
+    """Top-level subdirectories at a share location that aren't already
+    claimed by a managed share - what the "existing folders here"
+    picker in the create-share dialog offers, so a directory left
+    behind on a disk that was unmounted (its share deleted, files
+    preserved - see disk_mutate.unmount_disk's cascade-delete) can be
+    picked back up without retyping its exact name from memory.
+
+    Deliberate limits, all his call:
+    - First level only - never descends into the directory tree.
+    - Only for a location backed by a disk whose filesystem this tool
+      can itself create (ext4/btrfs/xfs/exfat, see
+      disk_mutate.SUPPORTED_FILESYSTEMS). An NTFS disk, say, could
+      never have held a share THIS tool created - format_disk() never
+      offers NTFS - so anything found there has nothing to do with a
+      past installation of this system and shouldn't be suggested as
+      if it did. The default /srv location (the system disk, not one
+      of list_share_locations()'s disk-backed entries at all) is out
+      of scope for the same underlying reason - it was never a
+      removable disk that could have come from "elsewhere".
+    - Capped at MAX_RECOVERABLE_DIRECTORIES (alphabetical) - a much
+      higher backstop than it used to be (50): the frontend now
+      recursively buckets the results into alphabetical groups of
+      ≤15 rather than showing a flat wall of chips, so it comfortably
+      handles hundreds or low thousands on its own. This cap exists
+      only to bound worst-case I/O and response size, not because the
+      UI needs it kept small anymore. "truncated" tells the caller
+      there were more, so it can say so instead of silently showing a
+      partial list as if it were everything."""
+    from nas_monitor import disk_mutate
+
+    result: dict[str, Any] = {"directories": [], "truncated": False}
+
+    location = next((loc for loc in list_share_locations() if loc["path"] == base_path), None)
+    if location is None or location.get("disk") is None:
+        return result
+    if location.get("fstype") not in disk_mutate.SUPPORTED_FILESYSTEMS:
+        return result
+
+    if not os.path.isdir(base_path):
+        return result
+    used_paths = {s["path"] for s in list_shares().get("shares", [])}
+    entries = []
+    for name in sorted(os.listdir(base_path)):
+        full = os.path.join(base_path, name)
+        if not os.path.isdir(full) or name.startswith("."):
+            continue
+        if full in used_paths:
+            continue
+        entries.append(name)
+
+    result["truncated"] = len(entries) > MAX_RECOVERABLE_DIRECTORIES
+    result["directories"] = entries[:MAX_RECOVERABLE_DIRECTORIES]
+    return result
+
+
+# --------------------------------------------------------------------------
+# Reading/writing the managed shares file
+# --------------------------------------------------------------------------
+
+def _read_managed_shares(managed_conf_path: str = MANAGED_CONF_PATH) -> list[dict[str, Any]]:
+    """Parse the tool-managed shares file. Empty/missing file -> []."""
+    if not os.path.isfile(managed_conf_path):
+        return []
+
+    cp = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        cp.read(managed_conf_path)
+    except configparser.Error:
+        return []  # a hand-corrupted managed file shouldn't crash detection
+
+    shares = []
+    for name in cp.sections():
+        section = cp[name]
+        valid_users = section.get("valid users", "").split()
+        group_refs = [_group_ref_name(u) for u in valid_users if _is_group_ref(u)]
+        # The share's own dedicated group (<name>_access) is distinct
+        # from any GENERAL group also granted access - the former backs
+        # per-user checkboxes (unchanged from before), the latter is a
+        # separate, explicit grant that doesn't get flattened into
+        # "permissions" the way individual users do.
+        dedicated_group = access_group_name(name)
+        access_group = dedicated_group if dedicated_group in group_refs else None
+        # Only trust OTHER group refs as genuine general-group grants once
+        # the dedicated group itself is recognized - a share whose access
+        # group doesn't match our naming convention at all predates this
+        # feature (see the legacy-migration handling elsewhere in this
+        # module) and its other group refs are equally foreign; sweeping
+        # them into group_grants would let this tool start managing ACLs
+        # on a group it never created and knows nothing about.
+        granted_group_names = [g for g in group_refs if g != dedicated_group] if access_group else []
+
+        resolved_users = _resolve_group_members([access_group]) if access_group else []
+
+        read_list_raw = section.get("read list", "").split()
+        read_list_group_refs = [_group_ref_name(g) for g in read_list_raw if _is_group_ref(g)]
+        read_only_users = set(u for u in read_list_raw if not _is_group_ref(u))
+        if access_group in read_list_group_refs:
+            read_only_users |= set(_resolve_group_members([access_group]))
+
+        permissions = {u: ("ro" if u in read_only_users else "rw") for u in resolved_users}
+        group_grants = {g: ("ro" if g in read_list_group_refs else "rw") for g in granted_group_names}
+
+        shares.append(
+            {
+                "name": name,
+                "path": section.get("path", ""),
+                "comment": section.get("comment", ""),
+                "permissions": permissions,
+                "group_grants": group_grants,
+                "access_group": access_group,
+                "managed": True,
+            }
+        )
+    return sorted(shares, key=lambda s: s["name"])
+
+
+def _resolve_group_members(group_names: list[str]) -> list[str]:
+    members: set[str] = set()
+    for g in group_names:
+        try:
+            members.update(grp.getgrnam(g).gr_mem)
+        except KeyError:
+            continue
+    return sorted(members)
+
+
+def _render_managed_shares(shares: list[dict[str, Any]]) -> str:
+    """Build the full text content of the managed shares file from scratch
+    - this file is entirely tool-owned, so a full regenerate each time
+    (rather than surgical edits) keeps this simple and hard to corrupt."""
+    lines = [
+        "# Zarzadzane przez nas-monitor - nie edytuj recznie, zmiany zostana nadpisane.",
+        "",
+    ]
+    for s in shares:
+        lines.append(f"[{s['name']}]")
+        lines.append(f"   path = {s['path']}")
+        if s.get("comment"):
+            lines.append(f"   comment = {s['comment']}")
+        # Always writable at the share level - per-user restriction to
+        # read-only happens via "read list" below, which lets RW and RO
+        # users coexist on the same share (OMV-style per-user access).
+        lines.append("   read only = no")
+        lines.append("   browseable = yes")
+        access_group = s.get("access_group")
+        permissions = s.get("permissions") or {}
+        group_grants = s.get("group_grants") or {}
+        valid_users_tokens = []
+        if access_group:
+            # '+group' checks the UNIX group database only, skipping the
+            # NIS-netgroup-first lookup that plain '@group' does - on
+            # systems where that NIS pre-check misbehaves (even with no
+            # NIS actually configured), '@group' can fail with
+            # NT_STATUS_NO_SUCH_GROUP even though the group genuinely
+            # exists and `getent group` finds it fine. Confirmed against
+            # a real failure, not theoretical.
+            valid_users_tokens.append(f"+{access_group}")
+        valid_users_tokens.extend(f"+{g}" for g in sorted(group_grants))
+        if valid_users_tokens:
+            lines.append(f"   valid users = {' '.join(valid_users_tokens)}")
+        if access_group:
+            # force group takes a bare group name - no @/+ prefix syntax
+            # applies here, there's no user/group ambiguity to resolve.
+            # Always the share's OWN dedicated group, regardless of how
+            # many other groups are ALSO granted access above - this is
+            # just "who owns newly created files", not "who can access
+            # them", so it doesn't need to (and can't) name more than one.
+            lines.append(f"   force group = {access_group}")
+        read_list_tokens = sorted(u for u, level in permissions.items() if level == "ro")
+        read_list_tokens.extend(f"+{g}" for g, level in sorted(group_grants.items()) if level == "ro")
+        if read_list_tokens:
+            lines.append(f"   read list = {' '.join(read_list_tokens)}")
+        lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+def _disable_default_homes_share(content: str) -> str:
+    """Comments out an active [homes] stanza, if present - Samba's
+    built-in per-user home-directory auto-share, active by default on
+    a fresh Debian Samba install and completely independent of
+    anything this tool manages (a real report: logging in as a normal
+    user revealed a share named after them, alongside their actual
+    managed shares, with no dashboard entry to explain it). Every
+    other share here only ever exists because it was explicitly
+    created through the dashboard - a share silently appearing per
+    login breaks that principle, so this is disabled by default rather
+    than something the tool has to actively support turning off later.
+    Idempotent (a no-op if [homes] is already commented out or absent)
+    - only ever called from _ensure_include_directive, itself only
+    doing real work once per install."""
+    lines = content.splitlines(keepends=True)
+    out = []
+    in_homes = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            in_homes = stripped.lower() == "[homes]"
+        if in_homes and stripped and not stripped.startswith((";", "#")):
+            out.append(f"; {line}")
+        else:
+            out.append(line)
+    return "".join(out)
+
+
+def _ensure_include_directive(
+    smb_conf_path: str = MAIN_SMB_CONF, managed_conf_path: str = MANAGED_CONF_PATH
+) -> dict[str, Any]:
+    """Make sure the main smb.conf includes our managed file, and that
+    Debian's default [homes] auto-share is disabled (see
+    _disable_default_homes_share) - these are two INDEPENDENT one-time
+    migrations, not one. An install that's been running since before
+    [homes]-disabling existed already has the include line, so gating
+    everything behind "does it have the include line yet" (as this
+    used to) would mean the homes fix silently never runs on any
+    existing install - exactly the installs it matters most for. Each
+    piece is computed against what's actually still missing; nothing
+    is written or testparm-validated at all if both are already in
+    place. Validated with testparm and rolled back to the original
+    content if it doesn't pass, same as every write to the managed
+    file itself (_validate_and_apply) - this touches the main,
+    not-tool-owned smb.conf, so it gets no less care than that."""
+    result: dict[str, Any] = {"success": False}
+
+    os.makedirs(os.path.dirname(managed_conf_path), exist_ok=True)
+    if not os.path.isfile(managed_conf_path):
+        open(managed_conf_path, "a").close()
+
+    try:
+        with open(smb_conf_path, "r") as fh:
+            content = fh.read()
+    except OSError as exc:
+        return errors.io_failed(result, exc, smb_conf_path)
+
+    new_content = content
+    if managed_conf_path not in new_content:
+        if "[global]" not in new_content:
+            return errors.fail(result, "shares.global_section_missing", path=smb_conf_path)
+        include_line = f"   include = {managed_conf_path}"
+        new_content = new_content.replace("[global]", f"[global]\n{include_line}", 1)
+
+    new_content = _disable_default_homes_share(new_content)
+
+    if new_content == content:
+        result["success"] = True
+        return result
+
+    try:
+        with open(smb_conf_path, "w") as fh:
+            fh.write(new_content)
+    except OSError as exc:
+        return errors.io_failed(result, exc, smb_conf_path)
+
+    testparm_path = system_tools.find_binary("testparm")
+    if testparm_path is None:
+        with open(smb_conf_path, "w") as fh:
+            fh.write(content)
+        return errors.fail(result, "shares.validate_tool_missing", tool="testparm")
+
+    code, out, err = system_tools.run([testparm_path, "-s"])
+    if code != 0:
+        with open(smb_conf_path, "w") as fh:
+            fh.write(content)
+        return errors.fail(result, "shares.config_rejected", detail=(err or out).strip()[:300])
+
+    result["success"] = True
+    return result
+
+
+def _validate_and_apply(
+    new_content: str, managed_conf_path: str = MANAGED_CONF_PATH
+) -> dict[str, Any]:
+    """Write new_content to the managed file, validate the REAL effective
+    config with testparm, and roll back to the previous content if
+    validation fails. Nothing is left broken either way."""
+    result: dict[str, Any] = {"success": False}
+
+    include_result = _ensure_include_directive(managed_conf_path=managed_conf_path)
+    if not include_result["success"]:
+        return errors.propagate(result, include_result)
+
+    try:
+        with open(managed_conf_path, "r") as fh:
+            previous_content = fh.read()
+    except OSError:
+        previous_content = ""
+
+    try:
+        with open(managed_conf_path, "w") as fh:
+            fh.write(new_content)
+    except OSError as exc:
+        return errors.io_failed(result, exc, managed_conf_path)
+
+    testparm_path = system_tools.find_binary("testparm")
+    if testparm_path is None:
+        # restore - we can't validate, so we can't safely apply
+        with open(managed_conf_path, "w") as fh:
+            fh.write(previous_content)
+        return errors.fail(result, "shares.validate_tool_missing", tool="testparm")
+
+    code, out, err = system_tools.run([testparm_path, "-s"])
+    if code != 0:
+        with open(managed_conf_path, "w") as fh:
+            fh.write(previous_content)
+        return errors.fail(result, "shares.config_rejected", detail=(err or out).strip()[:300])
+
+    reload_result = reload_smbd()
+    if not reload_result["success"]:
+        # config is valid and saved, but the running smbd wasn't told -
+        # this is a soft failure, not a rollback case (config on disk is
+        # correct, a manual/next restart will pick it up regardless)
+        result["success"] = True
+        errors.warn(
+            result,
+            "shares.reload_failed",
+            reload_error_code=reload_result.get("error_code"),
+            **(reload_result.get("error_context") or {}),
+        )
+        return result
+
+    result["success"] = True
+    return result
+
+
+def reload_smbd() -> dict[str, Any]:
+    result: dict[str, Any] = {"success": False}
+    smbcontrol_path = system_tools.find_binary("smbcontrol")
+    if smbcontrol_path is None:
+        return errors.tool_missing(result, "smbcontrol")
+    code, out, err = system_tools.run([smbcontrol_path, "smbd", "reload-config"])
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "smbcontrol")
+    result["success"] = True
+    return result
+
+
+# --------------------------------------------------------------------------
+# Detection (main smb.conf + managed file, merged)
+# --------------------------------------------------------------------------
+
+def list_shares(
+    main_conf_path: str = MAIN_SMB_CONF, managed_conf_path: str = MANAGED_CONF_PATH
+) -> dict[str, Any]:
+    """All shares Samba actually knows about: ones this tool manages, and
+    any pre-existing ones defined directly in the main smb.conf (e.g. from
+    manual setup before this tool existed) - the latter shown read-only-
+    for-management-purposes, tagged managed=False, so nothing here is
+    hidden just because this tool didn't create it."""
+    result: dict[str, Any] = {"available": False, "shares": []}
+
+    if not os.path.isfile(main_conf_path):
+        return errors.fail(result, "shares.main_conf_missing", path=main_conf_path)
+
+    managed = _read_managed_shares(managed_conf_path)
+    managed_names = {s["name"] for s in managed}
+
+    cp = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        cp.read(main_conf_path)
+    except configparser.Error as exc:
+        return errors.fail(result, "shares.main_conf_parse_failed", path=main_conf_path, detail=str(exc))
+
+    others = []
+    for name in cp.sections():
+        if name in _RESERVED_NAMES or name in managed_names:
+            continue
+        section = cp[name]
+        valid_users = section.get("valid users", "").split()
+        plain_users = [u for u in valid_users if not _is_group_ref(u)]
+        group_refs = [_group_ref_name(u) for u in valid_users if _is_group_ref(u)]
+        resolved = sorted(set(plain_users) | set(_resolve_group_members(group_refs)))
+
+        share_read_only = section.get("read only", "yes").strip().lower() in ("yes", "true", "1")
+        read_list_raw = section.get("read list", "").split()
+        explicit_ro = set(u for u in read_list_raw if not _is_group_ref(u))
+        explicit_ro |= set(_resolve_group_members([_group_ref_name(g) for g in read_list_raw if _is_group_ref(g)]))
+        write_list_raw = section.get("write list", "").split()
+        explicit_rw = set(u for u in write_list_raw if not _is_group_ref(u))
+        explicit_rw |= set(_resolve_group_members([_group_ref_name(g) for g in write_list_raw if _is_group_ref(g)]))
+
+        permissions = {}
+        for u in resolved:
+            if u in explicit_ro:
+                permissions[u] = "ro"
+            elif u in explicit_rw:
+                permissions[u] = "rw"
+            else:
+                permissions[u] = "ro" if share_read_only else "rw"
+
+        others.append(
+            {
+                "name": name,
+                "path": section.get("path", ""),
+                "comment": section.get("comment", ""),
+                "permissions": permissions,
+                "group_grants": {},
+                "access_group": None,
+                "managed": False,
+            }
+        )
+
+    result["available"] = True
+    result["shares"] = sorted(managed + others, key=lambda s: s["name"])
+    return result
+
+
+# --------------------------------------------------------------------------
+# Mutations - create / update / delete
+# --------------------------------------------------------------------------
+
+def _prepare_share_directory(path: str, group: str | None) -> dict[str, Any]:
+    """Create the share folder if missing, and if a group is given, own it
+    by that group with the setgid bit so new files inherit the group."""
+    result: dict[str, Any] = {"success": False}
+    try:
+        os.makedirs(path, exist_ok=True)
+    except OSError as exc:
+        return errors.io_failed(result, exc, path)
+
+    if group:
+        try:
+            gid = grp.getgrnam(group).gr_gid
+        except KeyError:
+            return errors.fail(result, "shares.group_not_found", group=group)
+        try:
+            os.chown(path, -1, gid)  # -1 = leave owner unchanged
+            os.chmod(path, 0o2775)  # rwxrwsr-x - setgid so new files inherit the group
+        except OSError as exc:
+            return errors.io_failed(result, exc, path)
+    else:
+        try:
+            os.chmod(path, 0o755)
+        except OSError as exc:
+            return errors.io_failed(result, exc, path)
+
+    result["success"] = True
+    return result
+
+
+def _set_group_acl(path: str, group: str, level: str) -> dict[str, Any]:
+    """Grants a general group real filesystem access to a share
+    directory via POSIX ACLs - on top of the share's own dedicated
+    access group (which owns the directory outright via 'force group').
+
+    Samba's valid users/read list only gates the SMB PROTOCOL
+    connection - the underlying filesystem check still applies
+    (security = user means smbd impersonates the real UID), and that
+    only respects ONE owning group per file (chown/chmod can't express
+    "these two different groups both get write access"). ACLs can.
+
+    -R applies recursively to whatever's already in the directory; a
+    second call with -d sets the DEFAULT ACL too, so files and
+    subdirectories created *after* this runs inherit it automatically -
+    the ACL equivalent of what the setgid bit already does for the
+    dedicated access group."""
+    result: dict[str, Any] = {"success": False}
+
+    setfacl_path = system_tools.find_binary("setfacl")
+    if setfacl_path is None:
+        return errors.tool_missing(result, "setfacl")
+
+    perm = "rwx" if level == "rw" else "r-x"
+    code, out, err = system_tools.run([setfacl_path, "-R", "-m", f"g:{group}:{perm}", path])
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "setfacl")
+
+    code, out, err = system_tools.run([setfacl_path, "-R", "-d", "-m", f"g:{group}:{perm}", path])
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "setfacl")
+
+    result["success"] = True
+    return result
+
+
+def _remove_group_acl(path: str, group: str) -> dict[str, Any]:
+    """Best-effort removal - if the group's ACL entry was never actually
+    set (e.g. setfacl was missing when it was granted), there's nothing
+    to clean up and that's fine, not a failure worth blocking on."""
+    result: dict[str, Any] = {"success": True}
+
+    setfacl_path = system_tools.find_binary("setfacl")
+    if setfacl_path is None:
+        return result
+
+    system_tools.run([setfacl_path, "-R", "-x", f"g:{group}", path])
+    system_tools.run([setfacl_path, "-R", "-d", "-x", f"g:{group}", path])
+    return result
+
+
+def _sync_group_acls(path: str, desired_grants: dict[str, str], current_grants: dict[str, str]) -> dict[str, Any]:
+    """Reconciles filesystem ACLs with the desired group grants for a
+    share: removes groups no longer granted, (re)applies ACLs for
+    groups that are granted or whose level changed. Returns success
+    even if some individual ACL calls failed (each failure becomes a
+    warning, not a hard stop) - a share's core SMB-level access already
+    succeeded by the time this runs, and a missing ACL tool shouldn't
+    undo that; it should be visible as a warning instead."""
+    result: dict[str, Any] = {"success": True, "warnings": []}
+
+    for group in set(current_grants) - set(desired_grants):
+        _remove_group_acl(path, group)
+
+    for group, level in desired_grants.items():
+        if current_grants.get(group) == level:
+            continue
+        acl_result = _set_group_acl(path, group, level)
+        if not acl_result["success"]:
+            result["warnings"].append({"code": "shares.group_acl_failed", "context": {"group": group, "detail": acl_result.get("error_context", {}).get("detail", "")}})
+
+    return result
+
+
+def create_share(
+    name: str,
+    comment: str = "",
+    permissions: dict[str, str] | None = None,
+    group_grants: dict[str, str] | None = None,
+    base_path: str | None = None,
+    managed_conf_path: str = MANAGED_CONF_PATH,
+) -> dict[str, Any]:
+    """permissions maps username -> "rw" or "ro" (individual grants, via
+    the share's own dedicated access group). group_grants maps a
+    GENERAL group name -> "rw" or "ro" - a live binding (Samba resolves
+    group membership itself; adding someone to the group later gives
+    them access without touching the share again), backed by both an
+    extra +group entry in valid users (protocol-level) AND a POSIX ACL
+    on the directory (filesystem-level - see _set_group_acl for why
+    both are required). base_path picks which disk the share's
+    directory lives on (see list_share_locations) - REQUIRED, and must
+    be a disk-backed location: the system disk (BASE_SHARE_PATH) is not
+    an allowed target at all (his explicit call - he only ever needed
+    it briefly before connecting real storage, and would rather it be
+    impossible than tempting). Deliberately not something update_share
+    can change later: moving a share's location after the fact means
+    moving its actual file contents, a different (and much riskier)
+    operation than anything else this function does."""
+    result: dict[str, Any] = {"name": name, "success": False}
+
+    if not is_valid_share_name(name):
+        return errors.fail(result, "shares.invalid_name")
+
+    locations_by_path = {loc["path"]: loc for loc in list_share_locations()}
+    if not base_path or base_path not in locations_by_path:
+        return errors.fail(result, "shares.invalid_location", location=base_path or "")
+    if locations_by_path[base_path].get("disk") is None:
+        return errors.fail(result, "shares.system_disk_not_allowed")
+
+    existing = _read_managed_shares(managed_conf_path)
+    if any(s["name"] == name for s in existing):
+        return errors.fail(result, "shares.already_exists", name=name)
+
+    permissions = dict(permissions or {})
+    for u, level in permissions.items():
+        if level not in ("rw", "ro"):
+            return errors.fail(result, "shares.invalid_permission_level", user=u, level=str(level))
+
+    group_grants = dict(group_grants or {})
+    for g, level in group_grants.items():
+        if level not in ("rw", "ro"):
+            return errors.fail(result, "shares.invalid_permission_level", user=g, level=str(level))
+        try:
+            grp.getgrnam(g)
+        except KeyError:
+            return errors.fail(result, "shares.group_not_found", group=g)
+
+    group = access_group_name(name) if (permissions or group_grants) else None
+
+    if group:
+        # Explicit, not just a side effect of the loop below: that loop
+        # is empty whenever a share's only access comes from
+        # group_grants (no individual users) - the exact case this was
+        # missing for. _prepare_share_directory needs the group to
+        # already exist by the time it looks it up a few lines down
+        # (real report: creating a share with only a group grant and no
+        # individual permissions failed with "Group 'X_access' doesn't
+        # exist", because nothing had created it yet).
+        ensure_result = users_mod.ensure_group_exists(group)
+        if not ensure_result["success"]:
+            return errors.propagate(result, ensure_result, group=group)
+        for u in permissions:
+            add_result = users_mod.add_user_to_group(u, group)
+            if not add_result["success"]:
+                return errors.propagate(result, add_result, user=u, group=group)
+
+    path = share_path(name, base_path)
+    dir_result = _prepare_share_directory(path, group)
+    if not dir_result["success"]:
+        return errors.propagate(result, dir_result)
+
+    acl_warnings = []
+    if group_grants:
+        acl_result = _sync_group_acls(path, group_grants, {})
+        acl_warnings = acl_result.get("warnings") or []
+
+    new_share = {
+        "name": name,
+        "path": path,
+        "comment": comment,
+        "permissions": permissions,
+        "group_grants": group_grants,
+        "access_group": group,
+    }
+    new_content = _render_managed_shares(existing + [new_share])
+    apply_result = _validate_and_apply(new_content, managed_conf_path)
+    if not apply_result["success"]:
+        return errors.propagate(result, apply_result)
+
+    result["success"] = True
+    result["path"] = path
+    result["permissions"] = permissions
+    result["group_grants"] = group_grants
+    warnings = list(apply_result.get("warnings") or []) + acl_warnings
+    pw_warning = _missing_smb_password_warning(list(permissions))
+    if pw_warning:
+        warnings.append(pw_warning)
+    if warnings:
+        result["warnings"] = warnings
+    return result
+
+
+def remove_user_from_all_shares(username: str) -> dict[str, Any]:
+    """Best-effort cleanup called when a user account is deleted - drops
+    them from every MANAGED share's individual permissions (never
+    touches foreign, non-managed shares this tool doesn't own; never
+    touches group_grants, which follow group membership and aren't
+    this function's concern). Deleting the account without this would
+    leave a share's permissions pointing at a username that no longer
+    exists - Samba itself tolerates that harmlessly (it just never
+    resolves), so this is a hygiene cleanup, not a safety requirement,
+    and never blocks or fails the caller: a share that can't be
+    updated for some reason just keeps the stale entry."""
+    updated = []
+    for share in list_shares().get("shares", []):
+        if not share.get("managed"):
+            continue
+        permissions = share.get("permissions") or {}
+        if username not in permissions:
+            continue
+        new_permissions = {u: level for u, level in permissions.items() if u != username}
+        result = update_share(share["name"], permissions=new_permissions)
+        if result["success"]:
+            updated.append(share["name"])
+    return {"success": True, "updated_shares": updated}
+
+
+def remove_group_from_all_shares(group_name: str) -> dict[str, Any]:
+    """The group_grants counterpart to remove_user_from_all_shares -
+    called when a general group is deleted, so a share's group_grants
+    never keeps a stale entry pointing at a group that no longer
+    exists. Same best-effort, hygiene-not-safety reasoning: the warning
+    shown before the delete (see the confirm dialog) is what actually
+    protects against surprise, this just keeps the stored config
+    honest afterward. Only ever touches group_grants - individual
+    permissions are a completely separate dict, untouched here."""
+    updated = []
+    for share in list_shares().get("shares", []):
+        if not share.get("managed"):
+            continue
+        grants = share.get("group_grants") or {}
+        if group_name not in grants:
+            continue
+        new_grants = {g: level for g, level in grants.items() if g != group_name}
+        result = update_share(share["name"], group_grants=new_grants)
+        if result["success"]:
+            updated.append(share["name"])
+    return {"success": True, "updated_shares": updated}
+
+
+def update_share(
+    name: str,
+    comment: str | None = None,
+    permissions: dict[str, str] | None = None,
+    group_grants: dict[str, str] | None = None,
+    managed_conf_path: str = MANAGED_CONF_PATH,
+) -> dict[str, Any]:
+    result: dict[str, Any] = {"name": name, "success": False}
+
+    existing = _read_managed_shares(managed_conf_path)
+    match = next((s for s in existing if s["name"] == name), None)
+    if match is None:
+        return errors.fail(result, "shares.not_found", name=name)
+
+    if comment is not None:
+        match["comment"] = comment
+
+    if permissions is not None:
+        for u, level in permissions.items():
+            if level not in ("rw", "ro"):
+                return errors.fail(result, "shares.invalid_permission_level", user=u, level=str(level))
+
+    if group_grants is not None:
+        for g, level in group_grants.items():
+            if level not in ("rw", "ro"):
+                return errors.fail(result, "shares.invalid_permission_level", user=g, level=str(level))
+            try:
+                grp.getgrnam(g)
+            except KeyError:
+                return errors.fail(result, "shares.group_not_found", group=g)
+
+    acl_warnings = []
+    if permissions is not None or group_grants is not None:
+        dedicated_group = access_group_name(name)
+        existing_group = match.get("access_group")
+        if existing_group and existing_group != dedicated_group:
+            # This share was created before per-user access existed (an
+            # old single-group picker let it point at ANY group, e.g.
+            # someone's own personal account group) - never diff
+            # membership against a group we don't own. Migrate forward:
+            # start counting membership as empty in our own dedicated
+            # group, without touching the old group's membership at all.
+            current_users: set[str] = set()
+        else:
+            current_users = set(match.get("permissions") or {})
+        current_group_grants = dict(match.get("group_grants") or {})
+
+        desired_users = set(permissions) if permissions is not None else current_users
+        desired_group_grants = group_grants if group_grants is not None else current_group_grants
+        group = dedicated_group
+
+        if permissions is not None:
+            for u in desired_users - current_users:
+                add_result = users_mod.add_user_to_group(u, group)
+                if not add_result["success"]:
+                    return errors.propagate(result, add_result, user=u, group=group)
+            for u in current_users - desired_users:
+                remove_result = users_mod.remove_user_from_group(u, group)
+                if not remove_result["success"]:
+                    return errors.propagate(result, remove_result, user=u, group=group)
+            match["permissions"] = permissions
+
+        has_any_access = bool(desired_users) or bool(desired_group_grants)
+        match["access_group"] = group if has_any_access else None
+
+        if has_any_access:
+            # Same explicit call as create_share, for the same reason:
+            # this share's dedicated group may never have existed yet
+            # (e.g. its first-ever access grant is a group_grant with
+            # no individual permissions - the loop above never runs in
+            # that case, so nothing created the group before
+            # _prepare_share_directory looks it up).
+            ensure_result = users_mod.ensure_group_exists(group)
+            if not ensure_result["success"]:
+                return errors.propagate(result, ensure_result, group=group)
+            dir_result = _prepare_share_directory(match["path"], group)
+            if not dir_result["success"]:
+                return errors.propagate(result, dir_result)
+
+        if group_grants is not None:
+            acl_result = _sync_group_acls(match["path"], desired_group_grants, current_group_grants)
+            acl_warnings = acl_result.get("warnings") or []
+            match["group_grants"] = desired_group_grants
+
+    new_content = _render_managed_shares(existing)
+    apply_result = _validate_and_apply(new_content, managed_conf_path)
+    if not apply_result["success"]:
+        return errors.propagate(result, apply_result)
+
+    result["success"] = True
+    warnings = list(apply_result.get("warnings") or []) + acl_warnings
+    pw_warning = _missing_smb_password_warning(list(permissions or {}))
+    if pw_warning:
+        warnings.append(pw_warning)
+    if warnings:
+        result["warnings"] = warnings
+    return result
+
+
+def delete_share(
+    name: str, delete_files: bool = False, managed_conf_path: str = MANAGED_CONF_PATH
+) -> dict[str, Any]:
+    result: dict[str, Any] = {"name": name, "success": False}
+
+    existing = _read_managed_shares(managed_conf_path)
+    match = next((s for s in existing if s["name"] == name), None)
+    if match is None:
+        return errors.fail(result, "shares.not_found", name=name)
+
+    remaining = [s for s in existing if s["name"] != name]
+    new_content = _render_managed_shares(remaining)
+    apply_result = _validate_and_apply(new_content, managed_conf_path)
+    if not apply_result["success"]:
+        return errors.propagate(result, apply_result)
+
+    access_group = match.get("access_group")
+    if access_group and access_group == access_group_name(name):
+        # Only ever delete a group WE created with our own naming
+        # convention. A share made through the old single-group picker
+        # (before this became per-user) can point at an arbitrary
+        # existing group - e.g. someone's own personal account group -
+        # and that must never be touched here.
+        groupdel_path = system_tools.find_binary("groupdel")
+        if groupdel_path is None:
+            errors.warn(result, "shares.access_group_cleanup_tool_missing", group=access_group)
+        else:
+            code, out, err = system_tools.run([groupdel_path, access_group])
+            if code != 0:
+                # Real report: a share's access group survived its
+                # share's deletion (groupdel's result used to be
+                # silently ignored here) and then "leaked" into the
+                # general Groups tab, since the exclusion filter there
+                # only hides a group while some *existing* share still
+                # points at it as its access_group - once the share's
+                # gone, an orphaned group looks like any other. Warning
+                # now, so this is visible and actionable instead of a
+                # silent mystery leftover.
+                errors.warn(result, "shares.access_group_cleanup_failed", group=access_group, detail=(err or out).strip()[:300])
+
+    for granted_group in (match.get("group_grants") or {}):
+        _remove_group_acl(match["path"], granted_group)  # best-effort, ignore result
+
+    if delete_files:
+        import shutil as _shutil
+
+        try:
+            _shutil.rmtree(match["path"])
+        except OSError as exc:
+            result["success"] = True
+            errors.warn(result, "shares.file_delete_failed", path=match["path"], detail=str(exc))
+            return result
+
+    result["success"] = True
+    return result
