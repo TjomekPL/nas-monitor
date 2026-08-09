@@ -1559,7 +1559,22 @@ function groupNameForShare(sharePath) {
 
 function buildShareTable(shares) {
   const table = document.createElement("table");
-  table.innerHTML = `<thead><tr><th>${t("ui.shares.colShare")}</th><th>${t("ui.shares.colComment")}</th><th>${t("ui.shares.colAccess")}</th><th></th></tr></thead>`;
+  table.className = "share-group-table";
+  // Fixed, identical column proportions across every group's table -
+  // otherwise each <table> auto-sizes its own columns from its own
+  // rows (a real report: SDA's single-row table and KOTY's six-row
+  // one, with much more Access-tag content, ended up with visibly
+  // different Share/Comment widths even with no long comment anywhere
+  // - it was never really about comment length, auto layout just
+  // reacts to whatever's widest in that specific table).
+  table.innerHTML = `
+    <colgroup>
+      <col style="width: 20%;">
+      <col style="width: 26%;">
+      <col style="width: 40%;">
+      <col style="width: 14%;">
+    </colgroup>
+    <thead><tr><th>${t("ui.shares.colShare")}</th><th>${t("ui.shares.colComment")}</th><th>${t("ui.shares.colAccess")}</th><th></th></tr></thead>`;
   const tbody = document.createElement("tbody");
   for (const sh of shares) {
     const row = shareRowTemplate.content.cloneNode(true);
@@ -1568,8 +1583,12 @@ function buildShareTable(shares) {
     const shareNameEl = row.querySelector(".display-name");
     shareNameEl.textContent = shareLabel;
     shareNameEl.title = shareLabel;
-    row.querySelector(".path").textContent = sh.path;
-    row.querySelector(".comment").textContent = sh.comment || "\u2013";
+    const pathEl = row.querySelector(".path");
+    pathEl.textContent = sh.path;
+    pathEl.title = sh.path;
+    const commentEl = row.querySelector(".comment");
+    commentEl.textContent = sh.comment || "\u2013";
+    if (sh.comment) commentEl.title = sh.comment;
     renderPermissionsSummary(row.querySelector(".share-users"), sh.permissions, sh.group_grants);
 
     const editBtn = row.querySelector(".edit-btn");

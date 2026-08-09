@@ -601,17 +601,25 @@ h2 {
   padding: 10px 14px;
   border-top: 1px solid var(--border);
 }
+.share-group-table {
+  table-layout: fixed;
+}
+.share-group-table .path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .user-table td.comment {
-  /* A long comment used to freely stretch the whole column (and with
-     it the whole table) - a real report where a deliberately long
-     test comment made the Share/Access columns visibly uneven between
-     one group's table and another's, since each table sizes its own
-     columns independently by default. Capping the width and wrapping
-     means one long comment can only ever grow *taller*, never wider
-     than its neighbors across every group. */
-  max-width: 260px;
-  overflow-wrap: break-word;
-  word-break: break-word;
+  /* Truncates with an ellipsis instead of wrapping (his preference) -
+     the full text is still available via the title tooltip set in JS.
+     table-layout:fixed on .share-group-table (see buildShareTable) is
+     what actually keeps this column - and its neighbors - a
+     consistent width across every group's table; this alone only
+     stops one single long comment from stretching its own row. */
+  max-width: 0; /* with table-layout:fixed, forces the column to respect the <colgroup> width instead of the content's natural size */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .share-group {
