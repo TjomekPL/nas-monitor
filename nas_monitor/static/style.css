@@ -878,28 +878,6 @@ dialog h3 { margin: 0 0 16px; font-size: 17px; }
   overflow-y: auto;
 }
 
-.grant-picker-wrapper {
-  margin-top: 6px;
-}
-.grant-picker-multiselect {
-  width: 100%;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: 13px;
-  padding: 4px;
-}
-.grant-picker-multiselect option {
-  padding: 4px 8px;
-  border-radius: 4px;
-}
-.grant-picker-actions {
-  display: flex;
-  gap: 12px;
-  margin-top: 8px;
-}
-
 form label {
   display: block;
   font-size: 13px;

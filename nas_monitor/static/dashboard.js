@@ -1742,60 +1742,56 @@ function wireShareGrantAdder({ addBtn, listContainer, candidatesFn, keyFn, label
     refresh();
   }
 
-  // A native multi-select listbox (ctrl/cmd-click, or shift-click for
-  // a range) - his explicit preference, closer to the original
-  // dropdown he liked but with real multi-selection built in, rather
-  // than a checkbox-per-row checklist.
   addBtn.addEventListener("click", () => {
-    const left = remaining();
-    if (!left.length) return;
-
-    const wrapper = document.createElement("div");
-    wrapper.className = "grant-picker-wrapper";
-
     const picker = document.createElement("select");
-    picker.className = "grant-picker-multiselect";
-    picker.multiple = true;
-    picker.size = Math.min(8, Math.max(3, left.length));
-    for (const candidate of left) {
-      const opt = document.createElement("option");
-      opt.value = keyFn(candidate);
-      opt.textContent = labelFn(candidate);
-      picker.appendChild(opt);
+    picker.className = "grant-picker";
+
+    function fillOptions() {
+      const left = remaining();
+      picker.innerHTML = "";
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = t("ui.shareDialog.pickPlaceholder");
+      placeholder.disabled = true;
+      placeholder.selected = true;
+      picker.appendChild(placeholder);
+      for (const c of left) {
+        const opt = document.createElement("option");
+        opt.value = keyFn(c);
+        opt.textContent = labelFn(c);
+        picker.appendChild(opt);
+      }
+      return left;
     }
-    wrapper.appendChild(picker);
 
     function closePicker() {
-      wrapper.remove();
+      if (picker.isConnected) picker.remove();
       addBtn.style.display = "inline-block";
     }
 
-    const actionsRow = document.createElement("div");
-    actionsRow.className = "grant-picker-actions";
+    const initial = fillOptions();
+    if (!initial.length) return;
 
-    const confirmBtn = document.createElement("button");
-    confirmBtn.type = "button";
-    confirmBtn.className = "link-btn";
-    confirmBtn.textContent = t("ui.shareDialog.addSelectedBtn");
-    confirmBtn.addEventListener("click", () => {
-      const selectedKeys = new Set(Array.from(picker.selectedOptions).map((o) => o.value));
-      for (const candidate of left) {
-        if (selectedKeys.has(keyFn(candidate))) addRow(candidate);
+    // Reverted back to this exact shape (his call, third time around):
+    // a single, plain <select> - visually consistent with every other
+    // dropdown in the app, unlike a native <select multiple> listbox
+    // (tried in between - functional, but genuinely uglier, doesn't
+    // theme well). Stays open across picks: each choice adds a row and
+    // immediately refills the same dropdown with whoever's left,
+    // closing on its own once nobody remains or the user clicks away.
+    picker.addEventListener("change", () => {
+      const left = remaining();
+      const chosen = left.find((c) => keyFn(c) === picker.value);
+      if (chosen) addRow(chosen);
+      const stillLeft = fillOptions();
+      if (!stillLeft.length) {
+        closePicker();
+      } else {
+        picker.focus();
       }
-      closePicker();
-      refresh();
     });
-    actionsRow.appendChild(confirmBtn);
-
-    const cancelBtn = document.createElement("button");
-    cancelBtn.type = "button";
-    cancelBtn.className = "link-btn";
-    cancelBtn.textContent = t("ui.shareDialog.cancelPickBtn");
-    cancelBtn.addEventListener("click", closePicker);
-    actionsRow.appendChild(cancelBtn);
-
-    wrapper.appendChild(actionsRow);
-    addBtn.insertAdjacentElement("afterend", wrapper);
+    picker.addEventListener("blur", closePicker);
+    addBtn.insertAdjacentElement("afterend", picker);
     addBtn.style.display = "none";
     picker.focus();
   });
