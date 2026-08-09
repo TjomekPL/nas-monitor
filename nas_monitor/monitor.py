@@ -290,6 +290,31 @@ def classify_health(smart: dict[str, Any]) -> str:
 _MDSTAT_RESYNC_RE = re.compile(r"(resync|recovery|reshape|check)\s*=\s*([\d.]+)%")
 
 
+_MD_LEVEL_NAMES = {"linear", "raid0", "raid1", "raid4", "raid5", "raid6", "raid10", "multipath", "faulty"}
+_MDSTAT_MEMBER_RE = re.compile(r"^([a-zA-Z0-9]+)\[(\d+)\](\(([SF])\))?$")
+
+
+def _parse_mdstat_members(members_raw: str) -> list[dict[str, Any]]:
+    """Parses mdstat's own raw member string ("sdb1[1] sdc1[2](F)
+    sde1[4](S)") into the same {"device", "role"} shape mdadm --export
+    normally provides - the fallback used when mdadm itself isn't
+    installed (see get_raid_arrays). [N] is the device's RAID slot
+    number (a genuinely active member); a trailing (F) marks it
+    faulty, (S) marks it a spare - neither actually contributing to
+    the array's redundancy right now, matching how a mdadm-export
+    "faulty spare" role is already treated as not-working elsewhere in
+    this module."""
+    members = []
+    for token in members_raw.split():
+        m = _MDSTAT_MEMBER_RE.match(token)
+        if not m:
+            continue
+        name, slot, _, flag = m.groups()
+        role = "faulty" if flag == "F" else ("spare" if flag == "S" else slot)
+        members.append({"device": f"/dev/{name}", "role": role})
+    return members
+
+
 def _parse_mdstat(mdstat_path: str = "/proc/mdstat") -> dict[str, dict[str, Any]]:
     """Parse /proc/mdstat for array names and per-array progress info."""
     try:
@@ -301,13 +326,29 @@ def _parse_mdstat(mdstat_path: str = "/proc/mdstat") -> dict[str, dict[str, Any]
     arrays: dict[str, dict[str, Any]] = {}
     current = None
     for line in content.splitlines():
-        m = re.match(r"^(md\d+)\s*:\s*(active|inactive)\s*(\(read-only\)\s*)?(\S+)?\s*(.*)$", line)
+        m = re.match(r"^(md\d+)\s*:\s*(active|inactive)\s*(\(read-only\)\s*)?(.*)$", line)
         if m:
             current = m.group(1)
+            # An inactive array with too few members to even start
+            # (e.g. "md0 : inactive sda1[0](S)") has no level token at
+            # all - the device list starts immediately after
+            # active/inactive. Only treat the first word as the level
+            # if it's actually one of mdadm's known personality names;
+            # otherwise it's the first device, and swallowing it as a
+            # fake "level" (the previous behavior) both gave a wrong
+            # level and silently dropped that device from members_raw.
+            rest = m.group(4).strip()
+            tokens = rest.split(None, 1)
+            if tokens and tokens[0] in _MD_LEVEL_NAMES:
+                level = tokens[0]
+                members_raw = tokens[1] if len(tokens) > 1 else ""
+            else:
+                level = "unknown"
+                members_raw = rest
             arrays[current] = {
                 "active": m.group(2) == "active",
-                "level": m.group(4) or "unknown",
-                "members_raw": m.group(5).strip(),
+                "level": level,
+                "members_raw": members_raw,
                 "progress_percent": None,
                 "progress_action": None,
             }
@@ -345,7 +386,17 @@ def get_raid_arrays() -> list[dict[str, Any]]:
         }
 
         if mdadm_path is None:
+            # mdadm itself is what normally supplies the structured
+            # device list (below) - without it, /proc/mdstat's own raw
+            # member string ("sdb1[1] sdc1[2](F)") is the only thing
+            # available, so it's parsed as a fallback rather than
+            # leaving devices empty and unable to answer "which disks
+            # does this contain" at all just because mdadm isn't on
+            # this system.
             entry["error"] = "mdadm not installed"
+            entry["devices"] = _parse_mdstat_members(info["members_raw"])
+            entry["working_devices"] = sum(1 for d in entry["devices"] if d.get("role") and d["role"].isdigit())
+            entry["failed_devices"] = len(entry["devices"]) - entry["working_devices"]
             arrays.append(entry)
             continue
 
@@ -400,8 +451,23 @@ def get_raid_arrays() -> list[dict[str, Any]]:
             entry["expected_devices"] is not None
             and entry["working_devices"] < entry["expected_devices"]
         )
-        if "degraded" in state or "failed" in state or device_shortfall:
+        is_degraded = "degraded" in state or "failed" in state or device_shortfall
+        if is_degraded and not entry["active"]:
+            # Genuinely non-functional - too many members missing for
+            # the array to operate at all (mdstat itself reports it
+            # inactive), not just running without full redundancy.
             entry["health"] = "critical"
+        elif is_degraded:
+            # His explicit correction to the first version of this fix:
+            # a degraded-but-still-active array (e.g. one disk out of a
+            # RAID5) is still working, reads/writes still succeed, it's
+            # just running without its normal redundancy - that's a
+            # "come deal with this soon" state, not "this is broken
+            # right now", so it gets the same warning tier as anything
+            # else in this app that's degraded-but-functional (a high
+            # disk temperature, say), not the same red as something
+            # actually failed.
+            entry["health"] = "warning"
         elif entry["progress_percent"] is not None:
             entry["health"] = "warning"
         elif state in ("clean", "active"):

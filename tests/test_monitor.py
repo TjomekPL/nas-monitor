@@ -224,6 +224,48 @@ class TestMdstatParsing(unittest.TestCase):
         arrays = monitor._parse_mdstat("/nonexistent/path/mdstat")
         self.assertEqual(arrays, {})
 
+    def test_inactive_array_with_no_level_token_does_not_swallow_a_device_as_the_level(self):
+        # Real gap this fixes: "md0 : inactive sda1[0](S)" has no
+        # level shown at all - too few members for mdadm to even pick
+        # a personality. The old regex grabbed the first whitespace-
+        # separated token unconditionally, so "sda1[0](S)" (a device)
+        # got misread as the array's "level", and the device itself
+        # silently vanished from members_raw.
+        content = "Personalities : [raid1]\nmd0 : inactive sda1[0](S)\n      1953260544 blocks super 1.2\n\nunused devices: <none>\n"
+        path = self._with_mdstat(content)
+        arrays = monitor._parse_mdstat(path)
+        os.unlink(path)
+        self.assertEqual(arrays["md0"]["level"], "unknown")
+        self.assertFalse(arrays["md0"]["active"])
+        self.assertEqual(arrays["md0"]["members_raw"], "sda1[0](S)")
+
+    def test_active_array_with_a_recognized_level_still_parses_normally(self):
+        # Guards against the fix above being too aggressive - a normal,
+        # healthy line must still correctly split level from members.
+        path = self._with_mdstat(MDSTAT_HEALTHY)
+        arrays = monitor._parse_mdstat(path)
+        os.unlink(path)
+        self.assertEqual(arrays["md0"]["level"], "raid1")
+        self.assertEqual(arrays["md0"]["members_raw"], "sdb1[1] sda1[0]")
+
+
+class TestParseMdstatMembers(unittest.TestCase):
+    def test_parses_active_and_spare_and_faulty_members(self):
+        members = monitor._parse_mdstat_members("sda1[0] sdb1[1] sdc1[2](S) sdd1[3](F)")
+        self.assertEqual(members, [
+            {"device": "/dev/sda1", "role": "0"},
+            {"device": "/dev/sdb1", "role": "1"},
+            {"device": "/dev/sdc1", "role": "spare"},
+            {"device": "/dev/sdd1", "role": "faulty"},
+        ])
+
+    def test_empty_string_gives_no_members(self):
+        self.assertEqual(monitor._parse_mdstat_members(""), [])
+
+    def test_ignores_tokens_that_do_not_match_the_device_pattern(self):
+        # e.g. a stray annotation that isn't a "name[N]" device token
+        self.assertEqual(monitor._parse_mdstat_members("garbage"), [])
+
 
 class TestGetRaidArrays(unittest.TestCase):
     @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/sbin/mdadm")
@@ -280,6 +322,33 @@ class TestGetRaidArrays(unittest.TestCase):
         arrays = monitor.get_raid_arrays()
         self.assertEqual(arrays[0]["working_devices"], 3)
         self.assertEqual(arrays[0]["expected_devices"], 4)
+        # His explicit correction: degraded-but-STILL-ACTIVE (mdstat
+        # itself reports it active - one missing disk out of a RAID5 is
+        # still fully functional, just without redundancy) is a
+        # warning, not the same red as something actually broken.
+        self.assertEqual(arrays[0]["health"], "warning")
+
+    @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/sbin/mdadm")
+    @mock.patch("nas_monitor.monitor._run")
+    @mock.patch("nas_monitor.monitor._parse_mdstat")
+    def test_inactive_array_is_critical_not_just_warning(self, mock_mdstat, mock_run, mock_which):
+        # The genuinely-broken case: mdstat itself reports the array as
+        # inactive (too many members missing to function at all, not
+        # just running without full redundancy) - this is the one that
+        # should still get the red/critical tier.
+        export = (
+            "MD_LEVEL=raid5\n"
+            "MD_DEVICES=4\n"
+            "MD_METADATA=1.2\n"
+            "MD_ARRAY_STATE=inactive\n"
+            "MD_DEVICE_dev0_DEV=/dev/sda1\n"
+            "MD_DEVICE_dev0_ROLE=0\n"
+        )
+        mock_mdstat.return_value = {
+            "md0": {"active": False, "level": "raid5", "members_raw": "", "progress_percent": None, "progress_action": None}
+        }
+        mock_run.return_value = (0, export, "")
+        arrays = monitor.get_raid_arrays()
         self.assertEqual(arrays[0]["health"], "critical")
 
     @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/sbin/mdadm")
@@ -307,7 +376,10 @@ class TestGetRaidArrays(unittest.TestCase):
         arrays = monitor.get_raid_arrays()
         self.assertEqual(arrays[0]["working_devices"], 1)
         self.assertEqual(arrays[0]["failed_devices"], 1)
-        self.assertEqual(arrays[0]["health"], "critical")
+        # active RAID1 with one working mirror - degraded, still
+        # serving data, so warning rather than critical (see the
+        # inactive-array test below for the genuinely broken case).
+        self.assertEqual(arrays[0]["health"], "warning")
 
     @mock.patch("nas_monitor.monitor._find_binary", return_value=None)
     @mock.patch("nas_monitor.monitor._parse_mdstat")
@@ -324,6 +396,34 @@ class TestGetRaidArrays(unittest.TestCase):
         arrays = monitor.get_raid_arrays()
         self.assertEqual(len(arrays), 1)
         self.assertEqual(arrays[0]["error"], "mdadm not installed")
+
+    @mock.patch("nas_monitor.monitor._find_binary", return_value=None)
+    @mock.patch("nas_monitor.monitor._parse_mdstat")
+    def test_missing_mdadm_still_reports_members_from_mdstat_itself(self, mock_mdstat, mock_find_binary):
+        # Real gap: without mdadm, "which disks does this contain" used
+        # to come back completely empty even though /proc/mdstat's own
+        # raw member string already has that answer - falls back to
+        # parsing it directly instead of just giving up.
+        mock_mdstat.return_value = {
+            "md0": {
+                "active": True,
+                "level": "raid5",
+                "members_raw": "sdb1[1] sdc1[2] sdd1[3](F)",
+                "progress_percent": None,
+                "progress_action": None,
+            }
+        }
+        arrays = monitor.get_raid_arrays()
+        self.assertEqual(
+            arrays[0]["devices"],
+            [
+                {"device": "/dev/sdb1", "role": "1"},
+                {"device": "/dev/sdc1", "role": "2"},
+                {"device": "/dev/sdd1", "role": "faulty"},
+            ],
+        )
+        self.assertEqual(arrays[0]["working_devices"], 2)
+        self.assertEqual(arrays[0]["failed_devices"], 1)
 
     @mock.patch("nas_monitor.monitor._parse_mdstat", return_value={})
     def test_no_arrays_present(self, mock_mdstat):
