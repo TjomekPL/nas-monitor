@@ -182,6 +182,7 @@ window.NAS_I18N.pl = {
       heading: "Udziały",
       addBtn: "+ Dodaj udział",
       colShare: "Udział",
+      groupSystemDisk: "Dysk systemowy (/srv)",
       colComment: "Komentarz",
       colAccess: "Dostęp",
       editBtn: "Edytuj",

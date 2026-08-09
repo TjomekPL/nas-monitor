@@ -1540,16 +1540,28 @@ function renderPermissionsSummary(container, permissions, groupGrants) {
   }
 }
 
-function renderShares(sharesList) {
-  sharesContainer.innerHTML = "";
-  if (!sharesList.length) {
-    emptyState(sharesContainer, t("msg.empty.shares"));
-    return;
+function groupNameForShare(sharePath) {
+  // Longest-prefix match against known share locations (system /srv
+  // plus any disk currently mounted under it) - whichever location's
+  // path the share's own path actually falls under. Falls back to the
+  // system-disk label if nothing disk-backed matches (covers /srv
+  // itself, and any share this tool doesn't recognize the location of
+  // at all - safer to lump it under "system" than silently drop it).
+  let best = null;
+  for (const loc of lastShareLocationsData) {
+    if (sharePath === loc.path || sharePath.startsWith(loc.path + "/")) {
+      if (!best || loc.path.length > best.path.length) best = loc;
+    }
   }
+  if (!best || !best.disk) return t("ui.shares.groupSystemDisk");
+  return best.label || best.disk;
+}
+
+function buildShareTable(shares) {
   const table = document.createElement("table");
   table.innerHTML = `<thead><tr><th>${t("ui.shares.colShare")}</th><th>${t("ui.shares.colComment")}</th><th>${t("ui.shares.colAccess")}</th><th></th></tr></thead>`;
   const tbody = document.createElement("tbody");
-  for (const sh of sharesList) {
+  for (const sh of shares) {
     const row = shareRowTemplate.content.cloneNode(true);
     window.i18n.applyTranslations(row);
     const shareLabel = sh.name + (sh.managed ? "" : t("ui.shares.notManagedSuffix"));
@@ -1575,7 +1587,50 @@ function renderShares(sharesList) {
     tbody.appendChild(row);
   }
   table.appendChild(tbody);
-  sharesContainer.appendChild(table);
+  return table;
+}
+
+const SHARE_GROUP_COLLAPSE_THRESHOLD = 5;
+
+function renderShares(sharesList) {
+  sharesContainer.innerHTML = "";
+  if (!sharesList.length) {
+    emptyState(sharesContainer, t("msg.empty.shares"));
+    return;
+  }
+
+  // Grouped by backing disk/array (his want) - a group only gets a
+  // collapse toggle once it's actually big enough to be worth
+  // collapsing (>5 shares); smaller groups just show as a plain
+  // heading + table, no affordance to hide something that short.
+  const groups = new Map();
+  for (const sh of sharesList) {
+    const name = groupNameForShare(sh.path);
+    if (!groups.has(name)) groups.set(name, []);
+    groups.get(name).push(sh);
+  }
+
+  for (const [groupName, shares] of groups) {
+    const section = document.createElement("section");
+    section.className = "share-group";
+
+    if (shares.length > SHARE_GROUP_COLLAPSE_THRESHOLD) {
+      const details = document.createElement("details");
+      details.open = true;
+      const summary = document.createElement("summary");
+      summary.textContent = `${groupName} (${shares.length})`;
+      details.appendChild(summary);
+      details.appendChild(buildShareTable(shares));
+      section.appendChild(details);
+    } else {
+      const heading = document.createElement("h3");
+      heading.textContent = `${groupName} (${shares.length})`;
+      section.appendChild(heading);
+      section.appendChild(buildShareTable(shares));
+    }
+
+    sharesContainer.appendChild(section);
+  }
 }
 
 function grantLabels() {
@@ -1809,6 +1864,7 @@ async function loadShares() {
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     lastSharesData = data.shares || [];
+    await fetchShareLocations(); // kept fresh for grouping - mount state/labels can change between polls
     renderShares(lastSharesData);
   } catch (err) {
     emptyState(sharesContainer, t("msg.loadErrorShares", { detail: err.message }));
@@ -1971,26 +2027,31 @@ async function loadRecoverableDirectories() {
   }
 }
 
-async function loadShareLocations() {
-  shareLocationSelect.innerHTML = "";
+let lastShareLocationsData = [];
+
+async function fetchShareLocations() {
   try {
     const res = await fetch("/api/shares/locations");
     const data = await res.json();
-    for (const loc of data.locations || []) {
-      const opt = document.createElement("option");
-      opt.value = loc.path;
-      opt.textContent = loc.disk
-        ? t(loc.label ? "ui.shareDialog.locationDiskLabeled" : "ui.shareDialog.locationDisk", {
-            path: loc.path, disk: loc.disk, fstype: loc.fstype || "?", label: loc.label || "",
-          })
-        : t("ui.shareDialog.locationDefault", { path: loc.path });
-      shareLocationSelect.appendChild(opt);
-    }
+    lastShareLocationsData = data.locations || [];
   } catch (err) {
-    // A failed fetch just leaves the select empty - the submit will
-    // then fall through to the default (/srv) server-side, same as if
-    // nothing had been chosen, rather than blocking share creation
-    // entirely over a location list that failed to load.
+    lastShareLocationsData = [];
+  }
+  return lastShareLocationsData;
+}
+
+async function loadShareLocations() {
+  shareLocationSelect.innerHTML = "";
+  const locations = await fetchShareLocations();
+  for (const loc of locations) {
+    const opt = document.createElement("option");
+    opt.value = loc.path;
+    opt.textContent = loc.disk
+      ? t(loc.label ? "ui.shareDialog.locationDiskLabeled" : "ui.shareDialog.locationDisk", {
+          path: loc.path, disk: loc.disk, fstype: loc.fstype || "?", label: loc.label || "",
+        })
+      : t("ui.shareDialog.locationDefault", { path: loc.path });
+    shareLocationSelect.appendChild(opt);
   }
   updateSharePathPreview();
   await loadRecoverableDirectories();

@@ -182,6 +182,7 @@ window.NAS_I18N.en = {
       heading: "Shares",
       addBtn: "+ Add share",
       colShare: "Share",
+      groupSystemDisk: "System disk (/srv)",
       colComment: "Comment",
       colAccess: "Access",
       editBtn: "Edit",
