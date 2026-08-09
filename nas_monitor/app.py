@@ -17,7 +17,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth, system_stats, update_manager, disk_mutate, layout
+from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth, system_stats, update_manager, disk_mutate, layout, raid_mutate
 
 # Every account that gets SMB access lands here by default - removable
 # afterward like any other group (just uncheck it in the edit form).
@@ -161,7 +161,21 @@ def api_status():
 
 @app.route("/api/disks/manageable")
 def api_disks_manageable():
-    return jsonify({"disks": disk_mutate.list_manageable_disks()})
+    return jsonify({"disks": disk_mutate.list_manageable_disks() + disk_mutate.list_manageable_raid_arrays()})
+
+
+@app.route("/api/raid/create", methods=["POST"])
+def api_raid_create():
+    data = request.get_json(force=True, silent=True) or {}
+    devices = [d.strip() for d in (data.get("devices") or []) if d.strip()]
+    level = str(data.get("level") or "").strip()
+
+    result = raid_mutate.create_raid_array(devices, level)
+    if not result["success"]:
+        oplog.log_event("raid", "create", "failure", params={"level": level, "devices": ", ".join(devices)})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("raid", "create", "success", params={"level": level, "devices": ", ".join(devices), "array": result["name"]})
+    return jsonify({"success": True, "name": result["name"], "path": result["path"]})
 
 
 @app.route("/api/layout/<section>")

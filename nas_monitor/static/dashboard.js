@@ -821,6 +821,111 @@ function renderRawDisks(disks) {
   rawDisksContainer.appendChild(table);
 }
 
+const addRaidBtn = document.getElementById("add-raid-btn");
+const raidCreateDialogEl = document.getElementById("raid-create-dialog");
+const raidCreateForm = document.getElementById("raid-create-form");
+const raidCreateErrorHint = document.getElementById("raid-create-error-hint");
+const raidCreateDisksChecklist = document.getElementById("raid-create-disks-checklist");
+const raidCreateLevelRow = document.getElementById("raid-create-level-row");
+const raidCreateLevelSelect = document.getElementById("raid-create-level");
+const raidCreateUsbWarning = document.getElementById("raid-create-usb-warning");
+const raidCreateError = document.getElementById("raid-create-error");
+const raidCreateCancelBtn = document.getElementById("raid-create-cancel");
+const raidCreateSubmitBtn = document.getElementById("raid-create-submit");
+
+// Mirrors raid_mutate.MIN_DEVICES_FOR_LEVEL - kept in sync manually
+// (small, stable table, not worth a round trip just to fetch it) so
+// the level dropdown can filter itself down to only what the CURRENTLY
+// checked disk count actually supports, instead of listing every level
+// and letting the server reject an invalid combination after the fact.
+const RAID_MIN_DEVICES = { "0": 2, "1": 2, "4": 3, "5": 3, "6": 4, "10": 4 };
+
+function raidCreateCheckedDisks() {
+  return Array.from(raidCreateDisksChecklist.querySelectorAll('input[type="checkbox"]:checked')).map((cb) => cb.value);
+}
+
+function raidCreateUpdateLevelsAndSubmit() {
+  const checkedPaths = raidCreateCheckedDisks();
+  const count = checkedPaths.length;
+
+  const previousLevel = raidCreateLevelSelect.value;
+  raidCreateLevelSelect.innerHTML = "";
+  const availableLevels = Object.keys(RAID_MIN_DEVICES).filter((lvl) => count >= RAID_MIN_DEVICES[lvl]);
+  for (const lvl of availableLevels) {
+    const opt = document.createElement("option");
+    opt.value = lvl;
+    opt.textContent = `RAID${lvl}`;
+    raidCreateLevelSelect.appendChild(opt);
+  }
+  if (availableLevels.includes(previousLevel)) raidCreateLevelSelect.value = previousLevel;
+  raidCreateLevelRow.style.display = availableLevels.length ? "block" : "none";
+
+  const checkedDisks = (lastManageableDisksData || []).filter((d) => checkedPaths.includes(d.path));
+  raidCreateUsbWarning.style.display = checkedDisks.some((d) => d.transport === "usb") ? "block" : "none";
+
+  raidCreateSubmitBtn.disabled = availableLevels.length === 0;
+}
+
+addRaidBtn.addEventListener("click", async () => {
+  raidCreateError.textContent = "";
+  raidCreateDisksChecklist.innerHTML = "";
+  await fetchManageableDisks();
+  // Only genuinely free disks are offered - a disk with a filesystem,
+  // already mounted, or already a RAID member needs an explicit Wipe
+  // first, same as any other destructive disk operation in this tool
+  // (creating an array is exactly that: destructive).
+  const freeDisks = (lastManageableDisksData || []).filter(
+    (d) => !d.fstype && !d.mounted && !d.is_raid_member && d.transport !== "raid"
+  );
+  raidCreateErrorHint.style.display = freeDisks.length ? "none" : "block";
+  for (const disk of freeDisks) {
+    const label = document.createElement("label");
+    label.className = "inline";
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.value = disk.path;
+    cb.addEventListener("change", raidCreateUpdateLevelsAndSubmit);
+    label.appendChild(cb);
+    const usbTag = disk.transport === "usb" ? " (USB)" : "";
+    label.append(` ${disk.name} - ${disk.size}, ${disk.model}${usbTag}`);
+    raidCreateDisksChecklist.appendChild(label);
+  }
+  raidCreateUpdateLevelsAndSubmit();
+  raidCreateDialogEl.showModal();
+});
+
+raidCreateCancelBtn.addEventListener("click", () => raidCreateDialogEl.close());
+
+raidCreateForm.addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const devices = raidCreateCheckedDisks();
+  const level = raidCreateLevelSelect.value;
+  if (!devices.length || !level) return;
+
+  raidCreateError.textContent = "";
+  raidCreateSubmitBtn.disabled = true;
+  try {
+    const res = await fetch("/api/raid/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ devices, level }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      raidCreateError.textContent = apiErrorMessage(data, res);
+      raidCreateSubmitBtn.disabled = false;
+      return;
+    }
+    raidCreateDialogEl.close();
+    showToast(t("msg.raidCreated", { name: data.name }));
+    await refresh();
+    await loadRawDisks();
+  } catch (err) {
+    raidCreateError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
+    raidCreateSubmitBtn.disabled = false;
+  }
+});
+
 async function loadRawDisks() {
   if (diskActionDialog.open) return;
   try {

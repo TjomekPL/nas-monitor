@@ -132,6 +132,16 @@ class TestDiskNameParsing(unittest.TestCase):
         self.assertEqual(disk_mutate._disk_name("/dev/mmcblk0p1"), "mmcblk0")
         self.assertEqual(disk_mutate._disk_name("/dev/mmcblk0"), "mmcblk0")
 
+    def test_disk_name_from_raid_array(self):
+        # Real bug this caught: the generic letters+digits fallback
+        # stripped an array's own trailing number the same way it
+        # would a partition number ("md0" -> "md", pointing at a
+        # device that doesn't exist), silently breaking serial lookup
+        # and mount naming for every array.
+        self.assertEqual(disk_mutate._disk_name("/dev/md0"), "md0")
+        self.assertEqual(disk_mutate._disk_name("/dev/md127"), "md127")
+        self.assertEqual(disk_mutate._disk_name("/dev/md0p1"), "md0")
+
     def test_partition_path_sata(self):
         self.assertEqual(disk_mutate._partition_path("/dev/sda"), "/dev/sda1")
 
@@ -163,6 +173,44 @@ class TestDiskState(unittest.TestCase):
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory({"lsblk": (0, lsblk_json, "")})):
             state = disk_mutate._disk_state("/dev/sdc")
         self.assertEqual(state, {"fstype": None, "mountpoint": None, "device_node": None})
+
+
+class TestListManageableRaidArrays(unittest.TestCase):
+    def test_shape_matches_manageable_disks_for_shared_ui_rendering(self):
+        arrays = [{"name": "md0", "path": "/dev/md0", "level": "5", "devices": [{"device": "/dev/sdb"}, {"device": "/dev/sdc"}, {"device": "/dev/sdd"}], "error": None}]
+        lsblk_json = '{"blockdevices": [{"name": "md0", "fstype": "ext4", "mountpoint": "/srv/md0", "children": []}]}'
+        size_json = '{"blockdevices": [{"size": 4000000000000}]}'
+
+        def lsblk_dispatch(args, timeout=10):
+            if "SIZE" in args:
+                return (0, size_json, "")
+            return (0, lsblk_json, "")
+
+        with mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=arrays), \
+             mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=lsblk_dispatch):
+            result = disk_mutate.list_manageable_raid_arrays()
+
+        self.assertEqual(len(result), 1)
+        entry = result[0]
+        self.assertEqual(entry["name"], "md0")
+        self.assertEqual(entry["path"], "/dev/md0")
+        self.assertEqual(entry["fstype"], "ext4")
+        self.assertEqual(entry["mount_point"], "/srv/md0")
+        self.assertTrue(entry["mounted"])
+        self.assertFalse(entry["is_raid_member"])
+        self.assertIn("RAID5", entry["model"])
+        self.assertIn("3", entry["model"])
+        # every key list_manageable_disks() entries have too, for the
+        # frontend to be able to concatenate both lists and render
+        # them identically without special-casing
+        for key in ("name", "path", "size", "model", "serial", "transport", "fstype", "mount_point", "mounted", "is_raid_member", "label"):
+            self.assertIn(key, entry)
+
+    def test_skips_an_array_that_failed_detection(self):
+        arrays = [{"name": "md0", "path": "/dev/md0", "error": "mdadm not installed"}]
+        with mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=arrays):
+            self.assertEqual(disk_mutate.list_manageable_raid_arrays(), [])
 
 
 class TestListMountedRaidArrays(unittest.TestCase):
@@ -356,7 +404,7 @@ class TestCheckDiskSafeToModify(unittest.TestCase):
         self.assertEqual(result["error_code"], "disks.is_mounted")
 
     def test_rejects_raid_member_disk(self):
-        result = self._run("/dev/sdc", raid_arrays=[{"devices": [{"device": "/dev/sdc1"}]}])
+        result = self._run("/dev/sdc", raid_arrays=[{"name": "md0", "devices": [{"device": "/dev/sdc1"}]}])
         self.assertFalse(result["safe"])
         self.assertEqual(result["error_code"], "disks.is_raid_member")
 
@@ -815,7 +863,7 @@ class TestFormatDisk(unittest.TestCase):
              mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
              mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
              mock.patch.object(disk_mutate.monitor, "get_raid_arrays",
-                                return_value=[{"devices": [{"device": "/dev/sdc1"}]}]):
+                                return_value=[{"name": "md0", "devices": [{"device": "/dev/sdc1"}]}]):
             result = disk_mutate.format_disk("/dev/sdc", "ext4", label="dane")
 
         self.assertFalse(result["success"])

@@ -73,6 +73,15 @@ window.NAS_I18N.pl = {
       raidHeading: "Macierze RAID",
       disksHeading: "Dyski",
     },
+    raidCreateDialog: {
+      addBtn: "+ Utwórz macierz",
+      title: "Utwórz macierz RAID",
+      noFreeDisks: "Brak wolnych dysków - podłącz i sformatuj/wyczyść dyski, zanim utworzysz macierz.",
+      levelLabel: "Poziom RAID",
+      usbWarning: "Wśród wybranych dysków są dyski USB - w macierzy RAID mogą być mniej stabilne niż dyski wewnętrzne (słabsza obsługa błędów I/O, możliwe przerwy w zasilaniu portu).",
+      destructiveWarning: "To trwale wyczyści wszystkie wybrane dyski i utworzy na nich nową macierz. Dane na tych dyskach zostaną utracone.",
+      createBtn: "Utwórz",
+    },
     summary: {
       disksSubtitle: "Przeciągnij karty, żeby zmienić kolejność - zapamiętywana na stałe.",
     },
@@ -360,6 +369,7 @@ window.NAS_I18N.pl = {
     unmountedDisk: "Odmontowano {name}.",
     unmountWillDeleteShares: "Uwaga: ten dysk ma aktywne udziały ({shares}) - zostaną usunięte (definicja Samby, pliki zostają), a dopiero potem dysk zostanie odmontowany.",
     unmountedDiskWithShares: "Odmontowano {name} (usunięto udziały: {shares}).",
+    raidCreated: "Utworzono macierz {name} - trwa wstępna synchronizacja, widoczna na karcie macierzy.",
     confirmGenerateKey: "Wygenerować nową parę kluczy SSH dla \"{username}\"?",
     confirmDeleteKey: "Usunąć klucz SSH dla \"{username}\"? Będzie trzeba go ponownie wysłać wszędzie, gdzie był zainstalowany.",
     confirmDeployKey: "Zainstalować klucz na {user}@{host}?",
@@ -393,6 +403,13 @@ window.NAS_I18N.pl = {
       no_filesystem: "{device} nie ma systemu plików do zamontowania - sformatuj go najpierw",
       state_lookup_failed: "Nie udało się sprawdzić stanu dysku: {detail}",
       partition_not_ready: "Partycja {partition} nie pojawiła się po utworzeniu - spróbuj ponownie",
+    },
+    raid: {
+      unsupported_level: "Nieobsługiwany poziom RAID: {level}",
+      not_enough_devices: "RAID{level} wymaga co najmniej {needed} dysków, wybrano {given}",
+      duplicate_device: "Ten sam dysk wybrany więcej niż raz",
+      unknown_device: "Nieznany dysk: {device}",
+      device_not_free: "{device} nie jest wolny (ma system plików, jest zamontowany, lub jest już częścią macierzy)",
     },
     layout: {
       invalid_order: "Nieprawidłowa kolejność kart",

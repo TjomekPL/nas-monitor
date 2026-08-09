@@ -56,7 +56,10 @@
 
     <div class="tab-panel" data-tab="disks">
       <section>
-        <h2 data-i18n="ui.disks.raidHeading">Macierze RAID</h2>
+        <div class="section-head">
+          <h2 data-i18n="ui.disks.raidHeading">Macierze RAID</h2>
+          <button id="add-raid-btn" class="btn-primary" type="button" data-i18n="ui.raidCreateDialog.addBtn">+ Utwórz macierz</button>
+        </div>
         <div id="raid-container" class="cards"></div>
       </section>
 
@@ -419,6 +422,25 @@
       <div class="dialog-actions">
         <button type="button" id="disk-action-cancel" data-i18n="ui.diskActionDialog.cancelBtn">Anuluj</button>
         <button type="submit" id="disk-action-submit" class="btn-primary danger" disabled></button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="raid-create-dialog">
+    <form id="raid-create-form" method="dialog">
+      <h3 data-i18n="ui.raidCreateDialog.title">Utwórz macierz RAID</h3>
+      <p class="field-hint" id="raid-create-error-hint" style="display:none; color: var(--crit);" data-i18n="ui.raidCreateDialog.noFreeDisks">Brak wolnych dysków - podłącz i sformatuj/wyczyść dyski, zanim utworzysz macierz.</p>
+      <div id="raid-create-disks-checklist" class="groups-checklist"></div>
+      <label id="raid-create-level-row">
+        <span class="label-text" data-i18n="ui.raidCreateDialog.levelLabel">Poziom RAID</span>
+        <select id="raid-create-level"></select>
+      </label>
+      <p class="field-hint" id="raid-create-usb-warning" style="display:none; color: var(--warn);" data-i18n="ui.raidCreateDialog.usbWarning">Wśród wybranych dysków są dyski USB - w macierzy RAID mogą być mniej stabilne niż dyski wewnętrzne (słabsza obsługa błędów I/O, możliwe przerwy w zasilaniu portu).</p>
+      <p class="form-error" id="raid-create-warning" style="color: var(--crit);" data-i18n="ui.raidCreateDialog.destructiveWarning">To trwale wyczyści wszystkie wybrane dyski i utworzy na nich nową macierz. Dane na tych dyskach zostaną utracone.</p>
+      <p class="form-error" id="raid-create-error"></p>
+      <div class="dialog-actions">
+        <button type="button" id="raid-create-cancel" data-i18n="ui.confirmDialog.cancelBtn">Anuluj</button>
+        <button type="submit" id="raid-create-submit" class="btn-primary danger" disabled data-i18n="ui.raidCreateDialog.createBtn">Utwórz</button>
       </div>
     </form>
   </dialog>

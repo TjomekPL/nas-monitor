@@ -595,6 +595,20 @@ class TestGetFilesystemUsage(unittest.TestCase):
         self.assertFalse(result["mounted"])
 
 
+class TestDiskNameFromDevice(unittest.TestCase):
+    def test_sata_and_nvme_and_sd_card(self):
+        self.assertEqual(monitor._disk_name_from_device("/dev/sda1"), "sda")
+        self.assertEqual(monitor._disk_name_from_device("/dev/nvme0n1p1"), "nvme0n1")
+        self.assertEqual(monitor._disk_name_from_device("/dev/mmcblk0p1"), "mmcblk0")
+
+    def test_raid_array(self):
+        # Same fix as disk_mutate._disk_name - kept consistent even
+        # though this duplicate is currently only ever called on array
+        # MEMBER paths, not an array's own path.
+        self.assertEqual(monitor._disk_name_from_device("/dev/md0"), "md0")
+        self.assertEqual(monitor._disk_name_from_device("/dev/md127"), "md127")
+
+
 class TestGetFullStatusVisibility(unittest.TestCase):
     """Raw/unformatted disks (nothing mounted, not part of a RAID array)
     should never appear in get_full_status()'s "disks" list - they show

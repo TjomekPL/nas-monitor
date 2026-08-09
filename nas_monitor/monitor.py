@@ -484,14 +484,17 @@ def get_raid_arrays() -> list[dict[str, Any]]:
 
 def _disk_name_from_device(device_or_partition: str) -> str:
     """"/dev/sda1" -> "sda", "/dev/nvme0n1p1" -> "nvme0n1", "/dev/mmcblk0p1"
-    -> "mmcblk0" (SD cards - relevant on a Raspberry Pi). Deliberately
+    -> "mmcblk0" (SD cards - relevant on a Raspberry Pi), "/dev/md0" ->
+    "md0" (RAID arrays - same fix as disk_mutate._disk_name's, kept
+    consistent here too even though this copy is currently only ever
+    called on array MEMBER paths, not an array's own path). Deliberately
     duplicated from disk_mutate._disk_name rather than imported - this
     module stays read-only and dependency-free of the mutation module
     on principle, and the parsing itself is a handful of lines."""
     base = device_or_partition.rsplit("/", 1)[-1]
-    if re.match(r"^(nvme\d+n\d+|mmcblk\d+)$", base):
+    if re.match(r"^(nvme\d+n\d+|mmcblk\d+|md\d+)$", base):
         return base
-    m = re.match(r"^(nvme\d+n\d+|mmcblk\d+)p\d+$", base)
+    m = re.match(r"^(nvme\d+n\d+|mmcblk\d+|md\d+)p\d+$", base)
     if m:
         return m.group(1)
     m = re.match(r"^([a-zA-Z]+)\d+$", base)

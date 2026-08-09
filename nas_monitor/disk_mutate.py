@@ -59,16 +59,19 @@ _MKFS_FORCE_ARGS = {
 def _disk_name(device_or_partition: str) -> str:
     """"/dev/sda1" -> "sda", "/dev/nvme0n1p1" -> "nvme0n1",
     "/dev/mmcblk0p1" -> "mmcblk0" (SD cards - relevant on a Raspberry
-    Pi), "/dev/sda" -> "sda" unchanged. nvme/mmcblk whole-disk names end
-    in a digit themselves ("nvme0n1", "mmcblk0"), so that pattern is
-    checked first - otherwise the generic letters+digits fallback below
+    Pi), "/dev/md0" -> "md0" (RAID arrays - real bug this caught: the
+    generic fallback below stripped its own number the exact same way
+    a partition number would be, "md0" -> "md", pointing at a device
+    that doesn't exist and silently breaking serial lookup / mount
+    naming for every array), "/dev/sda" -> "sda" unchanged. nvme/mmcblk
+    /md whole-disk names end in a digit themselves, so that pattern is
+    checked first - otherwise the generic letters+digits fallback
     would wrongly treat their own trailing digit as a partition number
-    to strip (mmcblk0 -> mmcblk, silently pointing at a device that
-    doesn't exist)."""
+    to strip."""
     base = device_or_partition.rsplit("/", 1)[-1]
-    if re.match(r"^(nvme\d+n\d+|mmcblk\d+)$", base):
+    if re.match(r"^(nvme\d+n\d+|mmcblk\d+|md\d+)$", base):
         return base
-    m = re.match(r"^(nvme\d+n\d+|mmcblk\d+)p\d+$", base)
+    m = re.match(r"^(nvme\d+n\d+|mmcblk\d+|md\d+)p\d+$", base)
     if m:
         return m.group(1)
     m = re.match(r"^([a-zA-Z]+)\d+$", base)
@@ -84,13 +87,24 @@ def _disk_serial(device: str) -> str:
     (the actual mount-path source of truth, always /srv/<serial> - see
     format_disk/mount_disk) and label-saving (disk_labels is keyed by
     this same serial, so a label always finds its way back to the
-    right physical disk regardless of what /dev/sdX it's on today)."""
+    right physical disk regardless of what /dev/sdX it's on today).
+
+    A RAID array has no serial of its own - its /dev/mdN name is
+    already the stable identifier (unlike /dev/sdX, it doesn't shift
+    across reboots/reconnects), so that name is used here in its
+    place. Without this, saving a label for an array would silently
+    go nowhere: _disk_name resolves it correctly, but it was never in
+    monitor.list_disks() (physical disks only) to begin with."""
     name = _disk_name(device)
     known = {d["name"]: d for d in monitor.list_disks()}
     serial = (known.get(name) or {}).get("serial") or ""
     if serial.lower() == "unknown":
-        return ""
-    return serial
+        serial = ""
+    if serial:
+        return serial
+    if name in {arr["name"] for arr in monitor.get_raid_arrays()}:
+        return name
+    return ""
 
 
 def _default_mount_name(device: str) -> str:
@@ -231,6 +245,57 @@ def _is_system_partition(mountpoint: str | None) -> bool:
     return mountpoint in _SYSTEM_MOUNTPOINTS or mountpoint == "[SWAP]"
 
 
+def list_manageable_raid_arrays() -> list[dict[str, Any]]:
+    """RAID arrays in the exact same shape list_manageable_disks()
+    returns disks in (name, path, size, model, serial, transport,
+    fstype, mount_point, mounted, is_raid_member, label) - so the
+    frontend can simply concatenate the two lists and render/manage
+    them in one table with the existing Format/Mount/Unmount logic
+    completely unchanged. An mdadm array device is just another block
+    device to lsblk/mkfs/mount; there's no reason those actions need a
+    separate code path just because the underlying device is an array
+    instead of a physical disk.
+
+    Arrays that failed detection (mdadm not installed, mdadm --detail
+    itself erroring) are skipped - nothing here can safely be offered
+    to format/mount without knowing its real state first."""
+    lsblk_path = system_tools.find_binary("lsblk")
+    arrays = []
+    for arr in monitor.get_raid_arrays():
+        if arr.get("error"):
+            continue
+        size = "?"
+        if lsblk_path is not None:
+            code, out, _ = system_tools.run([lsblk_path, "-d", "-b", "-J", "-o", "SIZE", arr["path"]], timeout=10)
+            if code == 0 and out.strip():
+                try:
+                    import json as _json
+                    blockdevices = _json.loads(out).get("blockdevices", [])
+                    if blockdevices:
+                        size = monitor._human_size(int(blockdevices[0].get("size") or 0))
+                except (ValueError, KeyError):
+                    pass
+        try:
+            state = _disk_state(arr["path"])
+        except Exception:
+            state = {"fstype": None, "mountpoint": None}
+        member_count = len(arr.get("devices") or [])
+        arrays.append({
+            "name": arr["name"],
+            "path": arr["path"],
+            "size": size,
+            "model": f"RAID{arr.get('level', '?')} ({member_count} {'disk' if member_count == 1 else 'disks'})",
+            "serial": arr["name"],  # arrays have no serial of their own - the /dev/mdN name is the stable identifier instead
+            "transport": "raid",
+            "fstype": state["fstype"],
+            "mount_point": state["mountpoint"],
+            "mounted": bool(state["mountpoint"]),
+            "is_raid_member": False,
+            "label": disk_labels.get_label(arr["name"]),
+        })
+    return arrays
+
+
 def list_mounted_raid_arrays() -> list[dict[str, Any]]:
     """RAID arrays currently mounted under MOUNT_BASE, with enough state
     (fstype, mount_point) to let an array's existing mount point be
@@ -319,7 +384,11 @@ def check_disk_safe_to_modify(device: str) -> dict[str, Any]:
     result: dict[str, Any] = {"safe": False}
     name = _disk_name(device)
 
-    known = {d["name"] for d in monitor.list_disks()}
+    # RAID arrays are just as manageable here as physical disks (see
+    # list_manageable_raid_arrays) - without this, formatting/wiping an
+    # array would always fail with "not found", since
+    # monitor.list_disks() only ever enumerates physical disks.
+    known = {d["name"] for d in monitor.list_disks()} | {arr["name"] for arr in monitor.get_raid_arrays()}
     if name not in known:
         return errors.fail(result, "disks.not_found", device=device)
     if name == _boot_disk_name():
@@ -401,7 +470,7 @@ def unmount_disk(device: str) -> dict[str, Any]:
     result: dict[str, Any] = {"device": device, "success": False}
     name = _disk_name(device)
 
-    known = {d["name"] for d in monitor.list_disks()}
+    known = {d["name"] for d in monitor.list_disks()} | {arr["name"] for arr in monitor.get_raid_arrays()}
     if name not in known:
         return errors.fail(result, "disks.not_found", device=device)
     if name == _boot_disk_name():

@@ -73,6 +73,15 @@ window.NAS_I18N.en = {
       raidHeading: "RAID arrays",
       disksHeading: "Disks",
     },
+    raidCreateDialog: {
+      addBtn: "+ Create array",
+      title: "Create RAID array",
+      noFreeDisks: "No free disks - connect and format/wipe disks before creating an array.",
+      levelLabel: "RAID level",
+      usbWarning: "Some selected disks are USB - they can be less stable in a RAID array than internal disks (weaker I/O error handling, possible port power interruptions).",
+      destructiveWarning: "This will permanently wipe all selected disks and create a new array on them. Data on these disks will be lost.",
+      createBtn: "Create",
+    },
     summary: {
       disksSubtitle: "Drag cards to reorder - saved permanently.",
     },
@@ -360,6 +369,7 @@ window.NAS_I18N.en = {
     unmountedDisk: "Unmounted {name}.",
     unmountWillDeleteShares: "Note: this disk has active shares ({shares}) - they'll be deleted (Samba definition only, files stay), then the disk will be unmounted.",
     unmountedDiskWithShares: "Unmounted {name} (deleted shares: {shares}).",
+    raidCreated: "Created array {name} - initial sync in progress, visible on the array's card.",
     confirmGenerateKey: "Generate a new SSH keypair for \"{username}\"?",
     confirmDeleteKey: "Delete the SSH key for \"{username}\"? It will need to be redeployed everywhere it was installed.",
     confirmDeployKey: "Install the key on {user}@{host}?",
@@ -393,6 +403,13 @@ window.NAS_I18N.en = {
       no_filesystem: "{device} has no filesystem to mount - format it first",
       state_lookup_failed: "Couldn't check the disk's state: {detail}",
       partition_not_ready: "Partition {partition} didn't appear after being created - try again",
+    },
+    raid: {
+      unsupported_level: "Unsupported RAID level: {level}",
+      not_enough_devices: "RAID{level} needs at least {needed} disks, {given} given",
+      duplicate_device: "The same disk was selected more than once",
+      unknown_device: "Unknown disk: {device}",
+      device_not_free: "{device} isn't free (has a filesystem, is mounted, or is already part of an array)",
     },
     layout: {
       invalid_order: "Invalid card order",
