@@ -100,6 +100,7 @@ window.NAS_I18N.en = {
       missingDisks: "Missing {missing} disk(s) - the array is running on {working} of {expected}.",
       addMissingLabel: "Add the missing disk:",
       replaceBtn: "Replace",
+      removeBtn: "Remove",
       confirmBtn: "Swap",
       detaching: "Detaching {device}...",
       adding: "Adding {device}...",

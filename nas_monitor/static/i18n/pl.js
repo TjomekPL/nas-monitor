@@ -100,6 +100,7 @@ window.NAS_I18N.pl = {
       missingDisks: "Brakuje {missing} dysku(-ów) - macierz działa na {working} z {expected}.",
       addMissingLabel: "Dodaj brakujący dysk:",
       replaceBtn: "Wymień",
+      removeBtn: "Usuń",
       confirmBtn: "Zamień",
       detaching: "Odłączanie {device}...",
       adding: "Dodawanie {device}...",

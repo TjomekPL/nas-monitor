@@ -1194,8 +1194,48 @@ function buildRaidRepairMemberRow(arrayName, member, freeDisks) {
   replaceBtn.textContent = t("ui.raidRepairDialog.replaceBtn");
   row.appendChild(replaceBtn);
 
+  const removeBtn = document.createElement("button");
+  removeBtn.type = "button";
+  removeBtn.className = "link-btn danger";
+  removeBtn.textContent = t("ui.raidRepairDialog.removeBtn");
+  row.appendChild(removeBtn);
+
+  // Pulling a disk NOW without a replacement lined up yet (his real
+  // scenario: a disk showing early SMART warnings, but the actual
+  // replacement won't arrive until tomorrow) - leaves the array
+  // running degraded on its remaining members, same as any other
+  // detach, just without the immediate "Wymień" pairing. Still only
+  // reachable from inside this guided dialog, with full array context
+  // and a confirmation - not a bare button sitting on the raw-disks
+  // table (his earlier, explicit objection to that).
+  removeBtn.addEventListener("click", async () => {
+    const confirmed = await confirmDialog(t("msg.confirmDetachRaidMember", { device: member.name, array: arrayName }), { danger: true });
+    if (!confirmed) return;
+    removeBtn.disabled = true;
+    replaceBtn.disabled = true;
+    const status = document.createElement("span");
+    status.className = "field-hint";
+    status.textContent = t("ui.raidRepairDialog.detaching", { device: member.name });
+    row.appendChild(status);
+    const detachResult = await raidApiCall(`/api/raid/${encodeURIComponent(arrayName)}/detach`, { device: member.path });
+    if (!detachResult.success) {
+      raidRepairError.textContent = apiErrorMessage(detachResult.data, detachResult.res);
+      removeBtn.disabled = false;
+      replaceBtn.disabled = false;
+      status.remove();
+      return;
+    }
+    if (detachResult.data.warnings && detachResult.data.warnings.length) {
+      showToast(warningsText(detachResult.data.warnings), true);
+    }
+    await refresh();
+    await loadRawDisks();
+    await renderRaidRepairMembers(arrayName);
+  });
+
   replaceBtn.addEventListener("click", () => {
     replaceBtn.style.display = "none";
+    removeBtn.style.display = "none";
     const picker = buildRaidRepairPicker(freeDisks, async (device, statusEl) => {
       const confirmed = await confirmDialog(t("msg.confirmReplaceRaidMember", { old: member.name, array: arrayName, device }), { danger: true });
       if (!confirmed) return;
