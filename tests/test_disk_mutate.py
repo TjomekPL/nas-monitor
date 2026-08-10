@@ -350,7 +350,7 @@ class TestListManageableDisks(unittest.TestCase):
 
         self.assertNotIn("sdb", {d["name"] for d in manageable})
 
-    def test_includes_every_disk_except_boot(self):
+    def test_includes_every_disk_including_boot(self):
         responses = {
             "findmnt": (0, "/dev/sda2\n", ""),
             "lsblk": _lsblk_handler,
@@ -362,10 +362,11 @@ class TestListManageableDisks(unittest.TestCase):
             manageable = disk_mutate.list_manageable_disks()
 
         names = {d["name"] for d in manageable}
-        # sda excluded: it's the boot disk. sdb and sdc both included
-        # regardless of state - sdb is mounted, sdc is genuinely free -
-        # this table manages every non-boot disk, not just empty ones.
-        self.assertEqual(names, {"sdb", "sdc"})
+        # every disk is included, boot disk too (now flagged
+        # is_boot_disk rather than excluded) - sdb is mounted, sdc is
+        # genuinely free, sda is the boot disk - this table shows every
+        # disk in the box, not just the manageable-and-non-boot ones.
+        self.assertEqual(names, {"sda", "sdb", "sdc"})
 
     def test_flags_mounted_state_and_mount_point_per_disk(self):
         # A device-aware lsblk stub this time, since _disk_state queries
@@ -412,6 +413,28 @@ class TestListManageableDisks(unittest.TestCase):
         self.assertFalse(by_name["sdb"]["is_raid_member"])
         self.assertIsNone(by_name["sdb"]["raid_array"])
 
+    def test_boot_disk_now_appears_flagged_instead_of_excluded(self):
+        # His explicit ask: the boot disk should be visible in this
+        # table too (previously excluded outright) so it's a genuinely
+        # complete picture of every disk - just flagged so the frontend
+        # can show it first, lightly highlighted, and without an
+        # Unmount action (format_disk/wipe_disk/unmount_disk each
+        # independently refuse it regardless of what this table shows).
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": _lsblk_handler,
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate, "_boot_disk_name", return_value="sda"):
+            manageable = disk_mutate.list_manageable_disks()
+        by_name = {d["name"]: d for d in manageable}
+        self.assertIn("sda", by_name)
+        self.assertTrue(by_name["sda"]["is_boot_disk"])
+        self.assertFalse(by_name["sdb"]["is_boot_disk"])
+
     def test_one_disk_state_lookup_failing_does_not_hide_the_others(self):
         # Same regression as monitor.get_full_status()'s equivalent
         # test - one disk's state lookup blowing up must not take the
@@ -427,9 +450,10 @@ class TestListManageableDisks(unittest.TestCase):
              mock.patch.object(disk_mutate, "_disk_state", side_effect=RuntimeError("lsblk exploded")):
             manageable = disk_mutate.list_manageable_disks()
 
-        # both non-boot disks are still there (state simply unknown), not vanished
+        # every disk is still there (state simply unknown), not vanished
+        # - including the boot disk now that it's included in this list
         names = {d["name"] for d in manageable}
-        self.assertEqual(names, {"sdb", "sdc"})
+        self.assertEqual(names, {"sda", "sdb", "sdc"})
         for disk in manageable:
             self.assertIsNone(disk["fstype"])
             self.assertIsNone(disk["mount_point"])

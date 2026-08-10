@@ -45,7 +45,7 @@ html[data-ui-scale="120"] { zoom: 1.38; }
 
   --ok: #1f7a4d;
   --ok-bg: #e5f4ec;
-  --warn: #92600a;
+  --warn: #c2540a;
   --warn-bg: #fbf0dc;
   --crit: #a2312a;
   --crit-bg: #fbe8e6;
@@ -173,7 +173,7 @@ body {
 }
 
 h1 { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: -0.01em; }
-.subtitle { margin: 4px 0 0; color: var(--text-muted); font-size: 13.5px; }
+.subtitle { margin: 4px 0 16px; color: var(--text-muted); font-size: 13.5px; }
 
 .header-right {
   display: flex;
@@ -489,13 +489,24 @@ h2 {
   padding: 16px 18px;
   box-shadow: var(--shadow);
 }
-.card[draggable="true"] { cursor: grab; }
+/* His explicit ask: the grab cursor for a draggable card should only
+   show on its header row (name + status dot) - the card being
+   draggable as a WHOLE is unchanged, this is purely which part of it
+   visually invites picking it up. */
+.card[draggable="true"] .card-head { cursor: grab; }
+.card.boot-disk {
+  background: var(--crit-bg);
+}
 .card.dragging {
   opacity: 0.4;
   cursor: grabbing;
 }
 
-section[data-section-id][draggable="true"] { cursor: grab; }
+section[data-section-id][draggable="true"] { cursor: default; }
+section[data-section-id][draggable="true"] > h2,
+section[data-section-id][draggable="true"] > .section-head {
+  cursor: grab;
+}
 section[data-section-id].dragging {
   opacity: 0.4;
   cursor: grabbing;
@@ -545,7 +556,18 @@ section[data-section-id].dragging {
 .badge.warning { background: var(--warn); }
 .badge.critical { background: var(--crit); }
 .badge.unknown { background: var(--unknown); }
-
+/* An array actively rebuilding onto a replacement disk (not just any
+   sync - "recovery" specifically) is a more urgent moment than the
+   steady orange dot otherwise implies, easy to miss at a glance -
+   his explicit ask for it to blink during that window specifically. */
+.badge.recovering {
+  animation: badge-recovery-blink 1.1s ease-in-out infinite;
+}
+@keyframes badge-recovery-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+.recovery-active { color: var(--crit) !important; font-weight: 650; }
 .usage-bar { margin: 2px 0 10px; }
 .usage-bar-track {
   height: 8px;
@@ -672,6 +694,16 @@ section[data-section-id].dragging {
   background: var(--table-row-highlight, rgba(127, 127, 127, 0.06));
 }
 .disk-row-array td:first-child {
+  font-weight: 700;
+}
+/* System disk - his explicit ask: visible but always first, lightly
+   distinguished so it's never mistaken for a manageable data disk at
+   a glance, using the same "danger" red family as everywhere else
+   critical status is shown rather than inventing a new color. */
+.disk-row-boot {
+  background: var(--crit-bg);
+}
+.disk-row-boot td:first-child {
   font-weight: 700;
 }
 .share-group-table {

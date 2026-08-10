@@ -29,6 +29,7 @@ called once at app startup.
 from __future__ import annotations
 
 import ipaddress
+import re
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -38,6 +39,10 @@ from nas_monitor import system_tools, state_store, errors, network
 
 PENDING_CHANGE_FILE = "network-pending-change.json"
 REVERT_GRACE_SECONDS = 30
+# RFC 1123: letters, digits, hyphens - never a leading/trailing hyphen,
+# 63 chars max for a single label (hostnamectl only ever sets the one
+# label, not a dotted FQDN).
+_HOSTNAME_RE = re.compile(r"^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
 
 _active_timer: threading.Timer | None = None
 
@@ -245,3 +250,42 @@ def check_and_recover_on_startup() -> None:
         _active_timer = threading.Timer(remaining, _revert_if_still_pending, args=[pending["token"]])
         _active_timer.daemon = True
         _active_timer.start()
+
+
+def set_hostname(new_hostname: str) -> dict[str, Any]:
+    """Renames the box via `hostnamectl set-hostname` - updates both
+    /etc/hostname and the live kernel hostname immediately, no reboot
+    needed. His explicit ask: the new name must actually be visible ON
+    THE NETWORK right away, not "eventually" - avahi-daemon picks up a
+    hostname change automatically on modern systemd+avahi setups via
+    a D-Bus signal, but that's an implementation detail this doesn't
+    want to gamble on; restarting it explicitly here guarantees the
+    new <hostname>.local announcement goes out immediately regardless
+    of whether the automatic path is working on this particular box."""
+    result: dict[str, Any] = {"success": False}
+    new_hostname = (new_hostname or "").strip()
+    if not new_hostname or len(new_hostname) > 63 or not _HOSTNAME_RE.match(new_hostname):
+        return errors.fail(result, "network.invalid_hostname")
+
+    hostnamectl_path = system_tools.find_binary("hostnamectl")
+    if hostnamectl_path is None:
+        return errors.tool_missing(result, "hostnamectl")
+    code, out, err = system_tools.run([hostnamectl_path, "set-hostname", new_hostname], timeout=15)
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "hostnamectl")
+
+    # Best-effort - the hostname itself is already changed at this
+    # point (the part that actually matters), so a restart failing here
+    # is a warning, not a reason to report the whole rename as failed.
+    warnings = []
+    systemctl_path = system_tools.find_binary("systemctl")
+    if systemctl_path:
+        rcode, rout, rerr = system_tools.run([systemctl_path, "restart", "avahi-daemon"], timeout=15)
+        if rcode != 0:
+            warnings.append({"code": "network.avahi_restart_failed", "context": {"detail": (rerr or rout or "").strip()}})
+
+    result["success"] = True
+    result["hostname"] = new_hostname
+    if warnings:
+        result["warnings"] = warnings
+    return result

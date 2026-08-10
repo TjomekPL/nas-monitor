@@ -122,6 +122,13 @@ window.NAS_I18N.pl = {
     },
     summary: {
       disksSubtitle: "Przeciągnij karty, żeby zmienić kolejność - zapamiętywana na stałe.",
+      systemHeading: "System",
+      cpuTitle: "CPU",
+      memTitle: "Pamięć",
+      usage: "Użycie",
+      networkHeading: "Sieć",
+      networkTitle: "Główne połączenie",
+      throughput: "Przepustowość",
     },
     rawDisks: {
       heading: "Zarządzanie dyskami",
@@ -137,6 +144,7 @@ window.NAS_I18N.pl = {
       statusRaidMemberUnknownArray: "W macierzy RAID",
       statusMounted: "Zamontowany",
       statusFree: "Wolny",
+      statusBootDisk: "Dysk systemowy",
       statusUnmounted: "Ma system plików, niezamontowany",
       mountBtn: "Zamontuj",
       detachBtn: "Odłącz",
@@ -260,6 +268,9 @@ window.NAS_I18N.pl = {
       subtitle: "Zmiana adresu IP/bramy/DNS jest dostępna tylko z NetworkManagerem i wymaga potwierdzenia w ciągu 30s - inaczej wraca automatycznie do poprzednich ustawień.",
       overviewCardTitle: "Ogólne",
       hostname: "Nazwa hosta",
+      editHostnameBtn: "Edytuj",
+      saveHostnameBtn: "Zapisz",
+      cancelHostnameBtn: "Anuluj",
       managedBy: "Zarządzane przez",
       dnsServers: "Serwery DNS",
       ip: "Adres IP",
@@ -428,6 +439,7 @@ window.NAS_I18N.pl = {
     confirmDeployKey: "Zainstalować klucz na {user}@{host}?",
     confirmRemoveDeployment: "Na pewno usunąć klucz z {user}@{host}? Ten host straci dostęp bez hasła.",
     confirmApplySystemUpdate: "Zainstalować {count} aktualizacji systemowych (apt-get upgrade)? Może to potrwać kilka minut, a jeśli aktualizacja obejmie jądro systemu, może być wymagany restart.",
+    hostnameChanged: "Zmieniono nazwę hosta na {hostname}.",
     keyDeployed: "Klucz zainstalowany poprawnie.",
     copiedToClipboard: "Skopiowano do schowka.",
     networkChangeConfirmed: "Potwierdzono zmianę ustawień sieci.",
@@ -560,6 +572,7 @@ window.NAS_I18N.pl = {
       connection_not_found: "Nie znaleziono profilu połączenia NetworkManagera dla {interface}",
       snapshot_failed: "Nie udało się odczytać obecnej konfiguracji przed zmianą - przerwano dla bezpieczeństwa",
       change_not_found: "Nie znaleziono oczekującej zmiany o tym tokenie (mogła już wygasnąć i zostać cofnięta)",
+      invalid_hostname: "Nieprawidłowa nazwa hosta (tylko litery, cyfry i myślniki, bez myślnika na początku/końcu, maks. 63 znaki)",
     },
     log: {
       invalid_max_entries: "Nieprawidłowa wartość limitu.",
@@ -581,6 +594,9 @@ window.NAS_I18N.pl = {
       fstab_failed: "Dysk sformatowany poprawnie, ale nie udało się zapisać wpisu w {path}: {detail} - zamontuj go ręcznie.",
       mount_tool_missing: "Dysk sformatowany poprawnie, ale polecenie mount nie jest dostępne - zamontuj go ręcznie.",
       mount_failed: "Dysk sformatowany poprawnie, ale montowanie nie powiodło się: {detail} - zamontuj go ręcznie.",
+    },
+    network: {
+      avahi_restart_failed: "Nazwa hosta zmieniona, ale nie udało się zrestartować avahi-daemon - nowa nazwa może nie być od razu widoczna w sieci lokalnej: {detail}",
     },
   },
 

@@ -101,6 +101,26 @@ class TestApiDiskUnmount(unittest.TestCase):
         mock_delete.assert_not_called()
 
 
+class TestApiNetworkSetHostname(unittest.TestCase):
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.client = app_module.app.test_client()
+
+    def test_success(self):
+        with mock.patch.object(app_module.network_mutate, "set_hostname", return_value={"success": True, "hostname": "nas-mon"}):
+            res = self.client.post("/api/network/hostname", json={"hostname": "nas-mon"})
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertTrue(data["success"])
+        self.assertEqual(data["hostname"], "nas-mon")
+
+    def test_failure(self):
+        with mock.patch.object(app_module.network_mutate, "set_hostname", return_value={"success": False, "error_code": "network.invalid_hostname", "error_context": {}}):
+            res = self.client.post("/api/network/hostname", json={"hostname": "!!!"})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.get_json()["error_code"], "network.invalid_hostname")
+
+
 class TestApiRaidDelete(unittest.TestCase):
     def setUp(self):
         app_module.app.config["TESTING"] = True

@@ -98,13 +98,13 @@ def login():
 
     locked, seconds_remaining = auth.is_locked_out(username)
     if locked:
-        oplog.log_event("auth", "login", "failure", params={"username": username, "reason": "locked_out"})
+        oplog.log_event("auth", "login", "failure", params={"username": username, "reason": "locked_out"}, message="auth.locked_out")
         return jsonify({"success": False, "error_code": "auth.locked_out", "error_context": {"seconds": seconds_remaining}}), 429
 
     if not auth.verify_credentials(username, password):
         auth.record_failed_login(username)
         auth.log_failed_login_attempt(username, request.remote_addr)
-        oplog.log_event("auth", "login", "failure", params={"username": username})
+        oplog.log_event("auth", "login", "failure", params={"username": username}, message="auth.invalid_credentials")
         return jsonify({"success": False, "error_code": "auth.invalid_credentials", "error_context": {}}), 401
 
     auth.clear_login_attempts(username)
@@ -152,7 +152,7 @@ def api_auth_change_password():
 
     result = auth.change_password(current_password, new_password)
     if not result["success"]:
-        oplog.log_event("auth", "change_password", "failure", params={})
+        oplog.log_event("auth", "change_password", "failure", params={}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
 
     oplog.log_event("auth", "change_password", "success", params={})
@@ -204,7 +204,7 @@ def api_raid_create():
 
     result = raid_mutate.create_raid_array(devices, level)
     if not result["success"]:
-        oplog.log_event("raid", "create", "failure", params={"level": level, "devices": ", ".join(devices)})
+        oplog.log_event("raid", "create", "failure", params={"level": level, "devices": ", ".join(devices)}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("raid", "create", "success", params={"level": level, "devices": ", ".join(devices), "array": result["name"]})
     return jsonify({"success": True, "name": result["name"], "path": result["path"]})
@@ -217,7 +217,7 @@ def api_raid_detach(array_name):
 
     result = raid_mutate.detach_member(array_name, device)
     if not result["success"]:
-        oplog.log_event("raid", "detach", "failure", params={"array": array_name, "device": device})
+        oplog.log_event("raid", "detach", "failure", params={"array": array_name, "device": device}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("raid", "detach", "success", params={"array": array_name, "device": device})
     return jsonify({"success": True, "warnings": result.get("warnings", [])})
@@ -230,7 +230,7 @@ def api_raid_add(array_name):
 
     result = raid_mutate.add_member(array_name, device)
     if not result["success"]:
-        oplog.log_event("raid", "add_member", "failure", params={"array": array_name, "device": device})
+        oplog.log_event("raid", "add_member", "failure", params={"array": array_name, "device": device}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("raid", "add_member", "success", params={"array": array_name, "device": device})
     return jsonify({"success": True})
@@ -267,7 +267,7 @@ def api_raid_delete(array_name):
     blocking = _shares_blocking_unmount(deterministic_mount_point)
     if blocking:
         if not delete_blocking_shares:
-            oplog.log_event("raid", "delete", "failure", params={"array": array_name})
+            oplog.log_event("raid", "delete", "failure", params={"array": array_name}, message="disks.unmount_blocked_by_shares")
             return jsonify({
                 "success": False,
                 "error_code": "disks.unmount_blocked_by_shares",
@@ -281,12 +281,12 @@ def api_raid_delete(array_name):
                 for w in del_result.get("warnings", []):
                     delete_warnings.append(w)
             else:
-                oplog.log_event("shares", "delete", "failure", params={"name": share_name, "reason": "raid_delete"})
+                oplog.log_event("shares", "delete", "failure", params={"name": share_name, "reason": "raid_delete"}, message=del_result.get("error_code", ""))
 
     if mount_point:
         unmount_result = disk_mutate.unmount_disk(device)
         if not unmount_result["success"]:
-            oplog.log_event("raid", "delete", "failure", params={"array": array_name})
+            oplog.log_event("raid", "delete", "failure", params={"array": array_name}, message=unmount_result.get("error_code", ""))
             return jsonify({
                 "success": False,
                 "error_code": unmount_result["error_code"],
@@ -295,7 +295,7 @@ def api_raid_delete(array_name):
 
     result = raid_mutate.delete_raid_array(array_name)
     if not result["success"]:
-        oplog.log_event("raid", "delete", "failure", params={"array": array_name})
+        oplog.log_event("raid", "delete", "failure", params={"array": array_name}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
 
     for w in result.get("warnings", []):
@@ -371,7 +371,7 @@ def api_disk_format(name):
 
     result = disk_mutate.format_disk(device, filesystem, label=label, auto_mount=auto_mount)
     if not result["success"]:
-        oplog.log_event("disks", "format", "failure", params={"device": device, "filesystem": filesystem})
+        oplog.log_event("disks", "format", "failure", params={"device": device, "filesystem": filesystem}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event(
         "disks", "format", "success",
@@ -385,7 +385,7 @@ def api_disk_wipe(name):
     device = f"/dev/{name}"
     result = disk_mutate.wipe_disk(device)
     if not result["success"]:
-        oplog.log_event("disks", "wipe", "failure", params={"device": device})
+        oplog.log_event("disks", "wipe", "failure", params={"device": device}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("disks", "wipe", "success", params={"device": device})
     return jsonify({"success": True})
@@ -398,7 +398,7 @@ def api_disk_mount(name):
     device = f"/dev/{name}"
     result = disk_mutate.mount_disk(device, label=label)
     if not result["success"]:
-        oplog.log_event("disks", "mount", "failure", params={"device": device})
+        oplog.log_event("disks", "mount", "failure", params={"device": device}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("disks", "mount", "success", params={"device": device, "mount_point": result["mount_point"]})
     return jsonify({"success": True, "mount_point": result["mount_point"]})
@@ -446,7 +446,7 @@ def api_disk_unmount(name):
         blocking = _shares_blocking_unmount(mount_point)
         if blocking:
             if not delete_blocking_shares:
-                oplog.log_event("disks", "unmount", "failure", params={"device": device})
+                oplog.log_event("disks", "unmount", "failure", params={"device": device}, message="disks.unmount_blocked_by_shares")
                 return jsonify({
                     "success": False,
                     "error_code": "disks.unmount_blocked_by_shares",
@@ -466,11 +466,11 @@ def api_disk_unmount(name):
                     for w in del_result.get("warnings", []):
                         unmount_warnings.append(w)
                 else:
-                    oplog.log_event("shares", "delete", "failure", params={"name": share_name, "reason": "disk_unmount"})
+                    oplog.log_event("shares", "delete", "failure", params={"name": share_name, "reason": "disk_unmount"}, message=del_result.get("error_code", ""))
 
     result = disk_mutate.unmount_disk(device)
     if not result["success"]:
-        oplog.log_event("disks", "unmount", "failure", params={"device": device})
+        oplog.log_event("disks", "unmount", "failure", params={"device": device}, message=result.get("error_code", ""))
         return jsonify({
             "success": False,
             "error_code": result["error_code"],
@@ -499,7 +499,7 @@ def api_update_check():
 def api_update_apply():
     result = update_manager.apply_update()
     if not result.get("success"):
-        oplog.log_event("update", "apply", "failure", params={})
+        oplog.log_event("update", "apply", "failure", params={}, message=result.get("error_code", ""))
         return jsonify(result), 400
     oplog.log_event("update", "apply", "success", params={"version": result.get("version") or "?"})
     return jsonify(result)
@@ -514,7 +514,7 @@ def api_system_update_check():
 def api_system_update_apply():
     result = system_update.apply_updates()
     if not result.get("success"):
-        oplog.log_event("system_update", "apply", "failure", params={})
+        oplog.log_event("system_update", "apply", "failure", params={}, message=result.get("error_code", ""))
         return jsonify(result), 400
     oplog.log_event("system_update", "apply", "success", params={})
     return jsonify(result)
@@ -571,7 +571,7 @@ def api_groups_create():
 
     result = users.create_group(name)
     if not result["success"]:
-        oplog.log_event("groups", "create", "failure", params={"name": name})
+        oplog.log_event("groups", "create", "failure", params={"name": name}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("groups", "create", "success", params={"name": name})
     return jsonify({"success": True})
@@ -591,7 +591,7 @@ def api_groups_delete(name):
 
     result = users.delete_group(name)
     if not result["success"]:
-        oplog.log_event("groups", "delete", "failure", params={"name": name})
+        oplog.log_event("groups", "delete", "failure", params={"name": name}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     smb_shares.remove_group_from_all_shares(name)
     oplog.log_event("groups", "delete", "success", params={"name": name})
@@ -625,12 +625,12 @@ def api_groups_set_members(name):
     for username in sorted(desired - current):
         result = users.add_user_to_group(username, name)
         if not result["success"]:
-            oplog.log_event("groups", "update_members", "failure", params={"name": name, "username": username})
+            oplog.log_event("groups", "update_members", "failure", params={"name": name, "username": username}, message=result.get("error_code", ""))
             return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     for username in sorted(current - desired):
         result = users.remove_user_from_group(username, name)
         if not result["success"]:
-            oplog.log_event("groups", "update_members", "failure", params={"name": name, "username": username})
+            oplog.log_event("groups", "update_members", "failure", params={"name": name, "username": username}, message=result.get("error_code", ""))
             return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
 
     oplog.log_event(
@@ -651,7 +651,7 @@ def api_users_create():
 
     user_result = users.create_user(username, groups=groups, shell=None)
     if not user_result["success"]:
-        oplog.log_event("users", "create", "failure", params={"username": username})
+        oplog.log_event("users", "create", "failure", params={"username": username}, message=user_result.get("error_code", ""))
         return jsonify(
             {"success": False, "step": "user", "error_code": user_result["error_code"], "error_context": user_result["error_context"]}
         ), 400
@@ -687,7 +687,7 @@ def api_users_update(username):
         display_name=display_name,
     )
     if not user_result["success"]:
-        oplog.log_event("users", "update", "failure", params={"username": username})
+        oplog.log_event("users", "update", "failure", params={"username": username}, message=user_result.get("error_code", ""))
         return jsonify(
             {"success": False, "step": "user", "error_code": user_result["error_code"], "error_context": user_result["error_context"]}
         ), 400
@@ -714,7 +714,7 @@ def api_users_update(username):
 def api_users_remove_smb(username):
     result = smb.remove_user(username)
     if not result["success"]:
-        oplog.log_event("users", "remove_smb", "failure", params={"username": username})
+        oplog.log_event("users", "remove_smb", "failure", params={"username": username}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("users", "remove_smb", "success", params={"username": username})
     return jsonify({"success": True})
@@ -724,7 +724,7 @@ def api_users_remove_smb(username):
 def api_users_disable(username):
     result = smb.disable_account(username)
     if not result["success"]:
-        oplog.log_event("users", "disable", "failure", params={"username": username})
+        oplog.log_event("users", "disable", "failure", params={"username": username}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("users", "disable", "success", params={"username": username})
     return jsonify({"success": True})
@@ -734,7 +734,7 @@ def api_users_disable(username):
 def api_users_enable(username):
     result = smb.enable_account(username)
     if not result["success"]:
-        oplog.log_event("users", "enable", "failure", params={"username": username})
+        oplog.log_event("users", "enable", "failure", params={"username": username}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("users", "enable", "success", params={"username": username})
     return jsonify({"success": True})
@@ -766,7 +766,7 @@ def api_users_delete(username):
 
     user_result = users.delete_user(username, remove_home=remove_home)
     if not user_result["success"]:
-        oplog.log_event("users", "delete", "failure", params={"username": username})
+        oplog.log_event("users", "delete", "failure", params={"username": username}, message=user_result.get("error_code", ""))
         return jsonify(
             {"success": False, "step": "user", "error_code": user_result["error_code"], "error_context": user_result["error_context"]}
         ), 400
@@ -817,7 +817,7 @@ def api_shares_create():
         base_path=base_path, display_name=display_name,
     )
     if not result["success"]:
-        oplog.log_event("shares", "create", "failure", params={"name": name})
+        oplog.log_event("shares", "create", "failure", params={"name": name}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("shares", "create", "success", params={"name": name, "base_path": base_path or smb_shares.BASE_SHARE_PATH})
     return jsonify({"success": True, "share": result})
@@ -849,7 +849,7 @@ def api_shares_update(name):
         display_name=display_name,
     )
     if not result["success"]:
-        oplog.log_event("shares", "update", "failure", params={"name": name})
+        oplog.log_event("shares", "update", "failure", params={"name": name}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("shares", "update", "success", params={"name": name})
     return jsonify({"success": True, "share": result})
@@ -862,7 +862,7 @@ def api_shares_delete(name):
 
     result = smb_shares.delete_share(name, delete_files=delete_files)
     if not result["success"]:
-        oplog.log_event("shares", "delete", "failure", params={"name": name})
+        oplog.log_event("shares", "delete", "failure", params={"name": name}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("shares", "delete", "success", params={"name": name})
     return jsonify({"success": True, "share": result})
@@ -893,7 +893,7 @@ def api_ssh_keys_generate(username):
         return rejected
     result = ssh_keys.generate_key(username)
     if not result["success"]:
-        oplog.log_event("certs", "generate", "failure", params={"username": username})
+        oplog.log_event("certs", "generate", "failure", params={"username": username}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("certs", "generate", "success", params={"username": username})
     return jsonify({"success": True, "public_key": result["public_key"]})
@@ -913,7 +913,7 @@ def api_ssh_keys_deploy(username):
     result = ssh_keys.deploy_key_to_remote(username, remote_host, remote_user, remote_password, display_name)
     target = display_name or remote_host
     if not result["success"]:
-        oplog.log_event("certs", "deploy", "failure", params={"username": username, "target": target})
+        oplog.log_event("certs", "deploy", "failure", params={"username": username, "target": target}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("certs", "deploy", "success", params={"username": username, "target": target})
     return jsonify({"success": True})
@@ -926,7 +926,7 @@ def api_ssh_keys_delete(username):
         return rejected
     result = ssh_keys.delete_key(username)
     if not result["success"]:
-        oplog.log_event("certs", "delete", "failure", params={"username": username})
+        oplog.log_event("certs", "delete", "failure", params={"username": username}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("certs", "delete", "success", params={"username": username})
     return jsonify({"success": True})
@@ -944,7 +944,7 @@ def api_ssh_keys_remove_deployment(username):
 
     result = ssh_keys.remove_deployment(username, remote_host, remote_user, remote_password)
     if not result["success"]:
-        oplog.log_event("certs", "remove_deployment", "failure", params={"username": username, "target": remote_host})
+        oplog.log_event("certs", "remove_deployment", "failure", params={"username": username, "target": remote_host}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("certs", "remove_deployment", "success", params={"username": username, "target": remote_host})
     return jsonify({"success": True})
@@ -973,7 +973,7 @@ def api_network_apply(iface):
 
     result = network_mutate.request_ip_change(iface, ip, prefixlen, gateway, dns)
     if not result["success"]:
-        oplog.log_event("network", "apply", "failure", params={"interface": iface})
+        oplog.log_event("network", "apply", "failure", params={"interface": iface}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
 
     oplog.log_event("network", "apply", "success", params={"interface": iface, "ip": ip})
@@ -987,11 +987,22 @@ def api_network_confirm():
 
     result = network_mutate.confirm_change(token)
     if not result["success"]:
-        oplog.log_event("network", "confirm", "failure", params={})
+        oplog.log_event("network", "confirm", "failure", params={}, message=result.get("error_code", ""))
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
 
     oplog.log_event("network", "confirm", "success", params={"interface": result.get("interface", "")})
     return jsonify({"success": True})
+
+
+@app.route("/api/network/hostname", methods=["POST"])
+def api_network_set_hostname():
+    data = request.get_json(force=True, silent=True) or {}
+    result = network_mutate.set_hostname(data.get("hostname", ""))
+    if not result["success"]:
+        oplog.log_event("network", "set_hostname", "failure", params={}, message=result.get("error_code", ""))
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    oplog.log_event("network", "set_hostname", "success", params={"hostname": result["hostname"]})
+    return jsonify({"success": True, "hostname": result["hostname"], "warnings": result.get("warnings", [])})
 
 
 @app.route("/api/log")

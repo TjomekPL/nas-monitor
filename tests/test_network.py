@@ -175,17 +175,31 @@ class TestListInterfaces(unittest.TestCase):
 
 
 class TestDetectBackend(unittest.TestCase):
-    @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/bin/systemctl")
+    @mock.patch("nas_monitor.network.system_tools.find_binary")
     @mock.patch("nas_monitor.network.system_tools.run")
-    def test_detects_networkmanager(self, mock_run, mock_find):
-        mock_run.return_value = (0, "active\n", "")
+    def test_detects_networkmanager_when_it_genuinely_manages_a_device(self, mock_run, mock_find):
+        mock_find.side_effect = lambda name: f"/usr/bin/{name}" if name == "nmcli" else None
+        mock_run.return_value = (0, "lo:unmanaged:loopback\nens18:connected:ethernet\n", "")
         self.assertEqual(network.detect_backend(), "networkmanager")
 
-    @mock.patch("nas_monitor.network.system_tools.find_binary", return_value="/usr/bin/systemctl")
+    @mock.patch("nas_monitor.network.system_tools.find_binary")
     @mock.patch("nas_monitor.network.system_tools.run")
-    def test_detects_systemd_networkd(self, mock_run, mock_find):
-        # NetworkManager inactive, systemd-networkd active
-        mock_run.side_effect = [(3, "inactive\n", ""), (0, "active\n", "")]
+    def test_networkmanager_running_but_not_managing_anything_falls_through(self, mock_run, mock_find):
+        # Real report: NetworkManager's own service can be perfectly
+        # active while genuinely managing nothing - Debian ships it with
+        # ifupdown-defined interfaces deliberately left "unmanaged" by
+        # default. Merely checking "is the service active" (the old
+        # logic here) said "networkmanager" anyway, which then broke a
+        # later step expecting a real NM connection profile to exist.
+        mock_find.side_effect = lambda name: "/usr/bin/nmcli" if name == "nmcli" else None
+        mock_run.return_value = (0, "lo:unmanaged:loopback\nens18:unmanaged:ethernet\n", "")
+        self.assertNotEqual(network.detect_backend(), "networkmanager")
+
+    @mock.patch("nas_monitor.network.system_tools.find_binary")
+    @mock.patch("nas_monitor.network.system_tools.run")
+    def test_detects_systemd_networkd_when_a_link_is_actually_configured(self, mock_run, mock_find):
+        mock_find.side_effect = lambda name: "/usr/bin/networkctl" if name == "networkctl" else None
+        mock_run.return_value = (0, "1 lo     loopback carrier     unmanaged\n2 ens18  ether    routable    configured\n", "")
         self.assertEqual(network.detect_backend(), "systemd-networkd")
 
     @mock.patch("nas_monitor.network.os.path.isfile", return_value=False)

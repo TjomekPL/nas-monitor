@@ -46,15 +46,50 @@ def get_hostname() -> str:
 def detect_backend() -> str:
     """Which system actually manages network config here - matters for
     how a future "apply new settings" step would need to work, since
-    each backend is configured completely differently."""
-    systemctl_path = system_tools.find_binary("systemctl")
-    if systemctl_path:
-        code, out, _ = system_tools.run([systemctl_path, "is-active", "NetworkManager"])
-        if code == 0 and out.strip() == "active":
-            return "networkmanager"
-        code, out, _ = system_tools.run([systemctl_path, "is-active", "systemd-networkd"])
-        if code == 0 and out.strip() == "active":
-            return "systemd-networkd"
+    each backend is configured completely differently.
+
+    NetworkManager and systemd-networkd are checked by whether they're
+    actually MANAGING a real interface, not merely whether their
+    service happens to be running - a real report: the previous check
+    here was `systemctl is-active NetworkManager`, which said yes even
+    though NetworkManager wasn't managing his interface at all. Debian
+    ships NetworkManager with ifupdown-defined interfaces deliberately
+    left "unmanaged" by default (NetworkManager.conf's
+    `[ifupdown] managed=false`), specifically so it can coexist
+    alongside ifupdown without fighting over the same interface - the
+    service can be perfectly healthy and running while genuinely
+    managing nothing.
+    """
+    nmcli_path = system_tools.find_binary("nmcli")
+    if nmcli_path:
+        code, out, _ = system_tools.run(
+            [nmcli_path, "-t", "-f", "DEVICE,STATE,TYPE", "device", "status"], timeout=5
+        )
+        if code == 0:
+            for line in out.splitlines():
+                parts = line.split(":")
+                if len(parts) < 3:
+                    continue
+                device, state, dtype = parts[0], parts[1], parts[2]
+                if dtype in ("loopback",) or device == "lo":
+                    continue
+                if state and state != "unmanaged":
+                    return "networkmanager"
+
+    networkctl_path = system_tools.find_binary("networkctl")
+    if networkctl_path:
+        code, out, _ = system_tools.run([networkctl_path, "list", "--no-legend"], timeout=5)
+        if code == 0:
+            for line in out.splitlines():
+                cols = line.split()
+                # `networkctl list` columns: IDX LINK TYPE OPERATIONAL SETUP
+                if len(cols) < 5:
+                    continue
+                link, link_type, setup = cols[1], cols[2], cols[4]
+                if link_type == "loopback":
+                    continue
+                if setup == "configured":
+                    return "systemd-networkd"
 
     # ifupdown has no daemon to check - a non-trivial /etc/network/interfaces
     # (beyond just the default loopback stanza) is the closest real signal

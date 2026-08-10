@@ -377,32 +377,36 @@ def list_mounted_raid_arrays() -> list[dict[str, Any]]:
 
 
 def list_manageable_disks() -> list[dict[str, Any]]:
-    """Every disk except the boot disk and anything else carrying a
-    system partition (see _is_system_partition) - the boot disk never
-    appears here at all (see the Summary tab for it instead), and
-    nothing here is meant to support managing a disk that arrived with
-    an existing, foreign multi-partition layout (matches how TrueNAS
-    and OpenMediaVault both treat this - a "bring your own partitioned
-    disk" workflow is out of scope, not just unbuilt yet; the answer
-    for a disk like that is to format it clean, already supported).
+    """Every disk (including the boot disk, flagged `is_boot_disk` -
+    his explicit ask: visible here too, first, lightly highlighted, so
+    this table is a genuinely complete picture of every disk in the
+    box, not "everything except one you have to check a different tab
+    for") except anything carrying a foreign system partition (see
+    _is_system_partition) - nothing here is meant to support managing
+    a disk that arrived with an existing, foreign multi-partition
+    layout (matches how TrueNAS and OpenMediaVault both treat this -
+    a "bring your own partitioned disk" workflow is out of scope, not
+    just unbuilt yet; the answer for a disk like that is to format it
+    clean, already supported).
     Everything else shows here regardless of state (raw,
     formatted-and-mounted, RAID member) so this table is always the
     one place to manage a disk, not just the ones that happen to be
     empty right now. Each entry carries enough state (fstype,
-    mount_point, is_raid_member) for the frontend to decide which
-    actions - Format/Wipe (only when genuinely free), Unmount (any
-    mounted disk - the boot-disk exclusion above is what actually
-    keeps this safe, not where something happens to be mounted), or
-    none at all (RAID members - that's the future Arrays section's
-    job) - make sense for that row."""
+    mount_point, is_raid_member, is_boot_disk) for the frontend to
+    decide which actions - Format/Wipe (only when genuinely free),
+    Unmount (any mounted disk EXCEPT the boot disk - format_disk,
+    wipe_disk, and unmount_disk each independently refuse it
+    regardless of what this table offers, so the button being hidden
+    is a UX nicety here, not the actual safety mechanism), or none at
+    all (RAID members - that's the Arrays section's job) - make sense
+    for that row."""
     boot_disk = _boot_disk_name()
     raid_member_map = _raid_member_to_array_map()
 
     manageable = []
     for disk in monitor.list_disks():
-        if disk["name"] == boot_disk:
-            continue
         disk = dict(disk)
+        disk["is_boot_disk"] = disk["name"] == boot_disk
         # A single disk's state lookup failing (lsblk choking on a
         # disk mid-format, just unplugged, or otherwise in a state this
         # code didn't anticipate) must never take the rest of this list
@@ -413,7 +417,7 @@ def list_manageable_disks() -> list[dict[str, Any]]:
             state = _disk_state(disk["path"])
         except Exception:
             state = {"fstype": None, "mountpoint": None}
-        if _is_system_partition(state["mountpoint"]):
+        if not disk["is_boot_disk"] and _is_system_partition(state["mountpoint"]):
             continue
         disk["fstype"] = state["fstype"]
         disk["mount_point"] = state["mountpoint"]

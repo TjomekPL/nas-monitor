@@ -63,6 +63,36 @@
         <p class="subtitle" data-i18n="ui.summary.disksSubtitle">Przeciągnij karty, żeby zmienić kolejność - zapamiętywana na stałe.</p>
         <div id="disks-container" class="cards" data-drag-section="disks"></div>
       </section>
+
+      <section>
+        <h2 data-i18n="ui.summary.systemHeading">System</h2>
+        <div class="cards">
+          <article class="card">
+            <div class="card-head"><span class="name" data-i18n="ui.summary.cpuTitle">CPU</span></div>
+            <dl class="facts">
+              <div><dt data-i18n="ui.summary.usage">Użycie</dt><dd id="summary-cpu-val">&ndash;</dd></div>
+            </dl>
+          </article>
+          <article class="card">
+            <div class="card-head"><span class="name" data-i18n="ui.summary.memTitle">Pamięć</span></div>
+            <dl class="facts">
+              <div><dt data-i18n="ui.summary.usage">Użycie</dt><dd id="summary-mem-val">&ndash;</dd></div>
+            </dl>
+          </article>
+        </div>
+      </section>
+
+      <section>
+        <h2 data-i18n="ui.summary.networkHeading">Sieć</h2>
+        <div class="cards">
+          <article class="card">
+            <div class="card-head"><span class="name" data-i18n="ui.summary.networkTitle">Główne połączenie</span></div>
+            <dl class="facts">
+              <div><dt data-i18n="ui.summary.throughput">Przepustowość</dt><dd id="summary-net-val">&ndash;</dd></div>
+            </dl>
+          </article>
+        </div>
+      </section>
     </div>
 
     <div class="tab-panel" data-tab="disks">
@@ -77,8 +107,13 @@
 
       <section data-section-id="manage-disks" draggable="true">
         <h2 data-i18n="ui.rawDisks.heading">Zarządzanie dyskami</h2>
-        <p class="subtitle" data-i18n="ui.rawDisks.subtitle">Wszystkie dyski poza systemowym - formatuj, czyść, odmontowuj i sprawdzaj ich stan niezależnie od tego, czy są aktualnie w użyciu.</p>
+        <p class="subtitle" data-i18n="ui.rawDisks.subtitle">Wszystkie dyski, łącznie z systemowym - formatuj, czyść, odmontowuj i sprawdzaj ich stan niezależnie od tego, czy są aktualnie w użyciu.</p>
         <div id="raw-disks-container" class="user-table"></div>
+      </section>
+
+      <section data-section-id="disk-cards" draggable="true">
+        <h2 data-i18n="ui.disks.disksHeading">Dyski</h2>
+        <div id="disk-cards-container" class="cards"></div>
       </section>
     </div>
 

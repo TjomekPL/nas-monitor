@@ -440,6 +440,7 @@ activateTab(localStorage.getItem("nas-monitor-tab") || tabButtons[0].dataset.tab
 
 const raidContainer = document.getElementById("raid-container");
 const disksContainer = document.getElementById("disks-container");
+const diskCardsTabContainer = document.getElementById("disk-cards-container");
 const lastUpdatedEl = document.getElementById("last-updated");
 const connDot = document.getElementById("conn-dot");
 
@@ -502,15 +503,25 @@ function renderRaid(arrays) {
     emptyState(raidContainer, t("msg.empty.raid"));
     return;
   }
-  for (const arr of arrays) {
+  const ordered = applyCardOrder("raid-cards", arrays, (a) => a.name);
+  for (const arr of ordered) {
     const node = raidTemplate.content.cloneNode(true);
     window.i18n.applyTranslations(node);
+    const article = node.querySelector(".card");
+    article.dataset.cardId = arr.name;
+    article.draggable = true;
     node.querySelector(".badge").classList.add(arr.health || "unknown");
     node.querySelector(".name").textContent = arr.name;
     node.querySelector(".level").textContent = (arr.level || "").toUpperCase();
-    node.querySelector(".state").textContent = arr.array_state || (arr.active ? "active" : "inactive");
+    const stateEl = node.querySelector(".state");
+    stateEl.textContent = arr.array_state || (arr.active ? "active" : "inactive");
+    // mdadm's own array_state string can itself contain "recovering" as
+    // a substring (e.g. "clean, degraded, recovering") independently of
+    // progress_action - covers that path too, not just the dedicated
+    // progress row below.
+    stateEl.classList.toggle("recovery-active", /recover/i.test(arr.array_state || ""));
     node.querySelector(".path").textContent = arr.path;
-    const devices = (arr.devices || []).map((d) => d.device).filter(Boolean);
+    const devices = (arr.devices || []).map((d) => d.device).filter(Boolean).sort();
     node.querySelector(".devices").textContent = devices.length ? devices.join(", ") : (arr.num_devices ? t("msg.diskCount", { count: arr.num_devices }) : "\u2013");
     renderUsageBar(node.querySelector(".usage-bar"), arr.usage);
 
@@ -524,7 +535,18 @@ function renderRaid(arrays) {
     if (arr.progress_percent !== null && arr.progress_percent !== undefined) {
       progressRow.classList.add("visible");
       node.querySelector(".progress-label").textContent = t("ui.raidCard.progress");
-      node.querySelector(".progress").textContent = `${arr.progress_action} ${arr.progress_percent.toFixed(1)}%`;
+      const progressEl = node.querySelector(".progress");
+      progressEl.textContent = `${arr.progress_action} ${arr.progress_percent.toFixed(1)}%`;
+      // "recovery" specifically (not "resync"/"reshape"/"check") means
+      // the array was actually missing a member and is rebuilding onto
+      // a replacement right now - a genuinely more urgent moment than a
+      // routine initial sync, worth calling out in red rather than the
+      // default text color (his explicit ask).
+      progressEl.classList.toggle("recovery-active", arr.progress_action === "recovery");
+      // Same signal on the health dot itself: blinking while an actual
+      // recovery is in progress, not just sitting there orange and easy
+      // to miss during the exact window that matters most.
+      node.querySelector(".badge").classList.toggle("recovering", arr.progress_action === "recovery");
     } else if (arr.usage && arr.usage.mounted && arr.usage.fstype) {
       // Nothing actually syncing right now - this slot would otherwise
       // just sit empty (his explicit ask), so it shows the array's
@@ -543,21 +565,31 @@ function renderRaid(arrays) {
 
     raidContainer.appendChild(node);
   }
+  wireCardDragging(raidContainer, "raid-cards");
 }
 
-function renderDisks(disks) {
-  disksContainer.innerHTML = "";
+function renderDisks(disks, container = disksContainer, dragKey = "disks") {
+  container.innerHTML = "";
   if (!disks.length) {
-    emptyState(disksContainer, t("msg.empty.disks"));
+    emptyState(container, t("msg.empty.disks"));
     return;
   }
-  const ordered = applyCardOrder("disks", disks, (d) => d.name);
+  const ordered = applyCardOrder(dragKey, disks, (d) => d.name);
+  // The system disk always leads, regardless of any saved order (his
+  // explicit ask) - a stable sort just moves it to the front without
+  // disturbing anyone else's relative (possibly user-reordered)
+  // position.
+  ordered.sort((a, b) => (b.is_boot_disk ? 1 : 0) - (a.is_boot_disk ? 1 : 0));
   for (const disk of ordered) {
     const node = diskTemplate.content.cloneNode(true);
     window.i18n.applyTranslations(node);
     const article = node.querySelector(".card");
     article.dataset.cardId = disk.name;
-    article.draggable = true;
+    // Never draggable - it always belongs first, dragging it anywhere
+    // else would just get silently undone by the sort above on the
+    // next render.
+    article.draggable = !disk.is_boot_disk;
+    if (disk.is_boot_disk) article.classList.add("boot-disk");
     node.querySelector(".badge").classList.add(disk.health || "unknown");
     node.querySelector(".name").textContent = disk.path;
     node.querySelector(".model").textContent = disk.model || "";
@@ -580,9 +612,9 @@ function renderDisks(disks) {
     // table for management). Unmount lives only in that table's rows
     // now, not duplicated here too.
 
-    disksContainer.appendChild(node);
+    container.appendChild(node);
   }
-  wireCardDragging(disksContainer, "disks");
+  wireCardDragging(container, dragKey);
 }
 
 // --------------------------------------------------------------------
@@ -856,6 +888,7 @@ async function refresh() {
     lastDisksData = data.disks || [];
     renderRaid(lastRaidData);
     renderDisks(lastDisksData);
+    if (diskCardsTabContainer) renderDisks(lastDisksData, diskCardsTabContainer, "disks-tab-cards");
     renderHealthAlert(lastRaidData, lastDisksData);
     lastUpdatedEl.textContent = t("msg.lastUpdated", { time: new Date().toLocaleTimeString(localeForLang(), { hour12: false }) });
     connDot.classList.remove("stale");
@@ -948,8 +981,11 @@ function renderRawDisks(disks) {
     }
   }
   for (const arr of topLevelArrays) placeArrayAndMembers(arr);
+  const bootDisk = disks.find((d) => d.is_boot_disk);
+  if (bootDisk) ordered.push(bootDisk);
   for (const d of disks) {
     if (d.transport === "raid") continue;
+    if (d.is_boot_disk) continue; // already placed first, above
     if (d.is_raid_member && d.raid_array && arrayNamesAll.has(d.raid_array)) continue; // already placed under its array above
     ordered.push(d);
   }
@@ -957,7 +993,8 @@ function renderRawDisks(disks) {
   for (const d of ordered) {
     const row = document.createElement("tr");
     const isMember = d.is_raid_member && d.raid_array && arrayNamesAll.has(d.raid_array);
-    if (isMember) row.className = "disk-row-member";
+    if (d.is_boot_disk) row.className = "disk-row-boot";
+    else if (isMember) row.className = "disk-row-member";
     else if (d.transport === "raid") row.className = "disk-row-array";
     row.innerHTML = `
       <td class="mono">${d.name}</td>
@@ -972,7 +1009,18 @@ function renderRawDisks(disks) {
     const actions = document.createElement("td");
     actions.className = "row-actions";
 
-    if (isMember) {
+    if (d.is_boot_disk) {
+      // The system disk needs to be visible here (his explicit ask -
+      // this table should be a genuinely complete picture of every
+      // disk in the box) but must never be unmountable from here -
+      // format_disk/wipe_disk/unmount_disk each independently refuse
+      // it regardless of what this row offers, but showing an Unmount
+      // button that can only ever fail would just be confusing. Plain
+      // info text instead, plus the same health-check every other
+      // disk gets.
+      statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusBootDisk")}</span> <span class="mono">${d.mount_point || ""}</span>`;
+      addCheckStatusButton(actions, d);
+    } else if (isMember) {
       // A member disk's own Format/Wipe/Mount never make sense (its
       // filesystem-shaped content is the array's, not something to
       // manage on its own) - and swapping it out is now handled
@@ -988,13 +1036,13 @@ function renderRawDisks(disks) {
       statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusRaidMemberUnknownArray")}</span>`;
     } else if (d.mounted) {
       statusCell.innerHTML = `<span class="pill pill-ok">${t("ui.rawDisks.statusMounted")}</span> <span class="mono">${d.mount_point || ""}</span>`;
+      addCheckStatusButton(actions, d);
       // Unmount is offered regardless of where the disk happens to be
       // mounted - not just under /srv/ (a real report: a desktop
       // session's own automounter had put a USB drive at
       // /media/<user>/<label>, which used to leave it with no action
-      // at all here). The boot disk is excluded from this whole table
-      // already (see monitor.get_full_status), so nothing unsafe slips
-      // through by widening this.
+      // at all here). The boot disk gets its own branch above instead
+      // of reaching this one.
       if (d.mount_point) {
         const unmountBtn = document.createElement("button");
         unmountBtn.type = "button";
@@ -1005,6 +1053,7 @@ function renderRawDisks(disks) {
       }
     } else if (d.fstype) {
       statusCell.innerHTML = `<span class="pill pill-warn">${t("ui.rawDisks.statusUnmounted")}</span>`;
+      addCheckStatusButton(actions, d);
 
       const mountBtn = document.createElement("button");
       mountBtn.type = "button";
@@ -1035,13 +1084,7 @@ function renderRawDisks(disks) {
       actions.appendChild(wipeBtn2);
     } else {
       statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusFree")}</span>`;
-
-      const checkBtn = document.createElement("button");
-      checkBtn.type = "button";
-      checkBtn.className = "link-btn";
-      checkBtn.textContent = t("ui.rawDisks.checkBtn");
-      checkBtn.addEventListener("click", () => checkRawDiskStatus(d, checkBtn));
-      actions.appendChild(checkBtn);
+      addCheckStatusButton(actions, d);
 
       const formatBtn = document.createElement("button");
       formatBtn.type = "button";
@@ -1498,6 +1541,21 @@ async function loadRawDisks() {
   } catch (err) {
     emptyState(rawDisksContainer, t("msg.connectionErrorDetail", { detail: err.message }));
   }
+}
+
+function addCheckStatusButton(actions, d) {
+  // Real report: this used to only be offered on genuinely free,
+  // unformatted disks - a mounted or formatted-but-unmounted disk (by
+  // far the common real-world state) had no way to check its SMART
+  // health at all, for a disk OR an array. Offered everywhere now,
+  // dispatching by transport inside checkRawDiskStatus already
+  // (array vs plain disk).
+  const checkBtn = document.createElement("button");
+  checkBtn.type = "button";
+  checkBtn.className = "link-btn";
+  checkBtn.textContent = t("ui.rawDisks.checkBtn");
+  checkBtn.addEventListener("click", () => checkRawDiskStatus(d, checkBtn));
+  actions.appendChild(checkBtn);
 }
 
 async function checkRawDiskStatus(disk, button) {
@@ -3332,12 +3390,74 @@ function renderNetwork(data) {
   overview.innerHTML = `
     <div class="card-head"><span class="name">${t("ui.network.overviewCardTitle")}</span></div>
     <dl class="facts">
-      <div><dt>${t("ui.network.hostname")}</dt><dd class="mono">${data.hostname || "\u2013"}</dd></div>
+      <div>
+        <dt>${t("ui.network.hostname")}</dt>
+        <dd>
+          <span class="hostname-display mono">${data.hostname || "\u2013"}</span>
+          <button type="button" class="link-btn hostname-edit-btn">${t("ui.network.editHostnameBtn")}</button>
+          <span class="hostname-edit-row" style="display:none;">
+            <input type="text" class="hostname-input mono" maxlength="63" />
+            <button type="button" class="link-btn hostname-save-btn">${t("ui.network.saveHostnameBtn")}</button>
+            <button type="button" class="link-btn hostname-cancel-btn">${t("ui.network.cancelHostnameBtn")}</button>
+          </span>
+        </dd>
+      </div>
       <div><dt>${t("ui.network.managedBy")}</dt><dd>${t(`net.backend.${data.backend}`)}</dd></div>
     </dl>
+    <p class="form-error hostname-error"></p>
   `;
   summary.appendChild(overview);
   networkContainer.appendChild(summary);
+
+  const hostnameDisplay = overview.querySelector(".hostname-display");
+  const hostnameEditBtn = overview.querySelector(".hostname-edit-btn");
+  const hostnameEditRow = overview.querySelector(".hostname-edit-row");
+  const hostnameInput = overview.querySelector(".hostname-input");
+  const hostnameSaveBtn = overview.querySelector(".hostname-save-btn");
+  const hostnameCancelBtn = overview.querySelector(".hostname-cancel-btn");
+  const hostnameError = overview.querySelector(".hostname-error");
+
+  hostnameEditBtn.addEventListener("click", () => {
+    hostnameInput.value = data.hostname || "";
+    hostnameDisplay.style.display = "none";
+    hostnameEditBtn.style.display = "none";
+    hostnameEditRow.style.display = "inline-flex";
+    hostnameError.textContent = "";
+    hostnameInput.focus();
+  });
+  hostnameCancelBtn.addEventListener("click", () => {
+    hostnameDisplay.style.display = "";
+    hostnameEditBtn.style.display = "";
+    hostnameEditRow.style.display = "none";
+    hostnameError.textContent = "";
+  });
+  hostnameSaveBtn.addEventListener("click", async () => {
+    const newHostname = hostnameInput.value.trim();
+    if (!newHostname) return;
+    hostnameSaveBtn.disabled = true;
+    hostnameError.textContent = "";
+    try {
+      const res = await fetch("/api/network/hostname", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ hostname: newHostname }),
+      });
+      const resData = await res.json();
+      if (!res.ok || !resData.success) {
+        hostnameError.textContent = apiErrorMessage(resData, res);
+        return;
+      }
+      if (resData.warnings && resData.warnings.length) {
+        showToast(warningsText(resData.warnings), true);
+      }
+      showToast(t("msg.hostnameChanged", { hostname: resData.hostname }));
+      await loadNetwork();
+    } catch (err) {
+      hostnameError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
+    } finally {
+      hostnameSaveBtn.disabled = false;
+    }
+  });
 
   if (data.error_code) {
     const err = document.createElement("p");
@@ -3613,6 +3733,28 @@ function logEntrySummary(ev) {
   return ev.summary || "";
 }
 
+function logEntryDetail(ev) {
+  const raw = (ev.message || "").trim();
+  if (!raw) return t("ui.log.noDetail");
+  // A failure's message is the underlying error_code (his explicit
+  // ask: the expanded view used to show nothing at all here) - the
+  // same code the rest of the app already translates into readable
+  // text everywhere else, so this does the same instead of showing a
+  // bare technical string like "raid.pointless_stripe_of_stripe" to
+  // someone who explicitly isn't a programmer. Anything that isn't a
+  // recognized error code (a handful of older/manual entries, or a
+  // literal command/output string some call sites still pass) falls
+  // back to showing the raw text as-is - errorText() itself already
+  // degrades to a generic "unknown error" string rather than throwing
+  // when a code isn't recognized, so this only prefers the translated
+  // form when it actually resolved to something more specific than that.
+  if (ev.status === "failure" && /^[a-z_]+\.[a-z_]+$/.test(raw)) {
+    const translated = window.i18n.errorText(raw);
+    if (translated && translated !== t("err._unknown")) return translated;
+  }
+  return raw;
+}
+
 function renderLog(events) {
   logContainer.innerHTML = "";
   if (!events.length) {
@@ -3632,7 +3774,7 @@ function renderLog(events) {
     node.querySelector(".log-time").textContent = fmtLogTime(ev.timestamp);
 
     const messageEl = node.querySelector(".log-message");
-    messageEl.textContent = ev.message && ev.message.trim() ? ev.message : t("ui.log.noDetail");
+    messageEl.textContent = logEntryDetail(ev);
 
     if (expandedLogIds.has(ev.id)) article.classList.add("expanded");
 
@@ -3734,6 +3876,7 @@ setInterval(loadLog, REFRESH_MS);
 function rerenderEverything() {
   renderRaid(lastRaidData);
   renderDisks(lastDisksData);
+  if (diskCardsTabContainer) renderDisks(lastDisksData, diskCardsTabContainer, "disks-tab-cards");
   loadRawDisks(); // not cache-driven like the others - has no lastX variable of its own, a fresh fetch is cheap and guarantees correctness
   renderUsers(lastKnownUsersData);
   renderGroupsChecklist(lastKnownGroupsData);
@@ -3758,6 +3901,14 @@ function formatRate(rate) {
 
 async function loadStatusbar() {
   const dot = document.getElementById("statusbar-dot");
+  // Same fetch feeds the plain summary cards below (his explicit ask,
+  // for now: same numbers as the statusbar, no charts yet - the full
+  // customizable/chart version is a separate, larger project to come
+  // back to later) - reused rather than a second request for the
+  // exact same data.
+  const summaryCpuEl = document.getElementById("summary-cpu-val");
+  const summaryMemEl = document.getElementById("summary-mem-val");
+  const summaryNetEl = document.getElementById("summary-net-val");
   try {
     const res = await fetch("/api/system-stats");
     const data = await res.json();
@@ -3772,6 +3923,9 @@ async function loadStatusbar() {
         el.textContent = t("ui.statusbar.unavailable");
         el.title = detail;
       }
+      if (summaryCpuEl) summaryCpuEl.textContent = t("ui.statusbar.unavailable");
+      if (summaryMemEl) summaryMemEl.textContent = t("ui.statusbar.unavailable");
+      if (summaryNetEl) summaryNetEl.textContent = t("ui.statusbar.unavailable");
       if (dot) dot.style.background = "var(--crit)";
       return;
     }
@@ -3789,6 +3943,13 @@ async function loadStatusbar() {
     netEl.innerHTML =
       `<span class="up">\u2191 ${formatRate(data.net_up)}</span><span class="sep">/</span><span class="down">\u2193 ${formatRate(data.net_down)}</span>`;
     if (dot) dot.style.background = "var(--ok)";
+
+    if (summaryCpuEl) summaryCpuEl.textContent = `${data.cpu_percent.toFixed(1)}%`;
+    if (summaryMemEl) summaryMemEl.textContent = `${data.mem_percent.toFixed(1)}% (${data.mem_used_gib} / ${data.mem_total_gib} GiB)`;
+    if (summaryNetEl) {
+      summaryNetEl.innerHTML =
+        `<span class="up">\u2191 ${formatRate(data.net_up)}</span> <span class="sep">/</span> <span class="down">\u2193 ${formatRate(data.net_down)}</span>`;
+    }
   } catch (err) {
     if (dot) dot.style.background = "var(--crit)";
   }

@@ -267,3 +267,60 @@ class TestStartupRecovery(NetworkMutateTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSetHostname(unittest.TestCase):
+    @mock.patch.object(network_mutate.system_tools, "find_binary")
+    @mock.patch.object(network_mutate.system_tools, "run")
+    def test_sets_hostname_and_restarts_avahi(self, mock_run, mock_find):
+        mock_find.side_effect = lambda name: f"/usr/bin/{name}"
+        mock_run.return_value = (0, "", "")
+        result = network_mutate.set_hostname("nas-mon")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["hostname"], "nas-mon")
+        mock_run.assert_any_call(["/usr/bin/hostnamectl", "set-hostname", "nas-mon"], timeout=15)
+        mock_run.assert_any_call(["/usr/bin/systemctl", "restart", "avahi-daemon"], timeout=15)
+
+    def test_rejects_empty_hostname(self):
+        result = network_mutate.set_hostname("")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "network.invalid_hostname")
+
+    def test_rejects_hostname_with_invalid_characters(self):
+        for bad in ["nas monitor", "nas_monitor", "nas.monitor", "nas!", "-nas", "nas-"]:
+            result = network_mutate.set_hostname(bad)
+            self.assertFalse(result["success"], bad)
+            self.assertEqual(result["error_code"], "network.invalid_hostname", bad)
+
+    def test_rejects_hostname_over_63_chars(self):
+        result = network_mutate.set_hostname("a" * 64)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "network.invalid_hostname")
+
+    @mock.patch.object(network_mutate.system_tools, "find_binary", return_value=None)
+    def test_reports_missing_hostnamectl(self, mock_find):
+        result = network_mutate.set_hostname("nas-mon")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.tool_missing")
+
+    @mock.patch.object(network_mutate.system_tools, "find_binary")
+    @mock.patch.object(network_mutate.system_tools, "run")
+    def test_surfaces_hostnamectl_failure(self, mock_run, mock_find):
+        mock_find.side_effect = lambda name: f"/usr/bin/{name}"
+        mock_run.return_value = (1, "", "hostnamectl: Failed to set hostname")
+        result = network_mutate.set_hostname("nas-mon")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+
+    @mock.patch.object(network_mutate.system_tools, "find_binary")
+    @mock.patch.object(network_mutate.system_tools, "run")
+    def test_a_failed_avahi_restart_is_a_warning_not_a_failure(self, mock_run, mock_find):
+        # The hostname itself is already changed at that point - the
+        # part that actually matters - so avahi failing to restart
+        # must not make the whole rename look like it failed.
+        mock_find.side_effect = lambda name: f"/usr/bin/{name}"
+        mock_run.side_effect = [(0, "", ""), (1, "", "Unit avahi-daemon.service not found.")]
+        result = network_mutate.set_hostname("nas-mon")
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertEqual(result["warnings"][0]["code"], "network.avahi_restart_failed")
