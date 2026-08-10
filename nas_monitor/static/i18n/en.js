@@ -81,6 +81,7 @@ window.NAS_I18N.en = {
       usbWarning: "Some selected disks are USB - they can be less stable in a RAID array than internal disks (weaker I/O error handling, possible port power interruptions).",
       destructiveWarning: "This will permanently wipe all selected disks and create a new array on them. Data on these disks will be lost.",
       createBtn: "Create",
+      arrayTag: "array",
     },
     summary: {
       disksSubtitle: "Drag cards to reorder - saved permanently.",
@@ -425,6 +426,7 @@ window.NAS_I18N.en = {
       unknown_array: "Unknown array: {array}",
       still_mounted: "Array {array} is still mounted - unmount it first",
       zero_superblock_failed: "Failed to clear RAID metadata on {device}: {detail}",
+      no_redundancy: "RAID{level} has no redundancy - a single disk can't be detached or repaired without destroying the whole array. To swap a disk, delete the whole array and recreate it with the new disk set.",
     },
     layout: {
       invalid_order: "Invalid card order",

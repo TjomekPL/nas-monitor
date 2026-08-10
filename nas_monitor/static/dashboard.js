@@ -771,28 +771,54 @@ function renderRawDisks(disks) {
   // isn't in this same list for some reason) keeps its original
   // relative order at the end.
   const arrays = disks.filter((d) => d.transport === "raid");
+  const arrayNamesAll = new Set(arrays.map((a) => a.name));
   const membersByArray = new Map();
   for (const d of disks) {
-    if (d.is_raid_member && d.raid_array) {
+    if (d.is_raid_member && d.raid_array && arrayNamesAll.has(d.raid_array)) {
       if (!membersByArray.has(d.raid_array)) membersByArray.set(d.raid_array, []);
       membersByArray.get(d.raid_array).push(d);
     }
   }
-  const arrayNames = new Set(arrays.map((a) => a.name));
+  // RAID0/linear have no redundancy at all - mdadm itself can never
+  // hot-remove a live member from either (no degraded state to fall
+  // back to, only "every member present" or "the whole array gone"),
+  // and there's nothing a Repair/replace-a-failed-disk action could
+  // mean for them either. Detach/Repair are only offered for levels
+  // where they can actually succeed - his real report: clicking
+  // Detach on a RAID0 member failed with mdadm's raw "Device or
+  // resource busy", a dead end the UI shouldn't have offered in the
+  // first place. The backend (raid_mutate.NON_REDUNDANT_LEVELS)
+  // rejects these regardless, in case this table isn't the caller.
+  const NON_REDUNDANT_LEVELS = new Set(["raid0", "linear"]);
+  const levelByArray = new Map(arrays.map((a) => [a.name, (a.level || "").toLowerCase()]));
+  // Only TOP-LEVEL arrays start their own group - an array that is
+  // itself a member of a parent array (nested RAID: two RAID0s
+  // mirrored into a RAID1 on top is a real, supported case now) gets
+  // placed once, recursively, under whichever array it's nested in -
+  // never also as a separate top-level row of its own.
+  const topLevelArrays = arrays.filter((a) => !(a.is_raid_member && a.raid_array && arrayNamesAll.has(a.raid_array)));
+  const arrayNames = new Set(topLevelArrays.map((a) => a.name));
   const ordered = [];
-  for (const arr of arrays) {
+  const placed = new Set();
+  function placeArrayAndMembers(arr) {
+    if (placed.has(arr.name)) return; // guards against a malformed/cyclic mdadm report
+    placed.add(arr.name);
     ordered.push(arr);
-    for (const member of membersByArray.get(arr.name) || []) ordered.push(member);
+    for (const member of membersByArray.get(arr.name) || []) {
+      if (member.transport === "raid") placeArrayAndMembers(member);
+      else ordered.push(member);
+    }
   }
+  for (const arr of topLevelArrays) placeArrayAndMembers(arr);
   for (const d of disks) {
     if (d.transport === "raid") continue;
-    if (d.is_raid_member && d.raid_array && arrayNames.has(d.raid_array)) continue; // already placed under its array above
+    if (d.is_raid_member && d.raid_array && arrayNamesAll.has(d.raid_array)) continue; // already placed under its array above
     ordered.push(d);
   }
 
   for (const d of ordered) {
     const row = document.createElement("tr");
-    const isMember = d.is_raid_member && d.raid_array && arrayNames.has(d.raid_array);
+    const isMember = d.is_raid_member && d.raid_array && arrayNamesAll.has(d.raid_array);
     if (isMember) row.className = "disk-row-member";
     else if (d.transport === "raid") row.className = "disk-row-array";
     row.innerHTML = `
@@ -816,12 +842,14 @@ function renderRawDisks(disks) {
       // e.g. before physically swapping it. Repair (adding a
       // replacement) lives on the ARRAY's own row instead, below.
       statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusRaidMember", { array: d.raid_array })}</span>`;
-      const detachBtn = document.createElement("button");
-      detachBtn.type = "button";
-      detachBtn.className = "link-btn danger";
-      detachBtn.textContent = t("ui.rawDisks.detachBtn");
-      detachBtn.addEventListener("click", () => detachRaidMember(d));
-      actions.appendChild(detachBtn);
+      if (!NON_REDUNDANT_LEVELS.has(levelByArray.get(d.raid_array))) {
+        const detachBtn = document.createElement("button");
+        detachBtn.type = "button";
+        detachBtn.className = "link-btn danger";
+        detachBtn.textContent = t("ui.rawDisks.detachBtn");
+        detachBtn.addEventListener("click", () => detachRaidMember(d));
+        actions.appendChild(detachBtn);
+      }
     } else if (d.is_raid_member) {
       // Fallback for the rare case a member's own array didn't come
       // back in this same list (detection hiccup) - no action makes
@@ -899,18 +927,26 @@ function renderRawDisks(disks) {
       actions.appendChild(wipeBtn);
     }
 
-    if (d.transport === "raid") {
-      // Repair - adding a disk to replace a missing/failed member
-      // (his real scenario) - deliberately available regardless of
-      // the array's own format/mount state, since a degraded array
-      // needing a replacement disk is completely independent of
-      // whether it currently has a filesystem or is mounted.
-      const repairBtn = document.createElement("button");
-      repairBtn.type = "button";
-      repairBtn.className = "link-btn";
-      repairBtn.textContent = t("ui.rawDisks.repairBtn");
-      repairBtn.addEventListener("click", () => openRaidRepairPicker(d, repairBtn));
-      actions.appendChild(repairBtn);
+    if (d.transport === "raid" && !isMember) {
+      // Repair - adding a disk to replace a missing/failed member -
+      // meaningless for RAID0/linear (see NON_REDUNDANT_LEVELS above:
+      // neither can ever be "missing one disk but still running"),
+      // deliberately available regardless of the array's own
+      // format/mount state otherwise, since a degraded array needing
+      // a replacement disk is completely independent of whether it
+      // currently has a filesystem or is mounted. Not offered at all
+      // when this array is itself nested inside a parent array (isMember
+      // above already gave it the member-only Detach action instead -
+      // repairing/deleting a nested array independently of its parent
+      // would leave that parent in an inconsistent state).
+      if (!NON_REDUNDANT_LEVELS.has(levelByArray.get(d.name))) {
+        const repairBtn = document.createElement("button");
+        repairBtn.type = "button";
+        repairBtn.className = "link-btn";
+        repairBtn.textContent = t("ui.rawDisks.repairBtn");
+        repairBtn.addEventListener("click", () => openRaidRepairPicker(d, repairBtn));
+        actions.appendChild(repairBtn);
+      }
 
       // Delete - full teardown (his explicit ask): stop the array and
       // free every member disk for reuse, not just unmount it. Offered
@@ -1066,9 +1102,14 @@ addRaidBtn.addEventListener("click", async () => {
   // Only genuinely free disks are offered - a disk with a filesystem,
   // already mounted, or already a RAID member needs an explicit Wipe
   // first, same as any other destructive disk operation in this tool
-  // (creating an array is exactly that: destructive).
+  // (creating an array is exactly that: destructive). A free, unused
+  // RAID array (no filesystem, not mounted, not already nested inside
+  // another array) is offered too - nested RAID (his real scenario:
+  // mirroring two existing RAID0 arrays into a RAID1 on top) is a
+  // genuinely supported mdadm pattern, and an array is just another
+  // block device to mdadm --create exactly like a physical disk is.
   const freeDisks = (lastManageableDisksData || []).filter(
-    (d) => !d.fstype && !d.mounted && !d.is_raid_member && d.transport !== "raid"
+    (d) => !d.fstype && !d.mounted && !d.is_raid_member
   );
   raidCreateErrorHint.style.display = freeDisks.length ? "none" : "block";
   for (const disk of freeDisks) {
@@ -1080,7 +1121,8 @@ addRaidBtn.addEventListener("click", async () => {
     cb.addEventListener("change", raidCreateUpdateLevelsAndSubmit);
     label.appendChild(cb);
     const usbTag = disk.transport === "usb" ? " (USB)" : "";
-    label.append(` ${disk.name} - ${disk.size}, ${disk.model}${usbTag}`);
+    const arrayTag = disk.transport === "raid" ? ` (${t("ui.raidCreateDialog.arrayTag")})` : "";
+    label.append(` ${disk.name} - ${disk.size}, ${disk.model}${usbTag}${arrayTag}`);
     raidCreateDisksChecklist.appendChild(label);
   }
   raidCreateUpdateLevelsAndSubmit();

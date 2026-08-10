@@ -41,6 +41,19 @@ MIN_DEVICES_FOR_LEVEL = {
     "10": 4,
 }
 
+# RAID0 and linear have no redundancy at all - mdadm's own docs are
+# explicit about this: "RAID0 or Linear never have missing, spare, or
+# failed drives, so there is nothing to monitor." A live member can
+# never be hot-removed from either (the kernel refuses with "Device or
+# resource busy" - there's no degraded state to fall back to, only
+# "every member present" or "the whole array is gone"), and there's
+# nothing a Repair/add-a-replacement-disk action could mean either.
+# Both buttons are hidden client-side for these levels (see
+# dashboard.js), but this is the actual, permanent backend guard - the
+# real answer for someone swapping a disk here is deleting the whole
+# array (see delete_raid_array) and recreating it with the new set.
+NON_REDUNDANT_LEVELS = {"raid0", "linear"}
+
 
 def _next_array_name() -> str:
     """First /dev/mdN not already in use, starting from md0."""
@@ -60,7 +73,16 @@ def create_raid_array(devices: list[str], level: str) -> dict[str, Any]:
     free, manageable disk - not the boot disk, not already a RAID
     member, not carrying a filesystem already (that needs an explicit
     Wipe first, same as any other destructive disk operation in this
-    tool - creating an array is exactly that: destructive)."""
+    tool - creating an array is exactly that: destructive).
+
+    A device may also be another, already-existing RAID array's own
+    path (e.g. "/dev/md0") - nested RAID (his real scenario: mirroring
+    two existing RAID0 arrays into a RAID1 on top) is a genuinely
+    supported mdadm pattern, mdadm doesn't care whether a --create
+    argument is a physical disk or another md device, and the same
+    free-device checks below (no fstype, not mounted, not already a
+    member of something else) apply to an array exactly the way they
+    apply to a disk."""
     result: dict[str, Any] = {"success": False}
 
     if level not in MIN_DEVICES_FOR_LEVEL:
@@ -72,7 +94,7 @@ def create_raid_array(devices: list[str], level: str) -> dict[str, Any]:
     if len(set(devices)) != len(devices):
         return errors.fail(result, "raid.duplicate_device")
 
-    known = {d["path"]: d for d in disk_mutate.list_manageable_disks()}
+    known = {d["path"]: d for d in disk_mutate.list_manageable_disks() + disk_mutate.list_manageable_raid_arrays()}
     for device in devices:
         disk = known.get(device)
         if disk is None:
@@ -113,6 +135,11 @@ def detach_member(array_name: str, device: str) -> dict[str, Any]:
     only --remove actually failing is treated as an error."""
     result: dict[str, Any] = {"success": False}
 
+    arrays = {arr["name"]: arr for arr in monitor.get_raid_arrays()}
+    arr = arrays.get(array_name)
+    if arr is not None and (arr.get("level") or "").lower() in NON_REDUNDANT_LEVELS:
+        return errors.fail(result, "raid.no_redundancy", level=arr.get("level"))
+
     mdadm_path = system_tools.find_binary("mdadm")
     if mdadm_path is None:
         return errors.tool_missing(result, "mdadm")
@@ -137,6 +164,11 @@ def add_member(array_name: str, device: str) -> dict[str, Any]:
     adding a disk that still has real data on it would destroy that
     data without any of that function's up-front confirmation."""
     result: dict[str, Any] = {"success": False}
+
+    arrays = {arr["name"]: arr for arr in monitor.get_raid_arrays()}
+    arr = arrays.get(array_name)
+    if arr is not None and (arr.get("level") or "").lower() in NON_REDUNDANT_LEVELS:
+        return errors.fail(result, "raid.no_redundancy", level=arr.get("level"))
 
     known = {d["path"]: d for d in disk_mutate.list_manageable_disks()}
     disk = known.get(device)

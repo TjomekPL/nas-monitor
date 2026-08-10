@@ -81,6 +81,7 @@ window.NAS_I18N.pl = {
       usbWarning: "Wśród wybranych dysków są dyski USB - w macierzy RAID mogą być mniej stabilne niż dyski wewnętrzne (słabsza obsługa błędów I/O, możliwe przerwy w zasilaniu portu).",
       destructiveWarning: "To trwale wyczyści wszystkie wybrane dyski i utworzy na nich nową macierz. Dane na tych dyskach zostaną utracone.",
       createBtn: "Utwórz",
+      arrayTag: "macierz",
     },
     summary: {
       disksSubtitle: "Przeciągnij karty, żeby zmienić kolejność - zapamiętywana na stałe.",
@@ -425,6 +426,7 @@ window.NAS_I18N.pl = {
       unknown_array: "Nieznana macierz: {array}",
       still_mounted: "Macierz {array} jest zamontowana - odmontuj ją najpierw",
       zero_superblock_failed: "Nie udało się wyczyścić metadanych RAID na {device}: {detail}",
+      no_redundancy: "RAID{level} nie ma redundancji - nie da się odłączyć ani naprawić pojedynczego dysku bez zniszczenia całej macierzy. Aby wymienić dysk, usuń całą macierz i utwórz ją od nowa z nowym zestawem dysków.",
     },
     layout: {
       invalid_order: "Nieprawidłowa kolejność kart",

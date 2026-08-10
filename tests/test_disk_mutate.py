@@ -243,6 +243,28 @@ class TestListManageableRaidArrays(unittest.TestCase):
         with mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=arrays):
             self.assertEqual(disk_mutate.list_manageable_raid_arrays(), [])
 
+    def test_detects_an_array_nested_inside_a_parent_array(self):
+        # Nested RAID (his real scenario: two RAID0 arrays mirrored
+        # into a RAID1 on top) - md0 and md1 are each a member of md2
+        # exactly the way a physical disk would be a member of any
+        # array, and _raid_member_to_array_map already generically
+        # walks every array's device paths regardless of whether a
+        # given path is a disk or another /dev/mdN.
+        arrays = [
+            {"name": "md0", "path": "/dev/md0", "level": "raid0", "devices": [{"device": "/dev/sdb"}, {"device": "/dev/sdc"}], "error": None},
+            {"name": "md1", "path": "/dev/md1", "level": "raid0", "devices": [{"device": "/dev/sdd"}, {"device": "/dev/sde"}], "error": None},
+            {"name": "md2", "path": "/dev/md2", "level": "raid1", "devices": [{"device": "/dev/md0"}, {"device": "/dev/md1"}], "error": None},
+        ]
+        with mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=arrays), \
+             mock.patch.object(disk_mutate.system_tools, "find_binary", return_value=None):
+            result = disk_mutate.list_manageable_raid_arrays()
+        by_name = {a["name"]: a for a in result}
+        self.assertTrue(by_name["md0"]["is_raid_member"])
+        self.assertEqual(by_name["md0"]["raid_array"], "md2")
+        self.assertTrue(by_name["md1"]["is_raid_member"])
+        self.assertEqual(by_name["md1"]["raid_array"], "md2")
+        self.assertFalse(by_name["md2"]["is_raid_member"])
+
 
 class TestListMountedRaidArrays(unittest.TestCase):
     def test_includes_an_array_mounted_under_srv(self):

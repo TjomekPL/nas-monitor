@@ -88,6 +88,7 @@ class TestCreateRaidArray(unittest.TestCase):
     def test_picks_the_first_free_array_name(self, mock_run, mock_find):
         mock_run.return_value = (0, "", "")
         with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=FREE_DISKS), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=[]), \
              mock.patch.object(raid_mutate.monitor, "get_raid_arrays", return_value=[{"name": "md0"}]):
             result = raid_mutate.create_raid_array(["/dev/sdb", "/dev/sdc"], "1")
         self.assertTrue(result["success"])
@@ -117,8 +118,37 @@ class TestCreateRaidArray(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "system.command_failed")
 
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_accepts_existing_free_arrays_as_devices_for_nested_raid(self, mock_run, mock_find):
+        # His real scenario: two existing, unmounted RAID0 arrays
+        # mirrored into a RAID1 on top - mdadm doesn't care whether a
+        # --create argument is a physical disk or another /dev/mdN, and
+        # neither does this check now that it also consults
+        # list_manageable_raid_arrays().
+        mock_run.return_value = (0, "", "")
+        free_arrays = [
+            {"path": "/dev/md0", "fstype": None, "mounted": False, "is_raid_member": False},
+            {"path": "/dev/md1", "fstype": None, "mounted": False, "is_raid_member": False},
+        ]
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=[]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=free_arrays), \
+             mock.patch.object(raid_mutate.monitor, "get_raid_arrays", return_value=[{"name": "md0"}, {"name": "md1"}]):
+            result = raid_mutate.create_raid_array(["/dev/md0", "/dev/md1"], "1")
+        self.assertTrue(result["success"])
+        mock_run.assert_called_once_with(
+            ["/sbin/mdadm", "--create", "/dev/md2", "--level=1", "--raid-devices=2", "--metadata=1.2", "--run",
+             "/dev/md0", "/dev/md1"],
+            timeout=60,
+        )
 
-class TestDetachMember(unittest.TestCase):
+    def test_rejects_an_array_that_is_already_mounted_as_a_nested_device(self):
+        mounted_array = [{"path": "/dev/md0", "fstype": "ext4", "mounted": True, "is_raid_member": False}]
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=[]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=mounted_array):
+            result = raid_mutate.create_raid_array(["/dev/md0", "/dev/md1"], "1")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "raid.device_not_free")
     @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value=None)
     def test_reports_missing_mdadm_tool(self, mock_find):
         result = raid_mutate.detach_member("md0", "/dev/sdb")
@@ -150,6 +180,34 @@ class TestDetachMember(unittest.TestCase):
         result = raid_mutate.detach_member("md0", "/dev/sdb")
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "system.command_failed")
+
+    def test_rejects_detach_on_a_non_redundant_level(self):
+        # The actual real-world failure this guards against: mdadm can
+        # never hot-remove a live member from RAID0/linear (no
+        # degraded state to fall back to) - it always fails with
+        # "Device or resource busy". Caught up front with a clear,
+        # actionable error instead of forwarding that raw mdadm text.
+        raid0 = {"name": "md0", "level": "raid0"}
+        with mock.patch.object(raid_mutate.monitor, "get_raid_arrays", return_value=[raid0]):
+            result = raid_mutate.detach_member("md0", "/dev/sdb")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "raid.no_redundancy")
+
+    def test_rejects_detach_on_linear(self):
+        linear = {"name": "md0", "level": "linear"}
+        with mock.patch.object(raid_mutate.monitor, "get_raid_arrays", return_value=[linear]):
+            result = raid_mutate.detach_member("md0", "/dev/sdb")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "raid.no_redundancy")
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_still_allows_detach_on_a_redundant_level(self, mock_run, mock_find):
+        mock_run.return_value = (0, "", "")
+        raid1 = {"name": "md0", "level": "raid1"}
+        with mock.patch.object(raid_mutate.monitor, "get_raid_arrays", return_value=[raid1]):
+            result = raid_mutate.detach_member("md0", "/dev/sdb")
+        self.assertTrue(result["success"])
 
 
 class TestAddMember(unittest.TestCase):
@@ -191,6 +249,14 @@ class TestAddMember(unittest.TestCase):
             result = raid_mutate.add_member("md0", "/dev/sdb")
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "system.command_failed")
+
+    def test_rejects_repair_on_a_non_redundant_level(self):
+        raid0 = {"name": "md0", "level": "raid0"}
+        with mock.patch.object(raid_mutate.monitor, "get_raid_arrays", return_value=[raid0]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=FREE_DISKS):
+            result = raid_mutate.add_member("md0", "/dev/sdb")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "raid.no_redundancy")
 
 
 class TestDeleteRaidArray(unittest.TestCase):

@@ -279,6 +279,7 @@ def list_manageable_raid_arrays() -> list[dict[str, Any]]:
     itself erroring) are skipped - nothing here can safely be offered
     to format/mount without knowing its real state first."""
     lsblk_path = system_tools.find_binary("lsblk")
+    raid_member_map = _raid_member_to_array_map()
     arrays = []
     for arr in monitor.get_raid_arrays():
         if arr.get("error"):
@@ -315,12 +316,21 @@ def list_manageable_raid_arrays() -> list[dict[str, Any]]:
             "path": arr["path"],
             "size": size,
             "model": f"{level_label} ({member_count} {'disk' if member_count == 1 else 'disks'})",
+            "level": arr.get("level"),
             "serial": arr["name"],  # arrays have no serial of their own - the /dev/mdN name is the stable identifier instead
             "transport": "raid",
             "fstype": state["fstype"],
             "mount_point": state["mountpoint"],
             "mounted": bool(state["mountpoint"]),
-            "is_raid_member": False,
+            # An array can itself be a member of a PARENT array - nested
+            # RAID (e.g. two RAID0s mirrored into a RAID1 on top) is a
+            # real, supported mdadm pattern, and _raid_member_to_array_map
+            # already generically walks every array's device-path list
+            # regardless of whether a given path is a physical disk or
+            # another /dev/mdN - so this reuses that same detection
+            # rather than a separate array-only check.
+            "is_raid_member": arr["name"] in raid_member_map,
+            "raid_array": raid_member_map.get(arr["name"]),
             "label": disk_labels.get_label(arr["name"]),
         })
     return arrays
