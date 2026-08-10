@@ -426,6 +426,7 @@ class TestGetRaidArrays(unittest.TestCase):
         self.assertEqual(arrays[0]["failed_devices"], 0)
         self.assertIsNone(arrays[0]["array_state"])
         self.assertEqual(arrays[0]["health"], "ok")
+        self.assertFalse(arrays[0]["is_degraded"])
 
     @mock.patch("nas_monitor.monitor._find_binary", return_value=None)
     @mock.patch("nas_monitor.monitor._parse_mdstat")

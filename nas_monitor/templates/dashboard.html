@@ -43,6 +43,8 @@
     </div>
   </header>
 
+  <div id="health-alert-banner" class="health-alert" style="display:none;" role="alert"></div>
+
   <nav class="tabs" id="tabs" role="tablist">
     <button type="button" class="tab-btn" data-tab="summary" role="tab" data-i18n="ui.tabs.summary">Podsumowanie</button>
     <button type="button" class="tab-btn" data-tab="disks" role="tab" data-i18n="ui.tabs.disks">Dyski i macierze</button>
@@ -198,9 +200,14 @@
       </div>
       <div class="statusbar-spacer"></div>
       <button type="button" class="statusbar-seg statusbar-version" id="statusbar-version-btn" title="">
-        <span id="statusbar-version-val" class="mono">&ndash;</span>
-        <span class="pill pill-warn" id="statusbar-update-badge" style="display:none;" data-i18n="ui.statusbar.updateAvailable">aktualizacja</span>
-        <span class="pill pill-neutral" id="statusbar-system-update-badge" style="display:none;"></span>
+        <div class="statusbar-version-row">
+          <span class="statusbar-label" data-i18n="ui.statusbar.system">System</span>
+          <span id="statusbar-system-val" class="mono">&ndash;</span>
+        </div>
+        <div class="statusbar-version-row">
+          <span class="statusbar-label" data-i18n="ui.statusbar.app">Aplikacja</span>
+          <span id="statusbar-app-val" class="mono">&ndash;</span>
+        </div>
       </button>
       <div class="statusbar-seg statusbar-live">
         <span class="dot" id="statusbar-dot"></span>
@@ -456,6 +463,16 @@
     </form>
   </dialog>
 
+  <dialog id="raid-repair-dialog">
+    <h3 id="raid-repair-title" data-i18n="ui.raidRepairDialog.title">Napraw macierz</h3>
+    <p class="field-hint" id="raid-repair-degraded-banner" style="display:none; color: var(--warn);"></p>
+    <div id="raid-repair-members"></div>
+    <p class="form-error" id="raid-repair-error"></p>
+    <div class="dialog-actions">
+      <button type="button" id="raid-repair-close" data-i18n="ui.accountDialog.closeBtn">Zamknij</button>
+    </div>
+  </dialog>
+
   <dialog id="account-dialog">
     <h3 data-i18n="ui.accountDialog.title">Konto administratora</h3>
     <p class="field-hint" id="account-logged-in-as"></p>
@@ -516,31 +533,25 @@
       <p class="form-error" id="ui-scale-error"></p>
     </form>
 
-    <div class="account-updates-row">
-      <div class="account-section" id="update-section">
-        <h4 data-i18n="ui.accountDialog.updateHeading">Wersja</h4>
-        <p class="field-hint" id="update-current-version">&ndash;</p>
-        <p class="field-hint" id="update-status" style="display:none;"></p>
-        <p class="form-error" id="update-error"></p>
-        <div class="dialog-actions">
-          <button type="button" id="update-check-btn" class="link-btn" data-i18n="ui.accountDialog.checkUpdateBtn">Sprawdź aktualizacje</button>
-          <button type="button" id="update-apply-btn" class="btn-primary" style="display:none;"></button>
-        </div>
+    <div class="account-section" id="updates-section">
+      <h4 data-i18n="ui.accountDialog.updatesHeading">Aktualizacje</h4>
+      <div class="update-row">
+        <span class="update-row-label" data-i18n="ui.statusbar.system">System</span>
+        <span class="update-row-status" id="system-update-status-text">&ndash;</span>
+        <button type="button" id="system-update-apply-btn" class="btn-primary" style="display:none;"></button>
       </div>
-
-      <div class="account-section" id="system-update-section">
-        <h4 data-i18n="ui.accountDialog.systemUpdateHeading">Aktualizacje systemu</h4>
-        <p class="field-hint" id="system-update-status" style="display:none;"></p>
-        <p class="form-error" id="system-update-error"></p>
-        <details id="system-update-log-details" style="display:none;">
-          <summary data-i18n="ui.accountDialog.systemUpdateLogSummary">Log</summary>
-          <pre id="system-update-log" class="mono"></pre>
-        </details>
-        <div class="dialog-actions">
-          <button type="button" id="system-update-check-btn" class="link-btn" data-i18n="ui.accountDialog.checkSystemUpdateBtn">Sprawdź aktualizacje systemu</button>
-          <button type="button" id="system-update-apply-btn" class="btn-primary" style="display:none;"></button>
-        </div>
+      <div class="update-row">
+        <span class="update-row-label" data-i18n="ui.statusbar.app">Aplikacja</span>
+        <span class="update-row-status" id="update-status-text">&ndash;</span>
+        <button type="button" id="update-apply-btn" class="btn-primary" style="display:none;"></button>
       </div>
+      <p class="form-error" id="update-error"></p>
+      <p class="form-error" id="system-update-error"></p>
+      <details id="system-update-log-details" style="display:none;">
+        <summary data-i18n="ui.accountDialog.systemUpdateLogSummary">Log</summary>
+        <pre id="system-update-log" class="mono"></pre>
+      </details>
+    </div>
     </div>
 
     <div class="dialog-actions">
@@ -586,6 +597,7 @@
         <span class="level"></span>
       </div>
       <div class="usage-bar"></div>
+      <p class="degraded-banner"></p>
       <dl class="facts">
         <div><dt data-i18n="ui.raidCard.state">Stan</dt><dd class="state"></dd></div>
         <div><dt data-i18n="ui.raidCard.device">Urządzenie</dt><dd class="path mono"></dd></div>

@@ -1,5 +1,16 @@
 # nas-monitor
 
+> ⚠️ **Nie jest to gruntownie przetestowana aplikacja produkcyjna.** Projekt
+> jest w ciągłej, aktywnej budowie - funkcje bywają dodawane i przerabiane
+> z sesji na sesję, część ścieżek (zwłaszcza rzadziej używane poziomy RAID,
+> nietypowe konfiguracje dysków) jest sprawdzona tylko testami jednostkowymi
+> na przykładowych danych, nie na realnym sprzęcie w każdej możliwej
+> kombinacji. Właściciel projektu nie jest programistą - cały kod piszę ja
+> (Claude, asystent AI od Anthropicu); on odpowiada za zgłaszanie niedoróbek,
+> testowanie na żywym sprzęcie i wymyślanie funkcjonalności. Rób kopie
+> zapasowe ważnych danych przed testowaniem operacji dyskowych/RAID i nie
+> traktuj tego jako gotowego, w pełni dojrzałego produktu.
+
 Samodzielny web dashboard do zarządzania serwerem plików na Debianie - dyski,
 macierze RAID (mdadm), użytkownicy i grupy systemowe, udziały Samby, klucze
 SSH, sieć oraz aktualizacje - wszystko z jednego miejsca, bez konieczności

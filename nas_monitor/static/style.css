@@ -250,6 +250,21 @@ h1 { margin: 0; font-size: 21px; font-weight: 650; letter-spacing: -0.01em; }
   overflow-x: auto;
 }
 
+/* His explicit ask: a disk/array problem should be visible right after
+   logging in, not only discoverable by clicking into the Disks tab.
+   Full-width, above the tabs, persists across tab switches for as long
+   as the condition holds (refresh() re-evaluates it every poll) -
+   deliberately not a dismissible toast, since the problem itself isn't
+   momentary. .crit wins over .warn when both are present at once. */
+.health-alert {
+  padding: 10px max(24px, calc((100% - 1080px) / 2));
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+}
+.health-alert.warn { background: var(--warn-bg); color: var(--warn); }
+.health-alert.crit { background: var(--crit-bg); color: var(--crit); }
+
 .tab-btn {
   background: none;
   border: none;
@@ -395,19 +410,22 @@ main {
   border: none;
   border-right: 1px solid var(--border);
   cursor: pointer;
-  font-size: 12px;
-  padding: 7px 14px;
-  justify-content: flex-end; /* the box is fixed-width to reserve room
-    for the "update available" pill (see comment on flex-basis below),
-    so with no pill shown the version text would otherwise sit alone at
-    the box's left edge, "floating" in the middle of the bar instead of
-    reading as anchored to the live indicator next to it */
-  flex: 0 0 150px; /* reserves room for the version tag plus the "update
-    available" pill, which toggles on/off - fixed so that toggle doesn't
-    shift the live indicator next to it */
+  font-size: 11px;
+  padding: 5px 14px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  flex: 0 0 150px; /* fixed so the "aktualizacja"/version text swap
+    doesn't nudge the live indicator next to it */
+}
+.statusbar-version-row {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  gap: 8px;
 }
 .statusbar-version:hover { color: var(--text); }
-.statusbar-version .pill { font-size: 10px; padding: 1px 7px; }
+.statusbar-version .update-pending { color: var(--warn); font-weight: 700; }
 .statusbar-live .dot {
   width: 6px;
   height: 6px;
@@ -571,6 +589,18 @@ section[data-section-id].dragging {
   display: none;
 }
 .error.visible { display: block; }
+
+.degraded-banner {
+  margin: 8px 0 0;
+  padding: 6px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  background: var(--warn-bg);
+  color: var(--warn);
+  display: none;
+}
+.degraded-banner.visible { display: block; }
 
 .empty-state {
   color: var(--text-muted);
@@ -817,6 +847,23 @@ dialog {
 dialog::backdrop { background: rgba(10, 12, 11, 0.45); }
 dialog h3 { margin: 0 0 16px; font-size: 17px; }
 
+/* Repair-array dialog - one guided screen for swapping a disk (his
+   explicit ask, after a per-member "Detach" button in the raw-disks
+   table invited pulling a disk before a replacement was lined up, and
+   the previous inline picker silently did nothing on pick for him). */
+#raid-repair-members { display: flex; flex-direction: column; gap: 4px; margin: 10px 0; }
+.raid-repair-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.raid-repair-row:last-child { border-bottom: none; }
+.raid-repair-picker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.raid-repair-picker select { max-width: 220px; }
+
 .account-section {
   margin-top: 18px;
   padding-top: 16px;
@@ -830,32 +877,26 @@ dialog h3 { margin: 0 0 16px; font-size: 17px; }
   letter-spacing: 0.05em;
   color: var(--text-muted);
 }
-/* His explicit ask: at 120% UI scale the account dialog got a bit too
-   tall - putting the app-version and system-update blocks side by
-   side instead of stacked cuts a full section's worth of height off
-   the dialog. Each still keeps its own full vertical flow (status
-   text, error, log details, buttons) - only the two blocks themselves
-   sit in a row. Wraps back to stacked on a narrow viewport (mobile,
-   or the dialog simply not being wide enough) rather than squeezing
-   two columns into no room. */
-.account-updates-row {
+/* Compact two-line "Aktualizacje" summary (his explicit ask: the
+   previous two-section, two-column layout was cluttered - "straszny
+   pieprznik" - and the manual "check" buttons were redundant since
+   both system and app updates already check themselves periodically
+   in the background). One label + status text + an install button
+   that only appears once there's actually something to install. */
+.update-row {
   display: flex;
-  gap: 14px;
-  margin-top: 18px;
-  padding-top: 16px;
-  border-top: 1px solid var(--border);
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
 }
-.account-updates-row .account-section {
-  flex: 1 1 0;
-  min-width: 0; /* real report: a fixed 200px min-width forced the row wider than the dialog itself (min(420px, 90vw)), causing a horizontal scrollbar - buttons/text wrap fine at any width, nothing here needs a floor */
-  margin-top: 0;
-  padding-top: 0;
-  border-top: none;
+.update-row-label {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  min-width: 70px;
 }
-.account-updates-row .dialog-actions { flex-wrap: wrap; }
-@media (max-width: 480px) {
-  .account-updates-row { flex-direction: column; gap: 0; }
-}
+.update-row-status { flex: 1; font-size: 13px; }
+.update-row-status.update-pending { color: var(--warn); font-weight: 600; }
+
 #system-update-log {
   max-height: 160px;
   overflow-y: auto;

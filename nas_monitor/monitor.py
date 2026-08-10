@@ -486,6 +486,7 @@ def get_raid_arrays() -> list[dict[str, Any]]:
             and entry["working_devices"] < entry["expected_devices"]
         )
         is_degraded = "degraded" in state or "failed" in state or device_shortfall
+        entry["is_degraded"] = is_degraded
         if is_degraded and not entry["active"]:
             # Genuinely non-functional - too many members missing for
             # the array to operate at all (mdstat itself reports it

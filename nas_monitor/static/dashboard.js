@@ -275,12 +275,13 @@ async function openAccountDialog() {
     // forms below will just surface their own errors on submit
   }
   accountDialog.showModal();
-  checkForUpdate();
-  // System update check runs on its own periodic timer instead (his
-  // explicit ask: it was re-running apt-get update - a real network +
-  // disk-I/O call - every single time this dialog opened, not just
-  // once in a while). Opening the dialog just shows whatever the last
-  // background check found.
+  // Both app and system update checks run on their own periodic timer
+  // instead (his explicit ask - previously the app check re-ran every
+  // time this dialog opened, which read as redundant/noisy alongside
+  // the system check's own periodic behavior; unified to the same
+  // model). Opening the dialog just shows whatever the last background
+  // check found for each.
+  if (lastUpdateCheck) renderUpdateInfo(lastUpdateCheck);
   if (lastSystemUpdateCheck) renderSystemUpdateInfo(lastSystemUpdateCheck);
 }
 
@@ -507,6 +508,12 @@ function renderRaid(arrays) {
     const devices = (arr.devices || []).map((d) => d.device).filter(Boolean);
     node.querySelector(".devices").textContent = devices.length ? devices.join(", ") : (arr.num_devices ? t("msg.diskCount", { count: arr.num_devices }) : "\u2013");
     renderUsageBar(node.querySelector(".usage-bar"), arr.usage);
+
+    if (arr.is_degraded) {
+      const banner = node.querySelector(".degraded-banner");
+      banner.textContent = t("ui.raidCard.degradedWarning");
+      banner.classList.add("visible");
+    }
 
     const progressRow = node.querySelector(".progress-row");
     if (arr.progress_percent !== null && arr.progress_percent !== undefined) {
@@ -809,6 +816,31 @@ async function deleteRaidArray(array) {
   }
 }
 
+const healthAlertBanner = document.getElementById("health-alert-banner");
+
+function renderHealthAlert(arrays, disks) {
+  const criticalArrays = arrays.filter((a) => a.health === "critical").map((a) => a.name);
+  const warningArrays = arrays.filter((a) => a.health === "warning").map((a) => a.name);
+  const criticalDisks = disks.filter((d) => d.health === "critical").map((d) => d.name);
+  const warningDisks = disks.filter((d) => d.health === "warning").map((d) => d.name);
+
+  if (criticalArrays.length || criticalDisks.length) {
+    healthAlertBanner.className = "health-alert crit";
+    healthAlertBanner.textContent = t("ui.healthAlert.critical", {
+      items: [...criticalArrays, ...criticalDisks].join(", "),
+    });
+  } else if (warningArrays.length || warningDisks.length) {
+    healthAlertBanner.className = "health-alert warn";
+    healthAlertBanner.textContent = t("ui.healthAlert.warning", {
+      items: [...warningArrays, ...warningDisks].join(", "),
+    });
+  } else {
+    healthAlertBanner.style.display = "none";
+    return;
+  }
+  healthAlertBanner.style.display = "block";
+}
+
 async function refresh() {
   if (addUserDialog.open) return; // avoid DOM churn while a password field is focused
   try {
@@ -819,6 +851,7 @@ async function refresh() {
     lastDisksData = data.disks || [];
     renderRaid(lastRaidData);
     renderDisks(lastDisksData);
+    renderHealthAlert(lastRaidData, lastDisksData);
     lastUpdatedEl.textContent = t("msg.lastUpdated", { time: new Date().toLocaleTimeString(localeForLang(), { hour12: false }) });
     connDot.classList.remove("stale");
   } catch (err) {
@@ -937,19 +970,12 @@ function renderRawDisks(disks) {
     if (isMember) {
       // A member disk's own Format/Wipe/Mount never make sense (its
       // filesystem-shaped content is the array's, not something to
-      // manage on its own) - the only thing that belongs here is
-      // deliberately pulling it out (his explicit want: "Detach"),
-      // e.g. before physically swapping it. Repair (adding a
-      // replacement) lives on the ARRAY's own row instead, below.
+      // manage on its own) - and swapping it out is now handled
+      // entirely through the array's own "Napraw" dialog, not a
+      // standalone action here (his explicit call: a per-member
+      // "Detach" invited pulling a disk before a replacement was even
+      // lined up - everything now goes through one guided flow).
       statusCell.innerHTML = `<span class="pill pill-neutral">${t("ui.rawDisks.statusRaidMember", { array: d.raid_array })}</span>`;
-      if (!NON_REDUNDANT_LEVELS.has(levelByArray.get(d.raid_array))) {
-        const detachBtn = document.createElement("button");
-        detachBtn.type = "button";
-        detachBtn.className = "link-btn danger";
-        detachBtn.textContent = t("ui.rawDisks.detachBtn");
-        detachBtn.addEventListener("click", () => detachRaidMember(d));
-        actions.appendChild(detachBtn);
-      }
     } else if (d.is_raid_member) {
       // Fallback for the rare case a member's own array didn't come
       // back in this same list (detection hiccup) - no action makes
@@ -1044,7 +1070,7 @@ function renderRawDisks(disks) {
         repairBtn.type = "button";
         repairBtn.className = "link-btn";
         repairBtn.textContent = t("ui.rawDisks.repairBtn");
-        repairBtn.addEventListener("click", () => openRaidRepairPicker(d, repairBtn));
+        repairBtn.addEventListener("click", () => openRaidRepairModal(d));
         actions.appendChild(repairBtn);
       }
 
@@ -1069,89 +1095,202 @@ function renderRawDisks(disks) {
   rawDisksContainer.appendChild(table);
 }
 
-async function detachRaidMember(disk) {
-  const confirmed = await confirmDialog(t("msg.confirmDetachRaidMember", { device: disk.name, array: disk.raid_array }), { danger: true });
-  if (!confirmed) return;
-  try {
-    const res = await fetch(`/api/raid/${encodeURIComponent(disk.raid_array)}/detach`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ device: disk.path }),
-    });
-    const data = await res.json();
-    if (!res.ok || !data.success) {
-      showToast(apiErrorMessage(data, res), true);
-      return;
-    }
-    if (data.warnings && data.warnings.length) {
-      showToast(warningsText(data.warnings), true);
-    }
-    await refresh();
-    await loadRawDisks();
-  } catch (err) {
-    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
-  }
+const raidRepairDialog = document.getElementById("raid-repair-dialog");
+const raidRepairTitle = document.getElementById("raid-repair-title");
+const raidRepairDegradedBanner = document.getElementById("raid-repair-degraded-banner");
+const raidRepairMembers = document.getElementById("raid-repair-members");
+const raidRepairError = document.getElementById("raid-repair-error");
+const raidRepairClose = document.getElementById("raid-repair-close");
+
+// One dedicated, guided dialog for everything related to swapping a
+// disk in a redundant array (his explicit ask, after the previous
+// inline-<select>-next-to-the-button picker silently did nothing on
+// pick for him, and after he pointed out that a per-member "Detach"
+// button sitting directly in the raw-disks table invited exactly the
+// wrong workflow - pulling a disk before a replacement is lined up.
+// Everything now goes through this one screen: current members each
+// get a "Wymień" (replace) action that does detach-then-add as one
+// guided flow with visible status at each step, and a degraded array
+// (a member already gone) gets a direct "Dodaj" for the missing slot
+// instead. A real create-from-scratch wizard with a visual layout is
+// a separate, bigger project he floated - not attempted here, this is
+// scoped to the recovery/repair side only.
+async function openRaidRepairModal(array) {
+  raidRepairTitle.textContent = t("ui.raidRepairDialog.titleFor", { array: array.name });
+  raidRepairError.textContent = "";
+  await renderRaidRepairMembers(array.name);
+  raidRepairDialog.showModal();
 }
 
-async function openRaidRepairPicker(array, anchorBtn) {
+async function renderRaidRepairMembers(arrayName) {
+  raidRepairMembers.innerHTML = `<p class="field-hint">${t("ui.raidRepairDialog.loading")}</p>`;
   await fetchManageableDisks();
-  const freeDisks = (lastManageableDisksData || []).filter(
-    (d) => !d.fstype && !d.mounted && !d.is_raid_member && d.transport !== "raid"
-  );
-  if (!freeDisks.length) {
-    showToast(t("msg.noFreeDisksForRepair"), true);
+  const disks = lastManageableDisksData || [];
+  const members = disks.filter((d) => d.is_raid_member && d.raid_array === arrayName);
+  const freeDisks = disks.filter((d) => !d.fstype && !d.mounted && !d.is_raid_member && d.transport !== "raid");
+  const arrInfo = (lastRaidData || []).find((a) => a.name === arrayName);
+
+  raidRepairMembers.innerHTML = "";
+
+  if (arrInfo && arrInfo.is_degraded && arrInfo.expected_devices) {
+    const missing = Math.max(0, arrInfo.expected_devices - (arrInfo.working_devices || 0));
+    if (missing > 0) {
+      raidRepairDegradedBanner.style.display = "block";
+      raidRepairDegradedBanner.textContent = t("ui.raidRepairDialog.missingDisks", {
+        missing, working: arrInfo.working_devices, expected: arrInfo.expected_devices,
+      });
+      raidRepairMembers.appendChild(buildRaidRepairAddRow(arrayName, freeDisks));
+    }
+  } else {
+    raidRepairDegradedBanner.style.display = "none";
+  }
+
+  if (!members.length && (!arrInfo || !arrInfo.is_degraded)) {
+    raidRepairMembers.appendChild(Object.assign(document.createElement("p"), {
+      className: "field-hint", textContent: t("ui.raidRepairDialog.noMembers"),
+    }));
     return;
   }
 
-  const picker = document.createElement("select");
-  picker.className = "grant-picker";
+  for (const member of members) {
+    raidRepairMembers.appendChild(buildRaidRepairMemberRow(arrayName, member, freeDisks));
+  }
+}
+
+function buildRaidRepairAddRow(arrayName, freeDisks) {
+  const row = document.createElement("div");
+  row.className = "raid-repair-row";
+  const label = document.createElement("span");
+  label.textContent = t("ui.raidRepairDialog.addMissingLabel");
+  row.appendChild(label);
+  row.appendChild(buildRaidRepairPicker(freeDisks, async (device, statusEl) => {
+    const confirmed = await confirmDialog(t("msg.confirmRepairRaid", { array: arrayName, device }), { danger: true });
+    if (!confirmed) return;
+    statusEl.textContent = t("ui.raidRepairDialog.adding", { device });
+    const result = await raidApiCall(`/api/raid/${encodeURIComponent(arrayName)}/add`, { device });
+    if (!result.success) {
+      raidRepairError.textContent = apiErrorMessage(result.data, result.res);
+      return;
+    }
+    statusEl.textContent = t("ui.raidRepairDialog.done");
+    await refresh();
+    await loadRawDisks();
+    await renderRaidRepairMembers(arrayName);
+  }));
+  return row;
+}
+
+function buildRaidRepairMemberRow(arrayName, member, freeDisks) {
+  const row = document.createElement("div");
+  row.className = "raid-repair-row";
+  const label = document.createElement("span");
+  label.className = "mono";
+  label.textContent = `${member.name} - ${member.size}, ${member.model}`;
+  row.appendChild(label);
+
+  const replaceBtn = document.createElement("button");
+  replaceBtn.type = "button";
+  replaceBtn.className = "link-btn";
+  replaceBtn.textContent = t("ui.raidRepairDialog.replaceBtn");
+  row.appendChild(replaceBtn);
+
+  replaceBtn.addEventListener("click", () => {
+    replaceBtn.style.display = "none";
+    const picker = buildRaidRepairPicker(freeDisks, async (device, statusEl) => {
+      const confirmed = await confirmDialog(t("msg.confirmReplaceRaidMember", { old: member.name, array: arrayName, device }), { danger: true });
+      if (!confirmed) return;
+      statusEl.textContent = t("ui.raidRepairDialog.detaching", { device: member.name });
+      const detachResult = await raidApiCall(`/api/raid/${encodeURIComponent(arrayName)}/detach`, { device: member.path });
+      if (!detachResult.success) {
+        raidRepairError.textContent = apiErrorMessage(detachResult.data, detachResult.res);
+        return;
+      }
+      if (detachResult.data.warnings && detachResult.data.warnings.length) {
+        showToast(warningsText(detachResult.data.warnings), true);
+      }
+      statusEl.textContent = t("ui.raidRepairDialog.adding", { device });
+      const addResult = await raidApiCall(`/api/raid/${encodeURIComponent(arrayName)}/add`, { device });
+      if (!addResult.success) {
+        raidRepairError.textContent = apiErrorMessage(addResult.data, addResult.res);
+        return;
+      }
+      statusEl.textContent = t("ui.raidRepairDialog.done");
+      await refresh();
+      await loadRawDisks();
+      await renderRaidRepairMembers(arrayName);
+    });
+    row.appendChild(picker);
+  });
+
+  return row;
+}
+
+function buildRaidRepairPicker(freeDisks, onConfirm) {
+  const wrap = document.createElement("span");
+  wrap.className = "raid-repair-picker";
+
+  if (!freeDisks.length) {
+    const hint = document.createElement("span");
+    hint.className = "field-hint";
+    hint.textContent = t("msg.noFreeDisksForRepair");
+    wrap.appendChild(hint);
+    return wrap;
+  }
+
+  const select = document.createElement("select");
   const placeholder = document.createElement("option");
   placeholder.value = "";
   placeholder.textContent = t("ui.shareDialog.pickPlaceholder");
   placeholder.disabled = true;
   placeholder.selected = true;
-  picker.appendChild(placeholder);
+  select.appendChild(placeholder);
   for (const disk of freeDisks) {
     const opt = document.createElement("option");
     opt.value = disk.path;
     opt.textContent = `${disk.name} - ${disk.size}, ${disk.model}`;
-    picker.appendChild(opt);
+    select.appendChild(opt);
   }
+  wrap.appendChild(select);
 
-  function closePicker() {
-    if (picker.isConnected) picker.remove();
-    anchorBtn.style.display = "inline-block";
-  }
+  const confirmBtn = document.createElement("button");
+  confirmBtn.type = "button";
+  confirmBtn.className = "btn-primary";
+  confirmBtn.textContent = t("ui.raidRepairDialog.confirmBtn");
+  wrap.appendChild(confirmBtn);
 
-  picker.addEventListener("change", async () => {
-    const device = picker.value;
-    closePicker();
-    if (!device) return;
-    const confirmed = await confirmDialog(t("msg.confirmRepairRaid", { array: array.name, device }), { danger: true });
-    if (!confirmed) return;
-    try {
-      const res = await fetch(`/api/raid/${encodeURIComponent(array.name)}/add`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ device }),
-      });
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        showToast(apiErrorMessage(data, res), true);
-        return;
-      }
-      showToast(t("msg.raidRepairStarted", { array: array.name }));
-      await refresh();
-      await loadRawDisks();
-    } catch (err) {
-      showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
-    }
+  const statusEl = document.createElement("span");
+  statusEl.className = "field-hint";
+  wrap.appendChild(statusEl);
+
+  confirmBtn.addEventListener("click", async () => {
+    if (!select.value) return;
+    confirmBtn.disabled = true;
+    select.disabled = true;
+    await onConfirm(select.value, statusEl);
   });
-  picker.addEventListener("blur", closePicker);
-  anchorBtn.insertAdjacentElement("afterend", picker);
-  anchorBtn.style.display = "none";
-  picker.focus();
+
+  return wrap;
 }
+
+async function raidApiCall(url, body) {
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json();
+    return { success: res.ok && data.success, data, res };
+  } catch (err) {
+    // res stays null on a genuine network failure (fetch itself threw,
+    // never got an HTTP response) - apiErrorMessage() falls back to
+    // res.status in that case, which would crash on null, so this
+    // supplies a synthetic response the same shape it expects instead.
+    return { success: false, data: {}, res: { status: 0 } };
+  }
+}
+
+raidRepairClose.addEventListener("click", () => raidRepairDialog.close());
 
 const addRaidBtn = document.getElementById("add-raid-btn");
 const raidCreateDialogEl = document.getElementById("raid-create-dialog");
@@ -3534,34 +3673,27 @@ async function loadStatusbar() {
 // continuously.
 // --------------------------------------------------------------------
 
-const updateCurrentVersionEl = document.getElementById("update-current-version");
-const updateStatusEl = document.getElementById("update-status");
+const updateStatusTextEl = document.getElementById("update-status-text");
 const updateErrorEl = document.getElementById("update-error");
-const updateCheckBtn = document.getElementById("update-check-btn");
 const updateApplyBtn = document.getElementById("update-apply-btn");
 const statusbarVersionBtn = document.getElementById("statusbar-version-btn");
-const statusbarVersionVal = document.getElementById("statusbar-version-val");
-const statusbarUpdateBadge = document.getElementById("statusbar-update-badge");
+const statusbarAppVal = document.getElementById("statusbar-app-val");
 
 let lastUpdateCheck = null;
 
 function renderUpdateInfo(data) {
   lastUpdateCheck = data;
   if (!data.git_managed) {
-    statusbarVersionVal.textContent = "\u2013";
-    statusbarUpdateBadge.style.display = "none";
-    updateCurrentVersionEl.textContent = t("ui.accountDialog.notGitManaged");
-    updateStatusEl.style.display = "none";
+    statusbarAppVal.textContent = "\u2013";
+    updateStatusTextEl.textContent = t("ui.accountDialog.notGitManaged");
+    updateStatusTextEl.classList.remove("update-pending");
     updateApplyBtn.style.display = "none";
     return;
   }
 
-  statusbarVersionVal.textContent = data.current_version || "\u2013";
-  updateCurrentVersionEl.textContent = t("ui.accountDialog.currentVersion", { version: data.current_version || "?" });
-
   if (data.error_code) {
-    statusbarUpdateBadge.style.display = "none";
-    updateStatusEl.style.display = "none";
+    statusbarAppVal.textContent = data.current_version || "\u2013";
+    updateStatusTextEl.textContent = "\u2013";
     updateErrorEl.textContent = window.i18n.errorText(data.error_code, data.error_context);
     updateApplyBtn.style.display = "none";
     return;
@@ -3569,31 +3701,32 @@ function renderUpdateInfo(data) {
   updateErrorEl.textContent = "";
 
   if (data.update_available) {
-    statusbarUpdateBadge.style.display = "inline-block";
-    updateStatusEl.style.display = "block";
-    updateStatusEl.textContent = t("ui.accountDialog.updateAvailableStatus", { version: data.latest_version || "?" });
+    // Same button/segment the version always lived in (his explicit
+    // ask: two compact lines, System/Aplikacja, no separate badges or
+    // columns) - the version text itself becomes "aktualizacja" as the
+    // signal, styled distinctly, rather than a separate pill next to it.
+    statusbarAppVal.textContent = t("ui.statusbar.updateAvailable");
+    statusbarAppVal.classList.add("update-pending");
+    updateStatusTextEl.textContent = t("ui.accountDialog.updateAvailableStatus", { version: data.latest_version || "?" });
+    updateStatusTextEl.classList.add("update-pending");
     updateApplyBtn.style.display = "inline-block";
     updateApplyBtn.textContent = t("ui.accountDialog.applyUpdateBtn", { version: data.latest_version || "?" });
     updateApplyBtn.disabled = false;
   } else {
-    statusbarUpdateBadge.style.display = "none";
-    updateStatusEl.style.display = "block";
-    updateStatusEl.textContent = t("ui.accountDialog.upToDate");
+    statusbarAppVal.textContent = data.current_version || "\u2013";
+    statusbarAppVal.classList.remove("update-pending");
+    updateStatusTextEl.textContent = data.current_version || "\u2013";
+    updateStatusTextEl.classList.remove("update-pending");
     updateApplyBtn.style.display = "none";
   }
 }
 
 async function checkForUpdate() {
-  updateStatusEl.style.display = "block";
-  updateStatusEl.textContent = t("ui.accountDialog.checkingUpdate");
-  updateErrorEl.textContent = "";
-  updateApplyBtn.style.display = "none";
   try {
     const res = await fetch("/api/update/check");
     const data = await res.json();
     renderUpdateInfo(data);
   } catch (err) {
-    updateStatusEl.style.display = "none";
     updateErrorEl.textContent = t("err._unknown");
   }
 }
@@ -3617,48 +3750,42 @@ function waitForRestartThenReload() {
 
 async function applyUpdate() {
   updateApplyBtn.disabled = true;
-  updateCheckBtn.disabled = true;
   updateErrorEl.textContent = "";
-  updateStatusEl.style.display = "block";
-  updateStatusEl.textContent = t("ui.accountDialog.applyingUpdate");
+  updateStatusTextEl.textContent = t("ui.accountDialog.applyingUpdate");
   try {
     const res = await fetch("/api/update/apply", { method: "POST" });
     const data = await res.json();
     if (!data.success) {
       updateErrorEl.textContent = window.i18n.errorText(data.error_code, data.error_context);
       updateApplyBtn.disabled = false;
-      updateCheckBtn.disabled = false;
       return;
     }
-    updateStatusEl.textContent = t("ui.accountDialog.applySuccess", { version: data.version || "?" });
+    updateStatusTextEl.textContent = t("ui.accountDialog.applySuccess", { version: data.version || "?" });
     waitForRestartThenReload();
   } catch (err) {
     updateErrorEl.textContent = t("err._unknown");
     updateApplyBtn.disabled = false;
-    updateCheckBtn.disabled = false;
   }
 }
 
-updateCheckBtn.addEventListener("click", checkForUpdate);
 updateApplyBtn.addEventListener("click", applyUpdate);
 statusbarVersionBtn.addEventListener("click", openAccountDialog);
 
 // --------------------------------------------------------------------
 // System (apt) updates - the OS-level counterpart to the app-update
-// block above. Same overall shape (check button surfaces a count and
-// an apply button; apply hands off to a detached background process),
-// but progress is polled via a log-tail endpoint instead of "wait for
-// the service to come back" - apt-get upgrade doesn't restart
-// nas-monitor's own service, so that signal doesn't apply here.
+// block above. Same overall shape (apply hands off to a detached
+// background process), but progress is polled via a log-tail endpoint
+// instead of "wait for the service to come back" - apt-get upgrade
+// doesn't restart nas-monitor's own service, so that signal doesn't
+// apply here.
 // --------------------------------------------------------------------
 
-const systemUpdateStatusEl = document.getElementById("system-update-status");
+const systemUpdateStatusTextEl = document.getElementById("system-update-status-text");
 const systemUpdateErrorEl = document.getElementById("system-update-error");
-const systemUpdateCheckBtn = document.getElementById("system-update-check-btn");
 const systemUpdateApplyBtn = document.getElementById("system-update-apply-btn");
 const systemUpdateLogDetails = document.getElementById("system-update-log-details");
 const systemUpdateLogEl = document.getElementById("system-update-log");
-const statusbarSystemUpdateBadge = document.getElementById("statusbar-system-update-badge");
+const statusbarSystemVal = document.getElementById("statusbar-system-val");
 
 let lastSystemUpdateCheck = null;
 let systemUpdatePollTimer = null;
@@ -3666,55 +3793,48 @@ let systemUpdatePollTimer = null;
 function renderSystemUpdateInfo(data) {
   lastSystemUpdateCheck = data;
   if (data.error_code) {
-    systemUpdateStatusEl.style.display = "none";
     systemUpdateErrorEl.textContent = window.i18n.errorText(data.error_code, data.error_context);
     systemUpdateApplyBtn.style.display = "none";
-    statusbarSystemUpdateBadge.style.display = "none";
+    statusbarSystemVal.textContent = "\u2013";
     return;
   }
   systemUpdateErrorEl.textContent = "";
-  systemUpdateStatusEl.style.display = "block";
 
-  // Same button/column the app version already lives in (his explicit
-  // ask: no separate statusbar segment just for this) - just another
-  // small pill alongside the existing "aktualizacja" one. Shown
-  // whenever a check has actually completed, not only when there's
-  // something to act on - a real report: with nothing shown while the
-  // system was up to date, it looked like this feature hadn't been
-  // added at all rather than like "everything's fine".
-  statusbarSystemUpdateBadge.style.display = "inline-block";
+  // Same button/segment the version always lived in (his explicit ask:
+  // two compact lines, System/Aplikacja, no separate badges or
+  // columns) - shown whenever a check has actually completed, not only
+  // when there's something to act on, so "up to date" reads as a real
+  // status rather than looking like the feature is simply missing.
   if (data.update_available) {
+    statusbarSystemVal.textContent = t("ui.statusbar.updateAvailable");
+    statusbarSystemVal.classList.add("update-pending");
     let text = t("ui.accountDialog.systemUpdatesAvailable", { count: data.count });
     if (data.reboot_required) text += " " + t("ui.accountDialog.rebootRequired");
-    systemUpdateStatusEl.textContent = text;
+    systemUpdateStatusTextEl.textContent = text;
+    systemUpdateStatusTextEl.classList.add("update-pending");
     systemUpdateApplyBtn.style.display = "inline-block";
     systemUpdateApplyBtn.textContent = t("ui.accountDialog.applySystemUpdateBtn", { count: data.count });
     systemUpdateApplyBtn.disabled = false;
-    statusbarSystemUpdateBadge.className = "pill pill-warn";
-    statusbarSystemUpdateBadge.textContent = t("ui.statusbar.systemUpdatesAvailable", { count: data.count });
   } else {
-    systemUpdateStatusEl.textContent = data.reboot_required
-      ? t("ui.accountDialog.systemUpToDateRebootRequired")
-      : t("ui.accountDialog.systemUpToDate");
-    systemUpdateApplyBtn.style.display = "none";
-    statusbarSystemUpdateBadge.className = data.reboot_required ? "pill pill-warn" : "pill pill-ok";
-    statusbarSystemUpdateBadge.textContent = data.reboot_required
+    statusbarSystemVal.textContent = data.reboot_required
       ? t("ui.statusbar.systemRebootRequired")
       : t("ui.statusbar.systemUpToDate");
+    statusbarSystemVal.classList.toggle("update-pending", !!data.reboot_required);
+    systemUpdateStatusTextEl.textContent = data.reboot_required
+      ? t("ui.accountDialog.systemUpToDateRebootRequired")
+      : t("ui.accountDialog.systemUpToDate");
+    systemUpdateStatusTextEl.classList.toggle("update-pending", !!data.reboot_required);
+    systemUpdateApplyBtn.style.display = "none";
   }
 }
 
 async function checkForSystemUpdate() {
-  systemUpdateStatusEl.style.display = "block";
-  systemUpdateStatusEl.textContent = t("ui.accountDialog.checkingSystemUpdate");
   systemUpdateErrorEl.textContent = "";
-  systemUpdateApplyBtn.style.display = "none";
   try {
     const res = await fetch("/api/system-update/check");
     const data = await res.json();
     renderSystemUpdateInfo(data);
   } catch (err) {
-    systemUpdateStatusEl.style.display = "none";
     systemUpdateErrorEl.textContent = t("err._unknown");
   }
 }
@@ -3732,10 +3852,9 @@ function pollSystemUpdateProgress() {
       if (data.done) {
         clearInterval(systemUpdatePollTimer);
         systemUpdatePollTimer = null;
-        systemUpdateStatusEl.textContent = data.reboot_required
+        systemUpdateStatusTextEl.textContent = data.reboot_required
           ? t("ui.accountDialog.systemUpdateDoneRebootRequired")
           : t("ui.accountDialog.systemUpdateDone");
-        systemUpdateCheckBtn.disabled = false;
       }
     } catch (err) {
       // a transient fetch failure mid-poll just tries again next tick
@@ -3746,17 +3865,14 @@ function pollSystemUpdateProgress() {
 async function applySystemUpdate() {
   if (!(await confirmDialog(t("msg.confirmApplySystemUpdate", { count: (lastSystemUpdateCheck && lastSystemUpdateCheck.count) || 0 }), { danger: true }))) return;
   systemUpdateApplyBtn.disabled = true;
-  systemUpdateCheckBtn.disabled = true;
   systemUpdateErrorEl.textContent = "";
-  systemUpdateStatusEl.style.display = "block";
-  systemUpdateStatusEl.textContent = t("ui.accountDialog.applyingSystemUpdate");
+  systemUpdateStatusTextEl.textContent = t("ui.accountDialog.applyingSystemUpdate");
   try {
     const res = await fetch("/api/system-update/apply", { method: "POST" });
     const data = await res.json();
     if (!data.success) {
       systemUpdateErrorEl.textContent = window.i18n.errorText(data.error_code, data.error_context);
       systemUpdateApplyBtn.disabled = false;
-      systemUpdateCheckBtn.disabled = false;
       return;
     }
     systemUpdateApplyBtn.style.display = "none";
@@ -3764,11 +3880,9 @@ async function applySystemUpdate() {
   } catch (err) {
     systemUpdateErrorEl.textContent = t("err._unknown");
     systemUpdateApplyBtn.disabled = false;
-    systemUpdateCheckBtn.disabled = false;
   }
 }
 
-systemUpdateCheckBtn.addEventListener("click", checkForSystemUpdate);
 systemUpdateApplyBtn.addEventListener("click", applySystemUpdate);
 
 // Kick off polling now that everything above is declared.
@@ -3784,7 +3898,6 @@ loadRawDisks();
 setInterval(loadRawDisks, REFRESH_MS);
 loadStatusbar();
 setInterval(loadStatusbar, STATUSBAR_REFRESH_MS);
-checkForUpdate();
 
 // Reconcile the UI scale with the server's persisted value once on
 // load - the head-script/localStorage copy only avoids a flash of the
@@ -3799,12 +3912,15 @@ if (disksTabPanel) {
   applySavedSectionOrder(disksTabPanel, "disks-tab-sections");
 }
 
-// System (apt) updates check on its own periodic timer - apt-get
-// update is a real network + disk-I/O call, not something to repeat
-// every time the account dialog happens to be opened (his explicit
-// ask). 30 min: frequent enough that the statusbar badge is never
-// stale for long, infrequent enough not to hammer apt for no reason -
-// package indexes don't meaningfully change more often than that.
-const SYSTEM_UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+// App and system update checks both run on their own periodic timer,
+// unified to the same model (his explicit ask - the app check used to
+// also re-run every time the account dialog opened, on top of this
+// same interval, which read as redundant and noisy alongside the
+// system check's already-periodic behavior). 30 min: frequent enough
+// that the statusbar is never stale for long, infrequent enough not
+// to hammer GitHub/apt for no reason - neither changes that often.
+const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+checkForUpdate();
+setInterval(checkForUpdate, UPDATE_CHECK_INTERVAL_MS);
 checkForSystemUpdate();
-setInterval(checkForSystemUpdate, SYSTEM_UPDATE_CHECK_INTERVAL_MS);
+setInterval(checkForSystemUpdate, UPDATE_CHECK_INTERVAL_MS);
