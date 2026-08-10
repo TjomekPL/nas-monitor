@@ -149,6 +149,37 @@ class TestCreateRaidArray(unittest.TestCase):
             result = raid_mutate.create_raid_array(["/dev/md0", "/dev/md1"], "1")
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "raid.device_not_free")
+
+    def test_rejects_raid0_striped_over_raid0_arrays(self):
+        # His real reaction on noticing the picker allowed this: two
+        # RAID0 arrays striped into a THIRD RAID0 is mathematically
+        # identical to one flat RAID0 across the same four disks
+        # directly, with zero benefit and one more layer to manage.
+        free_arrays = [
+            {"path": "/dev/md0", "level": "raid0", "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False},
+            {"path": "/dev/md1", "level": "raid0", "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False},
+        ]
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=[]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=free_arrays):
+            result = raid_mutate.create_raid_array(["/dev/md0", "/dev/md1"], "0")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "raid.pointless_stripe_of_stripe")
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_still_allows_raid0_striped_over_redundant_arrays(self, mock_run, mock_find):
+        # RAID0 over two RAID1 mirrors (real "1+0"-style topology) is a
+        # completely different, genuinely useful case and must stay
+        # allowed - only stripe-over-stripe is rejected.
+        mock_run.return_value = (0, "", "")
+        free_arrays = [
+            {"path": "/dev/md0", "level": "raid1", "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False},
+            {"path": "/dev/md1", "level": "raid1", "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False},
+        ]
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=[]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=free_arrays):
+            result = raid_mutate.create_raid_array(["/dev/md0", "/dev/md1"], "0")
+        self.assertTrue(result["success"])
     @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value=None)
     def test_reports_missing_mdadm_tool(self, mock_find):
         result = raid_mutate.detach_member("md0", "/dev/sdb")

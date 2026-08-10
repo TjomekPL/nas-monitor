@@ -101,6 +101,17 @@ def create_raid_array(devices: list[str], level: str) -> dict[str, Any]:
             return errors.fail(result, "raid.unknown_device", device=device)
         if disk.get("fstype") or disk.get("mounted") or disk.get("is_raid_member"):
             return errors.fail(result, "raid.device_not_free", device=device)
+        # Striping (RAID0) over a device that is ITSELF already a
+        # non-redundant array (RAID0 or linear) - stripe-of-a-stripe -
+        # is mathematically identical to one flat RAID0 across all the
+        # underlying disks directly, with zero benefit and one more
+        # layer to manage and lose sleep over. His explicit reaction on
+        # noticing the picker allowed this. Striping over a REDUNDANT
+        # array (RAID0 over two RAID1 mirrors - real "1+0"/"10-style"
+        # topology) is a completely different, genuinely useful case
+        # and stays allowed - this only rejects the pointless one.
+        if level == "0" and disk.get("transport") == "raid" and (disk.get("level") or "").lower() in NON_REDUNDANT_LEVELS:
+            return errors.fail(result, "raid.pointless_stripe_of_stripe", device=device)
 
     mdadm_path = system_tools.find_binary("mdadm")
     if mdadm_path is None:

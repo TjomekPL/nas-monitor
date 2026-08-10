@@ -1068,6 +1068,8 @@ const raidCreateSubmitBtn = document.getElementById("raid-create-submit");
 // checked disk count actually supports, instead of listing every level
 // and letting the server reject an invalid combination after the fact.
 const RAID_MIN_DEVICES = { "0": 2, "1": 2, "4": 3, "5": 3, "6": 4, "10": 4 };
+// Mirrors raid_mutate.NON_REDUNDANT_LEVELS.
+const NON_REDUNDANT_RAID_LEVELS = new Set(["raid0", "linear"]);
 
 function raidCreateCheckedDisks() {
   return Array.from(raidCreateDisksChecklist.querySelectorAll('input[type="checkbox"]:checked')).map((cb) => cb.value);
@@ -1076,10 +1078,24 @@ function raidCreateCheckedDisks() {
 function raidCreateUpdateLevelsAndSubmit() {
   const checkedPaths = raidCreateCheckedDisks();
   const count = checkedPaths.length;
+  const checkedDisks = (lastManageableDisksData || []).filter((d) => checkedPaths.includes(d.path));
 
   const previousLevel = raidCreateLevelSelect.value;
   raidCreateLevelSelect.innerHTML = "";
-  const availableLevels = Object.keys(RAID_MIN_DEVICES).filter((lvl) => count >= RAID_MIN_DEVICES[lvl]);
+  // Striping (RAID0) over a device that's itself a non-redundant array
+  // (RAID0/linear) is a stripe-of-a-stripe - mathematically identical
+  // to one flat RAID0 across the underlying disks directly, with zero
+  // benefit. His explicit reaction on noticing this was pickable at
+  // all. Striping over a REDUNDANT array (RAID0 over two RAID1
+  // mirrors, real "1+0"-style) is a different, genuinely useful case
+  // and stays offered - this only hides the pointless one. The
+  // backend (raid_mutate.create_raid_array) rejects it regardless.
+  const hasPointlessStripeSource = checkedDisks.some(
+    (d) => d.transport === "raid" && NON_REDUNDANT_RAID_LEVELS.has((d.level || "").toLowerCase())
+  );
+  const availableLevels = Object.keys(RAID_MIN_DEVICES).filter(
+    (lvl) => count >= RAID_MIN_DEVICES[lvl] && !(lvl === "0" && hasPointlessStripeSource)
+  );
   for (const lvl of availableLevels) {
     const opt = document.createElement("option");
     opt.value = lvl;
@@ -1089,7 +1105,6 @@ function raidCreateUpdateLevelsAndSubmit() {
   if (availableLevels.includes(previousLevel)) raidCreateLevelSelect.value = previousLevel;
   raidCreateLevelRow.style.display = availableLevels.length ? "block" : "none";
 
-  const checkedDisks = (lastManageableDisksData || []).filter((d) => checkedPaths.includes(d.path));
   raidCreateUsbWarning.style.display = checkedDisks.some((d) => d.transport === "usb") ? "block" : "none";
 
   raidCreateSubmitBtn.disabled = availableLevels.length === 0;

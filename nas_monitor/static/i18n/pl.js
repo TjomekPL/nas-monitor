@@ -427,6 +427,7 @@ window.NAS_I18N.pl = {
       still_mounted: "Macierz {array} jest zamontowana - odmontuj ją najpierw",
       zero_superblock_failed: "Nie udało się wyczyścić metadanych RAID na {device}: {detail}",
       no_redundancy: "RAID{level} nie ma redundancji - nie da się odłączyć ani naprawić pojedynczego dysku bez zniszczenia całej macierzy. Aby wymienić dysk, usuń całą macierz i utwórz ją od nowa z nowym zestawem dysków.",
+      pointless_stripe_of_stripe: "{device} to macierz RAID0/linear bez redundancji - striping (RAID0) nad nią jest bezcelowy, matematycznie identyczny z jednym płaskim RAID0 na tych samych dyskach. Wybierz inny poziom (np. RAID1) albo inne urządzenia.",
     },
     layout: {
       invalid_order: "Nieprawidłowa kolejność kart",

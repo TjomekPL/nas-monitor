@@ -427,6 +427,7 @@ window.NAS_I18N.en = {
       still_mounted: "Array {array} is still mounted - unmount it first",
       zero_superblock_failed: "Failed to clear RAID metadata on {device}: {detail}",
       no_redundancy: "RAID{level} has no redundancy - a single disk can't be detached or repaired without destroying the whole array. To swap a disk, delete the whole array and recreate it with the new disk set.",
+      pointless_stripe_of_stripe: "{device} is a RAID0/linear array with no redundancy - striping (RAID0) over it is pointless, mathematically identical to one flat RAID0 across the same disks directly. Pick a different level (e.g. RAID1) or different devices.",
     },
     layout: {
       invalid_order: "Invalid card order",
