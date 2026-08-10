@@ -101,6 +101,58 @@ class TestApiDiskUnmount(unittest.TestCase):
         mock_delete.assert_not_called()
 
 
+class TestApiRaidDelete(unittest.TestCase):
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.client = app_module.app.test_client()
+
+    def test_cleans_up_a_blocking_share_even_when_the_array_is_already_unmounted(self):
+        # Real report: a share survived indefinitely across repeated
+        # delete-and-recreate cycles, still browsable afterward - the
+        # cascade used to only look for blocking shares when the array
+        # was mounted AT THE MOMENT of deletion. Unmount-then-delete (a
+        # completely normal sequence) skipped share cleanup entirely,
+        # even though the share still pointed at this array's
+        # deterministic mount path and a later array reusing the same
+        # name would mount right back on top of it.
+        arrays = [{"name": "md0", "mount_point": None, "mounted": False}]
+        shares = {"available": True, "shares": [{"name": "test", "path": "/srv/md0/test"}]}
+        with mock.patch.object(app_module.disk_mutate, "list_manageable_raid_arrays", return_value=arrays), \
+             mock.patch.object(app_module.smb_shares, "list_shares", return_value=shares), \
+             mock.patch.object(app_module.smb_shares, "delete_share", return_value={"success": True}) as mock_delete, \
+             mock.patch.object(app_module.disk_mutate, "unmount_disk") as mock_unmount, \
+             mock.patch.object(app_module.raid_mutate, "delete_raid_array", return_value={"success": True, "members": []}):
+            res = self.client.post("/api/raid/md0/delete", json={"delete_blocking_shares": True})
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertEqual(data["deleted_shares"], ["test"])
+        mock_delete.assert_called_once_with("test", delete_files=False)
+        mock_unmount.assert_not_called()  # already unmounted - nothing to unmount
+
+    def test_refuses_without_confirmation_when_a_blocking_share_exists_even_if_unmounted(self):
+        arrays = [{"name": "md0", "mount_point": None, "mounted": False}]
+        shares = {"available": True, "shares": [{"name": "test", "path": "/srv/md0/test"}]}
+        with mock.patch.object(app_module.disk_mutate, "list_manageable_raid_arrays", return_value=arrays), \
+             mock.patch.object(app_module.smb_shares, "list_shares", return_value=shares), \
+             mock.patch.object(app_module.smb_shares, "delete_share") as mock_delete, \
+             mock.patch.object(app_module.raid_mutate, "delete_raid_array") as mock_delete_array:
+            res = self.client.post("/api/raid/md0/delete", json={})
+        self.assertEqual(res.status_code, 400)
+        self.assertEqual(res.get_json()["error_code"], "disks.unmount_blocked_by_shares")
+        mock_delete.assert_not_called()
+        mock_delete_array.assert_not_called()
+
+    def test_delete_success_no_shares_still_unmounts_a_mounted_array(self):
+        arrays = [{"name": "md0", "mount_point": "/srv/md0", "mounted": True}]
+        with mock.patch.object(app_module.disk_mutate, "list_manageable_raid_arrays", return_value=arrays), \
+             mock.patch.object(app_module.smb_shares, "list_shares", return_value={"available": True, "shares": []}), \
+             mock.patch.object(app_module.disk_mutate, "unmount_disk", return_value={"success": True}) as mock_unmount, \
+             mock.patch.object(app_module.raid_mutate, "delete_raid_array", return_value={"success": True, "members": ["/dev/sdb"]}):
+            res = self.client.post("/api/raid/md0/delete", json={})
+        self.assertEqual(res.status_code, 200)
+        mock_unmount.assert_called_once_with("/dev/md0")
+
+
 class TestApiRaidRoutes(unittest.TestCase):
     def setUp(self):
         app_module.app.config["TESTING"] = True

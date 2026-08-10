@@ -248,29 +248,40 @@ def api_raid_delete(array_name):
     # files preserved) rather than a separate manual cleanup step first
     # - the array is about to be destroyed anyway, so there's nothing
     # left for that share to point at either way.
+    #
+    # Checked against the array's DETERMINISTIC mount path
+    # (MOUNT_BASE/<array-name>, its own "serial" surrogate - see
+    # disk_mutate's mounting convention) rather than its CURRENT live
+    # mount_point. Real report: a share created while an array was
+    # mounted survived indefinitely across repeated delete-and-recreate
+    # cycles - this used to only look for blocking shares when the
+    # array was mounted AT THE MOMENT of deletion; unmounting first
+    # (a completely normal sequence) then deleting skipped share
+    # cleanup entirely, and a later array reusing the same name would
+    # mount right back on top of that still-configured share.
     manageable_by_name = {a["name"]: a for a in disk_mutate.list_manageable_raid_arrays()}
     mount_point = manageable_by_name.get(array_name, {}).get("mount_point")
+    deterministic_mount_point = os.path.join(disk_mutate.MOUNT_BASE, array_name)
     deleted_shares = []
     delete_warnings = []
-    if mount_point:
-        blocking = _shares_blocking_unmount(mount_point)
-        if blocking:
-            if not delete_blocking_shares:
-                oplog.log_event("raid", "delete", "failure", params={"array": array_name})
-                return jsonify({
-                    "success": False,
-                    "error_code": "disks.unmount_blocked_by_shares",
-                    "error_context": {"shares": ", ".join(blocking)},
-                }), 400
-            for share_name in blocking:
-                del_result = smb_shares.delete_share(share_name, delete_files=False)
-                if del_result["success"]:
-                    deleted_shares.append(share_name)
-                    oplog.log_event("shares", "delete", "success", params={"name": share_name, "reason": "raid_delete"})
-                    for w in del_result.get("warnings", []):
-                        delete_warnings.append(w)
-                else:
-                    oplog.log_event("shares", "delete", "failure", params={"name": share_name, "reason": "raid_delete"})
+    blocking = _shares_blocking_unmount(deterministic_mount_point)
+    if blocking:
+        if not delete_blocking_shares:
+            oplog.log_event("raid", "delete", "failure", params={"array": array_name})
+            return jsonify({
+                "success": False,
+                "error_code": "disks.unmount_blocked_by_shares",
+                "error_context": {"shares": ", ".join(blocking)},
+            }), 400
+        for share_name in blocking:
+            del_result = smb_shares.delete_share(share_name, delete_files=False)
+            if del_result["success"]:
+                deleted_shares.append(share_name)
+                oplog.log_event("shares", "delete", "success", params={"name": share_name, "reason": "raid_delete"})
+                for w in del_result.get("warnings", []):
+                    delete_warnings.append(w)
+            else:
+                oplog.log_event("shares", "delete", "failure", params={"name": share_name, "reason": "raid_delete"})
 
     if mount_point:
         unmount_result = disk_mutate.unmount_disk(device)

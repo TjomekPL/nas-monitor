@@ -100,13 +100,15 @@ filtrowanie po zakresie czasu, konfigurowalny limit przechowywania.
 ## Wymagania systemowe
 
 ```bash
-sudo apt install smartmontools mdadm samba python3-venv acl
+sudo apt install smartmontools mdadm samba python3-venv acl avahi-daemon
 ```
 
 (`mdadm` jest potrzebny tylko do sekcji RAID - jeśli hosta nie ma żadnej
 macierzy, ta sekcja po prostu pokaże "brak wykrytych macierzy". `samba`
 daje `smbpasswd`/`pdbedit`, potrzebne do zarządzania użytkownikami SMB.
-`acl` daje `setfacl`, potrzebne do udziałów z dostępem grupowym.)
+`acl` daje `setfacl`, potrzebne do udziałów z dostępem grupowym.
+`avahi-daemon` sprawia, że host jest widoczny w sieci lokalnej pod nazwą
+`<hostname>.local`, bez wpisywania adresu IP ręcznie.)
 
 ## Instalacja (jedna komenda)
 

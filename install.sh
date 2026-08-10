@@ -15,6 +15,20 @@ echo "==> Instalowanie pakietów systemowych (smartmontools, mdadm, samba, sshpa
 apt-get update -qq
 apt-get install -y smartmontools mdadm samba sshpass openssh-client python3-venv acl git parted xfsprogs btrfs-progs exfatprogs
 
+echo "==> Instalowanie avahi-daemon (widoczność w sieci pod nazwą hosta - <hostname>.local)..."
+# Real report: the box could only be reached by IP - typing it by hand -
+# because nothing on it was answering mDNS queries. avahi-daemon is the
+# standard Linux mDNS/DNS-SD responder (same protocol family as Bonjour/
+# Rendezvous) - once running, any client on the same LAN that itself
+# supports mDNS resolution (Windows 10+, macOS, and Linux all do,
+# natively or via Bonjour) can reach this host as <hostname>.local
+# without any manual IP entry or router/DNS configuration. apt on Debian
+# enables and starts the service automatically on install, but this
+# explicitly enables it too in case that default ever changes -
+# consistent with how nginx/fail2ban below are handled.
+apt-get install -y avahi-daemon
+systemctl enable --now avahi-daemon >/dev/null 2>&1 || true
+
 # ${APP_DIR} is now a real git checkout, not a plain file copy - that's
 # what lets the "Zainstaluj aktualizację" button in the dashboard later
 # do a plain `git fetch` + `git reset --hard` instead of re-downloading
