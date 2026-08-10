@@ -20,6 +20,8 @@ window.NAS_I18N.pl = {
       unavailable: "niedostępne",
       updateAvailable: "aktualizacja",
       systemUpdatesAvailable: "system: {count}",
+      systemUpToDate: "system: aktualny",
+      systemRebootRequired: "system: wymaga restartu",
     },
     login: {
       usernameLabel: "Nazwa użytkownika",

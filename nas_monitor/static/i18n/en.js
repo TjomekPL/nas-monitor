@@ -20,6 +20,8 @@ window.NAS_I18N.en = {
       unavailable: "unavailable",
       updateAvailable: "update",
       systemUpdatesAvailable: "system: {count}",
+      systemUpToDate: "system: up to date",
+      systemRebootRequired: "system: reboot needed",
     },
     login: {
       usernameLabel: "Username",

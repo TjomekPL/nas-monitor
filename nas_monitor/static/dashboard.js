@@ -3672,6 +3672,14 @@ function renderSystemUpdateInfo(data) {
   systemUpdateErrorEl.textContent = "";
   systemUpdateStatusEl.style.display = "block";
 
+  // Same button/column the app version already lives in (his explicit
+  // ask: no separate statusbar segment just for this) - just another
+  // small pill alongside the existing "aktualizacja" one. Shown
+  // whenever a check has actually completed, not only when there's
+  // something to act on - a real report: with nothing shown while the
+  // system was up to date, it looked like this feature hadn't been
+  // added at all rather than like "everything's fine".
+  statusbarSystemUpdateBadge.style.display = "inline-block";
   if (data.update_available) {
     let text = t("ui.accountDialog.systemUpdatesAvailable", { count: data.count });
     if (data.reboot_required) text += " " + t("ui.accountDialog.rebootRequired");
@@ -3679,19 +3687,17 @@ function renderSystemUpdateInfo(data) {
     systemUpdateApplyBtn.style.display = "inline-block";
     systemUpdateApplyBtn.textContent = t("ui.accountDialog.applySystemUpdateBtn", { count: data.count });
     systemUpdateApplyBtn.disabled = false;
-    // Same button/column the app version already lives in (his
-    // explicit ask: no separate statusbar segment just for this) -
-    // just another small pill alongside the existing "aktualizacja"
-    // one, so both an app update and a system update can be visible
-    // there at once without either one hiding the other.
-    statusbarSystemUpdateBadge.style.display = "inline-block";
+    statusbarSystemUpdateBadge.className = "pill pill-warn";
     statusbarSystemUpdateBadge.textContent = t("ui.statusbar.systemUpdatesAvailable", { count: data.count });
   } else {
     systemUpdateStatusEl.textContent = data.reboot_required
       ? t("ui.accountDialog.systemUpToDateRebootRequired")
       : t("ui.accountDialog.systemUpToDate");
     systemUpdateApplyBtn.style.display = "none";
-    statusbarSystemUpdateBadge.style.display = "none";
+    statusbarSystemUpdateBadge.className = data.reboot_required ? "pill pill-warn" : "pill pill-ok";
+    statusbarSystemUpdateBadge.textContent = data.reboot_required
+      ? t("ui.statusbar.systemRebootRequired")
+      : t("ui.statusbar.systemUpToDate");
   }
 }
 
