@@ -793,7 +793,7 @@ async function deleteRaidArray(array) {
 
   let message = t("msg.confirmDeleteRaidArray", { name: array.name });
   if (blocking.length) {
-    message += " " + t("msg.unmountWillDeleteShares", { shares: blocking.join(", ") });
+    message += " " + t("msg.deleteArrayWillDeleteShares", { shares: blocking.join(", ") });
   }
 
   if (!(await confirmDialog(message, { danger: true }))) return;
@@ -1050,27 +1050,39 @@ function renderRawDisks(disks) {
       formatBtn.addEventListener("click", () => openDiskActionDialog(d, "format"));
       actions.appendChild(formatBtn);
 
-      const wipeBtn = document.createElement("button");
-      wipeBtn.type = "button";
-      wipeBtn.className = "link-btn danger";
-      wipeBtn.textContent = t("ui.rawDisks.wipeBtn");
-      wipeBtn.addEventListener("click", () => openDiskActionDialog(d, "wipe"));
-      actions.appendChild(wipeBtn);
+      // Wipe on a genuinely free device is normally a safe no-op
+      // (nothing to clear), offered mainly so a device that WAS
+      // formatted through some other path still has an explicit way
+      // to be cleared - but a freshly-created array still finishing
+      // its OWN initial sync is guaranteed to have nothing to wipe yet
+      // (real report: it looked like a premature/confusing option
+      // right after creation, same reasoning as Repair above).
+      if (!(d.transport === "raid" && d.is_syncing)) {
+        const wipeBtn = document.createElement("button");
+        wipeBtn.type = "button";
+        wipeBtn.className = "link-btn danger";
+        wipeBtn.textContent = t("ui.rawDisks.wipeBtn");
+        wipeBtn.addEventListener("click", () => openDiskActionDialog(d, "wipe"));
+        actions.appendChild(wipeBtn);
+      }
     }
 
     if (d.transport === "raid" && !isMember) {
-      // Repair - adding a disk to replace a missing/failed member -
-      // meaningless for RAID0/linear (see NON_REDUNDANT_LEVELS above:
-      // neither can ever be "missing one disk but still running"),
-      // deliberately available regardless of the array's own
-      // format/mount state otherwise, since a degraded array needing
-      // a replacement disk is completely independent of whether it
-      // currently has a filesystem or is mounted. Not offered at all
-      // when this array is itself nested inside a parent array (isMember
-      // above already gave it the member-only Detach action instead -
+      // Repair - adding a disk to replace a missing/failed member, or
+      // preemptively pulling one that's showing early trouble (see
+      // the guided dialog's own "Usuń" action) - meaningless for
+      // RAID0/linear (see NON_REDUNDANT_LEVELS above: neither can ever
+      // be "missing one disk but still running"), and not shown while
+      // the array is still finishing its OWN initial build either
+      // (real report: it appeared right after creation, before the
+      // array had even had a chance to develop anything worth
+      // repairing) - deliberately available regardless of the array's
+      // format/mount state otherwise. Not offered at all when this
+      // array is itself nested inside a parent array (isMember above
+      // already gave it the member-only Detach action instead -
       // repairing/deleting a nested array independently of its parent
       // would leave that parent in an inconsistent state).
-      if (!NON_REDUNDANT_LEVELS.has(levelByArray.get(d.name))) {
+      if (!NON_REDUNDANT_LEVELS.has(levelByArray.get(d.name)) && !d.is_syncing) {
         const repairBtn = document.createElement("button");
         repairBtn.type = "button";
         repairBtn.className = "link-btn";
@@ -1380,8 +1392,17 @@ function raidCreateUpdateLevelsAndSubmit() {
   const hasPointlessStripeSource = checkedDisks.some(
     (d) => d.transport === "raid" && NON_REDUNDANT_RAID_LEVELS.has((d.level || "").toLowerCase())
   );
+  // Nested RAID is a well-established pattern, but only with RAID0 or
+  // RAID1 as the OUTER level - that's what RAID 10 (0 over 1), RAID 01
+  // (1 over 0), RAID 50 (0 over 5), and RAID 60 (0 over 6) actually
+  // are. No storage vendor treats RAID4/5/6/10 itself as a valid outer
+  // wrapper around other arrays - it isn't a recognized topology, just
+  // parity math over opaque "big disks" with no real benefit over
+  // building flat from the raw disks underneath. The backend rejects
+  // this regardless (`raid.nested_outer_level_must_be_0_or_1`).
+  const hasArraySource = checkedDisks.some((d) => d.transport === "raid");
   const availableLevels = Object.keys(RAID_MIN_DEVICES).filter(
-    (lvl) => count >= RAID_MIN_DEVICES[lvl] && !(lvl === "0" && hasPointlessStripeSource)
+    (lvl) => count >= RAID_MIN_DEVICES[lvl] && !(lvl === "0" && hasPointlessStripeSource) && !(hasArraySource && lvl !== "0" && lvl !== "1")
   );
   for (const lvl of availableLevels) {
     const opt = document.createElement("option");
@@ -1404,14 +1425,18 @@ addRaidBtn.addEventListener("click", async () => {
   // Only genuinely free disks are offered - a disk with a filesystem,
   // already mounted, or already a RAID member needs an explicit Wipe
   // first, same as any other destructive disk operation in this tool
-  // (creating an array is exactly that: destructive). A free, unused
-  // RAID array (no filesystem, not mounted, not already nested inside
-  // another array) is offered too - nested RAID (his real scenario:
-  // mirroring two existing RAID0 arrays into a RAID1 on top) is a
-  // genuinely supported mdadm pattern, and an array is just another
-  // block device to mdadm --create exactly like a physical disk is.
+  // (creating an array is exactly that: destructive). A free, unused,
+  // STABLE RAID array (no filesystem, not mounted, not already nested,
+  // not mid-sync, not degraded) is offered too - nested RAID (his real
+  // scenario: mirroring two existing RAID0 arrays into a RAID1 on top)
+  // is a genuinely supported mdadm pattern, and an array is just
+  // another block device to mdadm --create exactly like a physical
+  // disk is. A syncing or degraded array is excluded outright (real
+  // report: a RAID6 still mid-initial-build showed up as pickable) -
+  // the backend rejects it too, but there's no reason to even offer
+  // something that can never succeed.
   const freeDisks = (lastManageableDisksData || []).filter(
-    (d) => !d.fstype && !d.mounted && !d.is_raid_member
+    (d) => !d.fstype && !d.mounted && !d.is_raid_member && !(d.transport === "raid" && (d.is_syncing || d.is_degraded))
   );
   raidCreateErrorHint.style.display = freeDisks.length ? "none" : "block";
   for (const disk of freeDisks) {
@@ -1476,6 +1501,10 @@ async function loadRawDisks() {
 }
 
 async function checkRawDiskStatus(disk, button) {
+  if (disk.transport === "raid") {
+    await checkRaidSmart(disk, button);
+    return;
+  }
   const originalText = button.textContent;
   button.disabled = true;
   button.textContent = t("ui.rawDisks.checking");
@@ -1495,6 +1524,61 @@ async function checkRawDiskStatus(disk, button) {
     button.textContent = originalText;
   }
 }
+
+const raidSmartDialog = document.getElementById("raid-smart-dialog");
+const raidSmartTitle = document.getElementById("raid-smart-title");
+const raidSmartMembers = document.getElementById("raid-smart-members");
+const raidSmartClose = document.getElementById("raid-smart-close");
+
+// An array device itself has no S.M.A.R.T. data of its own - smartctl
+// only ever knows about physical disks - so "Sprawdź stan" on an
+// array used to just fail with a flat "no SMART data for md0" (his
+// real report). This shows per-member temperature/health instead,
+// which is the information actually being asked for, in a small
+// dedicated dialog (his explicit ask) rather than a single-line toast
+// that can't hold more than one disk's worth of info.
+async function checkRaidSmart(array, button) {
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = t("ui.rawDisks.checking");
+  try {
+    const res = await fetch(`/api/raid/${encodeURIComponent(array.name)}/smart`);
+    const data = await res.json();
+    raidSmartTitle.textContent = t("ui.raidSmartDialog.titleFor", { array: array.name });
+    raidSmartMembers.innerHTML = "";
+    if (!data.available || !data.members || !data.members.length) {
+      raidSmartMembers.appendChild(Object.assign(document.createElement("p"), {
+        className: "field-hint", textContent: t("ui.rawDisks.smartUnavailable", { name: array.name }),
+      }));
+    } else {
+      for (const member of data.members) {
+        const row = document.createElement("div");
+        row.className = "raid-repair-row";
+        const label = document.createElement("span");
+        label.className = "mono";
+        label.textContent = member.name;
+        row.appendChild(label);
+        const status = document.createElement("span");
+        if (member.available) {
+          const tempPart = member.temperature_c != null ? t("ui.rawDisks.smartTemp", { temp: member.temperature_c }) : "";
+          status.textContent = `${member.health}${tempPart}`;
+        } else {
+          status.textContent = t("ui.rawDisks.smartUnavailable", { name: member.name });
+        }
+        row.appendChild(status);
+        raidSmartMembers.appendChild(row);
+      }
+    }
+    raidSmartDialog.showModal();
+  } catch (err) {
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+raidSmartClose.addEventListener("click", () => raidSmartDialog.close());
 
 function openDiskActionDialog(disk, kind) {
   diskActionState = { device: disk.path, name: disk.name, kind };

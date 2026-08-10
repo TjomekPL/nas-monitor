@@ -332,6 +332,16 @@ def list_manageable_raid_arrays() -> list[dict[str, Any]]:
             "is_raid_member": arr["name"] in raid_member_map,
             "raid_array": raid_member_map.get(arr["name"]),
             "label": disk_labels.get_label(arr["name"]),
+            # Needed by raid_mutate.create_raid_array (and the frontend
+            # picker) to decide whether this array is actually eligible
+            # to be USED as a component of a new, bigger array - real
+            # report: a RAID6 still mid-initial-sync (not degraded, just
+            # not finished settling yet) showed up as pickable for
+            # nesting, which mdadm building on top of an actively-busy
+            # array is not something any real system does or a sane
+            # admin would want, degraded or not.
+            "is_degraded": bool(arr.get("is_degraded")),
+            "is_syncing": arr.get("progress_percent") is not None,
         })
     return arrays
 

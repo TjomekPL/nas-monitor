@@ -180,6 +180,61 @@ class TestCreateRaidArray(unittest.TestCase):
              mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=free_arrays):
             result = raid_mutate.create_raid_array(["/dev/md0", "/dev/md1"], "0")
         self.assertTrue(result["success"])
+
+    def test_rejects_a_source_array_still_syncing(self):
+        # Real report: a RAID6 still mid-initial-build (not degraded,
+        # just not finished settling yet) showed up as pickable for
+        # nesting into a brand new array on top of it.
+        arrays = [
+            {"path": "/dev/md0", "level": "raid6", "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False, "is_syncing": True, "is_degraded": False},
+            {"path": "/dev/sdb", "level": None, "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False, "is_syncing": False, "is_degraded": False},
+        ]
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=[]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=arrays):
+            result = raid_mutate.create_raid_array(["/dev/md0", "/dev/sdb"], "1")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "raid.source_array_not_stable")
+
+    def test_rejects_a_source_array_that_is_degraded(self):
+        arrays = [
+            {"path": "/dev/md0", "level": "raid5", "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False, "is_syncing": False, "is_degraded": True},
+            {"path": "/dev/md1", "level": "raid5", "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False, "is_syncing": False, "is_degraded": False},
+        ]
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=[]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=arrays):
+            result = raid_mutate.create_raid_array(["/dev/md0", "/dev/md1"], "0")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "raid.source_array_not_stable")
+
+    def test_rejects_raid5_built_from_arrays_as_an_unrecognized_nested_topology(self):
+        # RAID4/5/6/10 is never the OUTER level in any real nested-RAID
+        # topology (RAID10/50/60 are always 0-or-1-outer) - only
+        # blocked when a selected device is itself an array; RAID5 from
+        # plain raw disks is unaffected.
+        arrays = [
+            {"path": "/dev/md0", "level": "raid1", "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False, "is_syncing": False, "is_degraded": False},
+            {"path": "/dev/md1", "level": "raid1", "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False, "is_syncing": False, "is_degraded": False},
+            {"path": "/dev/md2", "level": "raid1", "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False, "is_syncing": False, "is_degraded": False},
+        ]
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=[]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=arrays):
+            result = raid_mutate.create_raid_array(["/dev/md0", "/dev/md1", "/dev/md2"], "5")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "raid.nested_outer_level_must_be_0_or_1")
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_still_allows_raid1_over_stable_arrays(self, mock_run, mock_find):
+        mock_run.return_value = (0, "", "")
+        arrays = [
+            {"path": "/dev/md0", "level": "raid0", "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False, "is_syncing": False, "is_degraded": False},
+            {"path": "/dev/md1", "level": "raid0", "transport": "raid", "fstype": None, "mounted": False, "is_raid_member": False, "is_syncing": False, "is_degraded": False},
+        ]
+        with mock.patch.object(raid_mutate.disk_mutate, "list_manageable_disks", return_value=[]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=arrays):
+            result = raid_mutate.create_raid_array(["/dev/md0", "/dev/md1"], "1")
+        self.assertTrue(result["success"])
+
     @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value=None)
     def test_reports_missing_mdadm_tool(self, mock_find):
         result = raid_mutate.detach_member("md0", "/dev/sdb")

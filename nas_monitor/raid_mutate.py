@@ -101,6 +101,29 @@ def create_raid_array(devices: list[str], level: str) -> dict[str, Any]:
             return errors.fail(result, "raid.unknown_device", device=device)
         if disk.get("fstype") or disk.get("mounted") or disk.get("is_raid_member"):
             return errors.fail(result, "raid.device_not_free", device=device)
+        if disk.get("transport") == "raid":
+            # An array still mid-initial-sync, or already degraded, is
+            # not a stable building block - real report: a RAID6 he'd
+            # just started creating (not finished settling, not
+            # degraded either - just busy) showed up as pickable for
+            # nesting into a brand new array on top of it. No real
+            # system builds on top of an array that isn't done with
+            # its own business yet, and building on a degraded one
+            # means inheriting a foundation that's already lost
+            # redundancy instead of fixing it first.
+            if disk.get("is_syncing") or disk.get("is_degraded"):
+                return errors.fail(result, "raid.source_array_not_stable", device=device)
+            # Nested RAID is a well-established pattern, but only with
+            # RAID0 or RAID1 as the OUTER level - that's what RAID 10
+            # (0 over 1), RAID 01 (1 over 0), RAID 50 (0 over 5), and
+            # RAID 60 (0 over 6) actually are; no storage vendor or
+            # mdadm convention treats RAID4/5/6/10 itself as a valid
+            # outer wrapper around other arrays - it doesn't correspond
+            # to any recognized topology, just parity math computed
+            # over opaque "big disks" with no real benefit over
+            # building it flat from the raw disks underneath.
+            if level not in ("0", "1"):
+                return errors.fail(result, "raid.nested_outer_level_must_be_0_or_1", level=level, device=device)
         # Striping (RAID0) over a device that is ITSELF already a
         # non-redundant array (RAID0 or linear) - stripe-of-a-stripe -
         # is mathematically identical to one flat RAID0 across all the

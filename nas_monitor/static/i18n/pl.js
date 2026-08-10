@@ -92,6 +92,10 @@ window.NAS_I18N.pl = {
       disksHeading: "Dyski",
       sectionsDragHint: "Przeciągnij sekcję, żeby zmienić kolejność - zapamiętywana na stałe.",
     },
+    raidSmartDialog: {
+      title: "Stan dysków w macierzy",
+      titleFor: "Stan dysków w macierzy {array}",
+    },
     raidRepairDialog: {
       title: "Napraw macierz",
       titleFor: "Napraw macierz {array}",
@@ -407,7 +411,8 @@ window.NAS_I18N.pl = {
     confirmUnmountDisk: "Odmontować {name}? Wpis w /etc/fstab też zostanie usunięty - dysk trafi z powrotem do tabeli surowych dysków.",
     mountedDisk: "Zamontowano {name} pod {path}.",
     unmountedDisk: "Odmontowano {name}.",
-    unmountWillDeleteShares: "Uwaga: ten dysk ma aktywne udziały ({shares}) - zostaną usunięte (definicja Samby, pliki zostają), a dopiero potem dysk zostanie odmontowany.",
+    unmountWillDeleteShares: "Uwaga: to urządzenie ma aktywne udziały ({shares}) - zostaną usunięte (definicja Samby, pliki zostają), a dopiero potem nastąpi odmontowanie.",
+    deleteArrayWillDeleteShares: "Uwaga: ta macierz ma aktywne udziały ({shares}) - zostaną usunięte (definicja Samby, pliki zostają), a dopiero potem macierz zostanie usunięta.",
     unmountedDiskWithShares: "Odmontowano {name} (usunięto udziały: {shares}).",
     raidCreated: "Utworzono macierz {name} - trwa wstępna synchronizacja, widoczna na karcie macierzy.",
     confirmDetachRaidMember: "Odłączyć {device} od macierzy {array}? Macierz będzie działać dalej na pozostałych dyskach, ale bez tego jednego straci część redundancji.",
@@ -464,6 +469,8 @@ window.NAS_I18N.pl = {
       zero_superblock_failed: "Nie udało się wyczyścić metadanych RAID na {device}: {detail}",
       no_redundancy: "RAID{level} nie ma redundancji - nie da się odłączyć ani naprawić pojedynczego dysku bez zniszczenia całej macierzy. Aby wymienić dysk, usuń całą macierz i utwórz ją od nowa z nowym zestawem dysków.",
       pointless_stripe_of_stripe: "{device} to macierz RAID0/linear bez redundancji - striping (RAID0) nad nią jest bezcelowy, matematycznie identyczny z jednym płaskim RAID0 na tych samych dyskach. Wybierz inny poziom (np. RAID1) albo inne urządzenia.",
+      source_array_not_stable: "{device} jest w trakcie synchronizacji lub jest zdegradowana - nie można na niej budować nowej macierzy, dopóki się nie ustabilizuje.",
+      nested_outer_level_must_be_0_or_1: "RAID{level} nad inną macierzą to nierozpoznana konfiguracja - zagnieżdżanie działa tylko z RAID0 lub RAID1 jako poziomem zewnętrznym (tak powstają RAID10, RAID50, RAID60). Wybierz RAID0 albo RAID1.",
     },
     layout: {
       invalid_order: "Nieprawidłowa kolejność kart",

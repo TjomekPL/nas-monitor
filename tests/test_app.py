@@ -153,6 +153,39 @@ class TestApiRaidDelete(unittest.TestCase):
         mock_unmount.assert_called_once_with("/dev/md0")
 
 
+class TestApiRaidSmart(unittest.TestCase):
+    def setUp(self):
+        app_module.app.config["TESTING"] = True
+        self.client = app_module.app.test_client()
+
+    def test_aggregates_smart_for_every_member_disk(self):
+        # An array device itself has no S.M.A.R.T. data of its own -
+        # smartctl only ever knows about physical disks - real report:
+        # "Sprawdź stan" on an array used to just fail with a flat "no
+        # SMART data for md0" instead of showing anything useful.
+        arrays = [{"name": "md0", "devices": [{"device": "/dev/sdb"}, {"device": "/dev/sdc"}]}]
+        smart_by_device = {
+            "/dev/sdb": {"available": True, "temperature_c": 34, "passed": True, "attributes": {}},
+            "/dev/sdc": {"available": True, "temperature_c": 41, "passed": True, "attributes": {}},
+        }
+        with mock.patch.object(app_module.monitor, "get_raid_arrays", return_value=arrays), \
+             mock.patch.object(app_module.monitor, "get_smart_health", side_effect=lambda p: smart_by_device[p]):
+            res = self.client.get("/api/raid/md0/smart")
+        self.assertEqual(res.status_code, 200)
+        data = res.get_json()
+        self.assertTrue(data["available"])
+        by_name = {m["name"]: m for m in data["members"]}
+        self.assertEqual(by_name["sdb"]["temperature_c"], 34)
+        self.assertEqual(by_name["sdb"]["health"], "ok")
+        self.assertEqual(by_name["sdc"]["temperature_c"], 41)
+
+    def test_unknown_array_returns_404(self):
+        with mock.patch.object(app_module.monitor, "get_raid_arrays", return_value=[]):
+            res = self.client.get("/api/raid/md9/smart")
+        self.assertEqual(res.status_code, 404)
+        self.assertFalse(res.get_json()["available"])
+
+
 class TestApiRaidRoutes(unittest.TestCase):
     def setUp(self):
         app_module.app.config["TESTING"] = True

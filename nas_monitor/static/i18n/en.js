@@ -92,6 +92,10 @@ window.NAS_I18N.en = {
       disksHeading: "Disks",
       sectionsDragHint: "Drag a section to reorder it - remembered permanently.",
     },
+    raidSmartDialog: {
+      title: "Array member disk status",
+      titleFor: "Member disk status for {array}",
+    },
     raidRepairDialog: {
       title: "Repair array",
       titleFor: "Repair array {array}",
@@ -407,7 +411,8 @@ window.NAS_I18N.en = {
     confirmUnmountDisk: "Unmount {name}? Its /etc/fstab entry will be removed too - the disk goes back to the raw-disks table.",
     mountedDisk: "Mounted {name} at {path}.",
     unmountedDisk: "Unmounted {name}.",
-    unmountWillDeleteShares: "Note: this disk has active shares ({shares}) - they'll be deleted (Samba definition only, files stay), then the disk will be unmounted.",
+    unmountWillDeleteShares: "Note: this device has active shares ({shares}) - they'll be deleted (Samba definition only, files stay), then it will be unmounted.",
+    deleteArrayWillDeleteShares: "Note: this array has active shares ({shares}) - they'll be deleted (Samba definition only, files stay), then the array will be deleted.",
     unmountedDiskWithShares: "Unmounted {name} (deleted shares: {shares}).",
     raidCreated: "Created array {name} - initial sync in progress, visible on the array's card.",
     confirmDetachRaidMember: "Detach {device} from array {array}? The array keeps running on its remaining disks, but loses some redundancy without this one.",
@@ -464,6 +469,8 @@ window.NAS_I18N.en = {
       zero_superblock_failed: "Failed to clear RAID metadata on {device}: {detail}",
       no_redundancy: "RAID{level} has no redundancy - a single disk can't be detached or repaired without destroying the whole array. To swap a disk, delete the whole array and recreate it with the new disk set.",
       pointless_stripe_of_stripe: "{device} is a RAID0/linear array with no redundancy - striping (RAID0) over it is pointless, mathematically identical to one flat RAID0 across the same disks directly. Pick a different level (e.g. RAID1) or different devices.",
+      source_array_not_stable: "{device} is still syncing or is degraded - a new array can't be built on top of it until it settles.",
+      nested_outer_level_must_be_0_or_1: "RAID{level} over another array isn't a recognized configuration - nesting only works with RAID0 or RAID1 as the outer level (that's how RAID10, RAID50, and RAID60 are built). Pick RAID0 or RAID1.",
     },
     layout: {
       invalid_order: "Invalid card order",

@@ -334,6 +334,33 @@ def api_disk_smart(name):
     return jsonify(smart)
 
 
+@app.route("/api/raid/<array_name>/smart")
+def api_raid_smart(array_name):
+    # A RAID array device itself has no S.M.A.R.T. data of its own -
+    # smartctl only ever knows about physical disks - so "Sprawdź stan"
+    # on an array's row used to just fail with a flat "no SMART data
+    # for md0" (his real report). This aggregates SMART for every
+    # member disk instead, which is the information actually being
+    # asked for when checking an array's health.
+    arrays = {a["name"]: a for a in monitor.get_raid_arrays()}
+    arr = arrays.get(array_name)
+    if arr is None:
+        return jsonify({"available": False, "error": "not found"}), 404
+    members = []
+    for dev in arr.get("devices") or []:
+        device_path = dev.get("device")
+        if not device_path:
+            continue
+        smart = monitor.get_smart_health(device_path)
+        members.append({
+            "name": os.path.basename(device_path),
+            "available": smart.get("available", False),
+            "temperature_c": smart.get("temperature_c"),
+            "health": monitor.classify_health(smart),
+        })
+    return jsonify({"available": True, "members": members})
+
+
 @app.route("/api/disks/<name>/format", methods=["POST"])
 def api_disk_format(name):
     data = request.get_json(force=True, silent=True) or {}
