@@ -3667,10 +3667,12 @@ async function loadStatusbar() {
 
 // --------------------------------------------------------------------
 // Update check/apply - version shown in the statusbar, checked once on
-// load; the account dialog's "Sprawdź aktualizacje" button re-checks
-// on demand. Each check does a real `git fetch` against GitHub on the
-// backend, so - unlike the rest of the statusbar - this isn't polled
-// continuously.
+// load and then on the same 30-min background timer as the system
+// update check below (no manual "check" button anymore - his explicit
+// ask, both used to have one and it read as redundant with the
+// automatic checking). Each check does a real `git fetch` against
+// GitHub on the backend, so - unlike the rest of the statusbar - this
+// isn't polled continuously.
 // --------------------------------------------------------------------
 
 const updateStatusTextEl = document.getElementById("update-status-text");
@@ -3715,7 +3717,7 @@ function renderUpdateInfo(data) {
   } else {
     statusbarAppVal.textContent = data.current_version || "\u2013";
     statusbarAppVal.classList.remove("update-pending");
-    updateStatusTextEl.textContent = data.current_version || "\u2013";
+    updateStatusTextEl.textContent = t("ui.accountDialog.upToDate", { version: data.current_version || "?" });
     updateStatusTextEl.classList.remove("update-pending");
     updateApplyBtn.style.display = "none";
   }

@@ -56,6 +56,7 @@ window.NAS_I18N.en = {
       updatesHeading: "Updates",
       applyUpdateBtn: "Install update {version}",
       updateAvailableStatus: "Update available: {version}",
+      upToDate: "{version} - you're on the latest version.",
       notGitManaged: "This install isn't git-managed yet - run sudo ./install.sh once manually to enable updates from this panel.",
       applyingUpdate: "Installing the update (this can take a minute or two if new system packages are needed) and restarting the service...",
       applySuccess: "Updated to {version}. The page will refresh automatically.",

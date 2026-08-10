@@ -56,6 +56,7 @@ window.NAS_I18N.pl = {
       updatesHeading: "Aktualizacje",
       applyUpdateBtn: "Zainstaluj aktualizację {version}",
       updateAvailableStatus: "Dostępna aktualizacja: {version}",
+      upToDate: "{version} - masz najnowszą wersję.",
       notGitManaged: "Ta instalacja nie jest jeszcze zarządzana przez git - uruchom raz ręcznie sudo ./install.sh, żeby włączyć aktualizacje z panelu.",
       applyingUpdate: "Instaluję aktualizację (może to potrwać do minuty lub dwóch, jeśli trzeba pobrać nowe pakiety systemowe) i restartuję usługę...",
       applySuccess: "Zaktualizowano do {version}. Strona odświeży się automatycznie.",
