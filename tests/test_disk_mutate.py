@@ -769,6 +769,67 @@ class TestFormatDisk(unittest.TestCase):
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "disks.unsupported_filesystem")
 
+    def test_retries_second_wipefs_on_a_transient_partition_race(self):
+        # Real report: on an md-array partition specifically, the second
+        # wipefs (on the partition itself) failed with ENOENT even
+        # though the earlier os.path.exists() poll had already passed -
+        # existing in a directory listing and being genuinely openable
+        # for I/O aren't quite the same guarantee for a device node that
+        # just appeared. Worked on a second, otherwise-identical attempt
+        # - this retries the same transient failure automatically
+        # instead of making him click Format twice by hand.
+        wipefs_calls = {"n": 0}
+
+        def _wipefs_handler(args):
+            if args[-1].endswith("p1") or re.match(r"^/dev/[a-z0-9]+\d$", args[-1]):
+                wipefs_calls["n"] += 1
+                if wipefs_calls["n"] == 1:
+                    return (1, "", "wipefs: error: /dev/md0p1: probing initialization failed: No such file or directory")
+                return (0, "", "")
+            return (0, "", "")  # the first wipefs, on the whole device
+
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": _lsblk_handler,
+            "wipefs": _wipefs_handler,
+            "parted": (0, "", ""),
+            "mkfs.ext4": (0, "", ""),
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)), \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate.time, "sleep", return_value=None), \
+             mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub):
+            result = disk_mutate.format_disk("/dev/sdc", "ext4", auto_mount=False)
+
+        self.assertTrue(result["success"])
+        self.assertEqual(wipefs_calls["n"], 2)
+
+    def test_gives_up_on_a_wipefs_failure_that_is_not_the_partition_race(self):
+        def _wipefs_handler(args):
+            if args[-1].endswith("p1") or re.match(r"^/dev/[a-z0-9]+\d$", args[-1]):
+                return (1, "", "wipefs: error: /dev/sdc1: permission denied")
+            return (0, "", "")  # the first wipefs, on the whole device, succeeds
+
+        responses = {
+            "findmnt": (0, "/dev/sda2\n", ""),
+            "lsblk": _lsblk_handler,
+            "wipefs": _wipefs_handler,
+            "parted": (0, "", ""),
+        }
+        with mock.patch.object(disk_mutate.system_tools, "find_binary", side_effect=_fake_find_binary), \
+             mock.patch.object(disk_mutate.system_tools, "run", side_effect=_fake_run_factory(responses)) as mock_run, \
+             mock.patch.object(disk_mutate.monitor, "list_disks", return_value=DISKS), \
+             mock.patch.object(disk_mutate.monitor, "get_raid_arrays", return_value=[]), \
+             mock.patch.object(disk_mutate.os.path, "exists", side_effect=_partition_exists_stub):
+            result = disk_mutate.format_disk("/dev/sdc", "ext4", auto_mount=False)
+
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+        wipefs_calls = [c for c in mock_run.call_args_list if os.path.basename(c.args[0][0]) == "wipefs"]
+        self.assertEqual(len(wipefs_calls), 2)  # whole-device wipefs, then ONE partition wipefs - no retry for a non-race error
+
     def test_passes_label_to_mkfs(self):
         responses = {
             "findmnt": (0, "/dev/sda2\n", ""),

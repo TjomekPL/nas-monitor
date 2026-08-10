@@ -672,6 +672,28 @@ def format_disk(device: str, filesystem: str, label: str = "", auto_mount: bool 
     if code != 0:
         return errors.command_failed(result, err, out, code, "parted")
 
+    # Real report: the very next wipefs on the new partition intermittently
+    # failed with ENOENT ("no such file or directory") even though the
+    # os.path.exists() poll below had already returned True - on a
+    # /dev/mdN array specifically, whose partitions go through the
+    # kernel's "blkext" extended-block-device path rather than the more
+    # immediate partition registration a plain SCSI/NVMe disk gets, the
+    # dentry can appear in /dev microseconds before the block device is
+    # actually openable for I/O. `partprobe` explicitly asks the kernel
+    # to re-read the table and emit the uevents parted's own write
+    # doesn't reliably trigger on its own for md devices; `udevadm
+    # settle` then waits for udev to finish processing that queue before
+    # anything here tries to open the result. Both best-effort - parted
+    # already succeeded, a missing/failing partprobe or a settle timeout
+    # isn't itself a reason to give up, just a nudge before falling back
+    # to the poll loop that was already here.
+    partprobe_path = system_tools.find_binary("partprobe")
+    if partprobe_path:
+        system_tools.run([partprobe_path, device], timeout=15)
+    udevadm_path = system_tools.find_binary("udevadm")
+    if udevadm_path:
+        system_tools.run([udevadm_path, "settle", "--timeout=5"], timeout=10)
+
     partition = _partition_path(device)
     # the kernel needs a moment to create the new partition's device
     # node after parted writes the table - poll briefly rather than
@@ -691,8 +713,22 @@ def format_disk(device: str, filesystem: str, label: str = "", auto_mount: bool 
     # live there is still physically sitting in that data region, on
     # its own separate device node (/dev/sda1, not /dev/sda), which the
     # first wipefs never touched.
-    code, out, err = system_tools.run([wipefs_path, "-a", partition], timeout=30)
-    if code != 0:
+    #
+    # A few retries here too, on top of partprobe/udevadm settle above:
+    # his real report showed the node passing the os.path.exists() poll
+    # and STILL failing this wipefs with ENOENT moments later on an
+    # md-device partition - existing in the directory listing and being
+    # genuinely openable aren't quite the same guarantee for a device
+    # that just appeared. Only retries actual "not ready yet"-shaped
+    # failures; a wipefs failure for a different reason surfaces on the
+    # first attempt as before.
+    for attempt in range(3):
+        code, out, err = system_tools.run([wipefs_path, "-a", partition], timeout=30)
+        if code == 0:
+            break
+        if attempt < 2 and "no such file" in err.lower():
+            time.sleep(0.5)
+            continue
         return errors.command_failed(result, err, out, code, "wipefs")
 
     mkfs_args = [mkfs_path, *_MKFS_FORCE_ARGS[filesystem]]
