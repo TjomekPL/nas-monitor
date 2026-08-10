@@ -100,10 +100,10 @@ MD_LEVEL=raid1
 MD_DEVICES=2
 MD_METADATA=1.2
 MD_ARRAY_STATE=clean
-MD_DEVICE_dev0_DEV=/dev/sda1
-MD_DEVICE_dev0_ROLE=0
-MD_DEVICE_dev1_DEV=/dev/sdb1
-MD_DEVICE_dev1_ROLE=1
+MD_DEVICE_dev_sda1_DEV=/dev/sda1
+MD_DEVICE_dev_sda1_ROLE=0
+MD_DEVICE_dev_sdb1_DEV=/dev/sdb1
+MD_DEVICE_dev_sdb1_ROLE=1
 """
 
 
@@ -308,12 +308,12 @@ class TestGetRaidArrays(unittest.TestCase):
             "MD_DEVICES=4\n"
             "MD_METADATA=1.2\n"
             "MD_ARRAY_STATE=clean\n"
-            "MD_DEVICE_dev0_DEV=/dev/sda1\n"
-            "MD_DEVICE_dev0_ROLE=0\n"
-            "MD_DEVICE_dev1_DEV=/dev/sdb1\n"
-            "MD_DEVICE_dev1_ROLE=1\n"
-            "MD_DEVICE_dev2_DEV=/dev/sdc1\n"
-            "MD_DEVICE_dev2_ROLE=2\n"
+            "MD_DEVICE_dev_sda1_DEV=/dev/sda1\n"
+            "MD_DEVICE_dev_sda1_ROLE=0\n"
+            "MD_DEVICE_dev_sdb1_DEV=/dev/sdb1\n"
+            "MD_DEVICE_dev_sdb1_ROLE=1\n"
+            "MD_DEVICE_dev_sdc1_DEV=/dev/sdc1\n"
+            "MD_DEVICE_dev_sdc1_ROLE=2\n"
         )
         mock_mdstat.return_value = {
             "md0": {"active": True, "level": "raid5", "members_raw": "", "progress_percent": None, "progress_action": None}
@@ -341,8 +341,8 @@ class TestGetRaidArrays(unittest.TestCase):
             "MD_DEVICES=4\n"
             "MD_METADATA=1.2\n"
             "MD_ARRAY_STATE=inactive\n"
-            "MD_DEVICE_dev0_DEV=/dev/sda1\n"
-            "MD_DEVICE_dev0_ROLE=0\n"
+            "MD_DEVICE_dev_sda1_DEV=/dev/sda1\n"
+            "MD_DEVICE_dev_sda1_ROLE=0\n"
         )
         mock_mdstat.return_value = {
             "md0": {"active": False, "level": "raid5", "members_raw": "", "progress_percent": None, "progress_action": None}
@@ -364,10 +364,10 @@ class TestGetRaidArrays(unittest.TestCase):
             "MD_DEVICES=2\n"
             "MD_METADATA=1.2\n"
             "MD_ARRAY_STATE=clean\n"
-            "MD_DEVICE_dev0_DEV=/dev/sda1\n"
-            "MD_DEVICE_dev0_ROLE=0\n"
-            "MD_DEVICE_dev1_DEV=/dev/sdb1\n"
-            "MD_DEVICE_dev1_ROLE=faulty spare\n"
+            "MD_DEVICE_dev_sda1_DEV=/dev/sda1\n"
+            "MD_DEVICE_dev_sda1_ROLE=0\n"
+            "MD_DEVICE_dev_sdb1_DEV=/dev/sdb1\n"
+            "MD_DEVICE_dev_sdb1_ROLE=faulty spare\n"
         )
         mock_mdstat.return_value = {
             "md0": {"active": True, "level": "raid1", "members_raw": "", "progress_percent": None, "progress_action": None}
@@ -380,6 +380,52 @@ class TestGetRaidArrays(unittest.TestCase):
         # serving data, so warning rather than critical (see the
         # inactive-array test below for the genuinely broken case).
         self.assertEqual(arrays[0]["health"], "warning")
+
+    @mock.patch("nas_monitor.system_tools.shutil.which", return_value="/sbin/mdadm")
+    @mock.patch("nas_monitor.monitor._run")
+    @mock.patch("nas_monitor.monitor._parse_mdstat")
+    def test_healthy_raid0_matches_real_mdadm_output(self, mock_mdstat, mock_run, mock_which):
+        # Regression test for a real report: a freshly-created, fully-
+        # healthy 5-disk RAID0 showed a warning health dot, its member
+        # disks kept Mount/Format/Wipe instead of Detach in the
+        # management table, and its own card said "(0 disks)" despite
+        # MD_DEVICES correctly saying 5. Root cause, confirmed against
+        # his actual `mdadm --detail --export` output: real mdadm keys
+        # each member by device NAME (MD_DEVICE_dev_sdb_DEV / _ROLE),
+        # never the sequential MD_DEVICE_dev0_DEV.../devN_DEV indexing
+        # every other fixture in this file used (and which the old
+        # parser required) - so `devices` silently came back empty on
+        # every real system, not just RAID0. RAID0 also never emits
+        # MD_ARRAY_STATE at all (mdadm's own docs: only levels with
+        # redundancy have "interesting state" to report).
+        export = (
+            "MD_LEVEL=raid0\n"
+            "MD_DEVICES=5\n"
+            "MD_METADATA=1.2\n"
+            "MD_UUID=f8047a4e:21af15f4:4a058ef7:5aaeabbe\n"
+            "MD_DEVNAME=0\n"
+            "MD_NAME=nas-mon:0\n"
+            "MD_DEVICE_dev_sde_ROLE=3\n"
+            "MD_DEVICE_dev_sde_DEV=/dev/sde\n"
+            "MD_DEVICE_dev_sdc_ROLE=1\n"
+            "MD_DEVICE_dev_sdc_DEV=/dev/sdc\n"
+            "MD_DEVICE_dev_sdf_ROLE=4\n"
+            "MD_DEVICE_dev_sdf_DEV=/dev/sdf\n"
+            "MD_DEVICE_dev_sdd_ROLE=2\n"
+            "MD_DEVICE_dev_sdd_DEV=/dev/sdd\n"
+            "MD_DEVICE_dev_sdb_ROLE=0\n"
+            "MD_DEVICE_dev_sdb_DEV=/dev/sdb\n"
+        )
+        mock_mdstat.return_value = {
+            "md0": {"active": True, "level": "raid0", "members_raw": "sde[3] sdb[0] sdd[2] sdf[4] sdc[1]", "progress_percent": None, "progress_action": None}
+        }
+        mock_run.return_value = (0, export, "")
+        arrays = monitor.get_raid_arrays()
+        self.assertEqual(len(arrays[0]["devices"]), 5)
+        self.assertEqual(arrays[0]["working_devices"], 5)
+        self.assertEqual(arrays[0]["failed_devices"], 0)
+        self.assertIsNone(arrays[0]["array_state"])
+        self.assertEqual(arrays[0]["health"], "ok")
 
     @mock.patch("nas_monitor.monitor._find_binary", return_value=None)
     @mock.patch("nas_monitor.monitor._parse_mdstat")

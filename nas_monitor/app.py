@@ -11,6 +11,7 @@ dashboard is showing.
 
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
@@ -47,6 +48,25 @@ app.secret_key = auth.get_or_create_secret_key()
 # reached) - since Lax only forwards cookies on top-level GET navigation.
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 network_mutate.check_and_recover_on_startup()
+
+
+@app.context_processor
+def inject_static_version():
+    """Cache-busting wrapper around url_for('static', ...) - appends the
+    file's own mtime as a query string, so a browser (or any caching
+    layer in between) can never keep serving a stale dashboard.js/
+    style.css after a real deploy. The URL itself changes the moment a
+    static file's content does - no manual version bump, no relying on
+    a user's hard-refresh to actually bypass their cache (a real
+    report: an ordinary refresh alone didn't pick up a JS change after
+    an update)."""
+    def static_url(filename):
+        try:
+            version = int(os.path.getmtime(os.path.join(app.static_folder, filename)))
+        except OSError:
+            version = 0
+        return url_for("static", filename=filename, v=version)
+    return {"static_url": static_url}
 
 
 @app.before_request
@@ -202,6 +222,63 @@ def api_raid_add(array_name):
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("raid", "add_member", "success", params={"array": array_name, "device": device})
     return jsonify({"success": True})
+
+
+@app.route("/api/raid/<array_name>/delete", methods=["POST"])
+def api_raid_delete(array_name):
+    data = request.get_json(force=True, silent=True) or {}
+    delete_blocking_shares = bool(data.get("delete_blocking_shares", False))
+    device = f"/dev/{array_name}"
+
+    # Same cascade this endpoint's disk counterpart (api_disk_unmount)
+    # already does: an array-backed share blocking the teardown gets
+    # deleted on confirmation (Samba definition + access group only,
+    # files preserved) rather than a separate manual cleanup step first
+    # - the array is about to be destroyed anyway, so there's nothing
+    # left for that share to point at either way.
+    manageable_by_name = {a["name"]: a for a in disk_mutate.list_manageable_raid_arrays()}
+    mount_point = manageable_by_name.get(array_name, {}).get("mount_point")
+    deleted_shares = []
+    delete_warnings = []
+    if mount_point:
+        blocking = _shares_blocking_unmount(mount_point)
+        if blocking:
+            if not delete_blocking_shares:
+                oplog.log_event("raid", "delete", "failure", params={"array": array_name})
+                return jsonify({
+                    "success": False,
+                    "error_code": "disks.unmount_blocked_by_shares",
+                    "error_context": {"shares": ", ".join(blocking)},
+                }), 400
+            for share_name in blocking:
+                del_result = smb_shares.delete_share(share_name, delete_files=False)
+                if del_result["success"]:
+                    deleted_shares.append(share_name)
+                    oplog.log_event("shares", "delete", "success", params={"name": share_name, "reason": "raid_delete"})
+                    for w in del_result.get("warnings", []):
+                        delete_warnings.append(w)
+                else:
+                    oplog.log_event("shares", "delete", "failure", params={"name": share_name, "reason": "raid_delete"})
+
+    if mount_point:
+        unmount_result = disk_mutate.unmount_disk(device)
+        if not unmount_result["success"]:
+            oplog.log_event("raid", "delete", "failure", params={"array": array_name})
+            return jsonify({
+                "success": False,
+                "error_code": unmount_result["error_code"],
+                "error_context": unmount_result["error_context"],
+            }), 400
+
+    result = raid_mutate.delete_raid_array(array_name)
+    if not result["success"]:
+        oplog.log_event("raid", "delete", "failure", params={"array": array_name})
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+
+    for w in result.get("warnings", []):
+        delete_warnings.append(w)
+    oplog.log_event("raid", "delete", "success", params={"array": array_name, "members": ", ".join(result.get("members", []))})
+    return jsonify({"success": True, "deleted_shares": deleted_shares, "warnings": delete_warnings})
 
 
 @app.route("/api/layout/<section>")

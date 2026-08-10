@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from nas_monitor import system_tools, errors, monitor, disk_mutate
+from nas_monitor import system_tools, errors, monitor, disk_mutate, disk_labels
 
 # Minimum device count each level needs to be created at all. mdadm
 # itself enforces this, but with inconsistent, sometimes-cryptic error
@@ -155,4 +155,60 @@ def add_member(array_name: str, device: str) -> dict[str, Any]:
         return errors.command_failed(result, err, out, code, "mdadm")
 
     result["success"] = True
+    return result
+
+
+def delete_raid_array(array_name: str) -> dict[str, Any]:
+    """Fully tears the array down: mdadm --stop, then --zero-superblock
+    on every member so the kernel/mdadm genuinely stop recognizing them
+    as part of anything - not just "stopped" while still carrying RAID
+    metadata that would make them reappear as an (inactive) array on
+    the next boot or --assemble --scan. After this, every former member
+    is a plain, free disk again, ready to be formatted or put in a
+    different array. Deliberately requires the array to already be
+    unmounted first - same layering as the rest of this module: the
+    share cascade + actual unmount is app.py's job (it already owns
+    that for plain disks too), this function's only concern is the
+    mdadm/disk teardown itself once nothing depends on the array's
+    filesystem anymore."""
+    result: dict[str, Any] = {"success": False}
+
+    arrays = {arr["name"]: arr for arr in monitor.get_raid_arrays()}
+    arr = arrays.get(array_name)
+    if arr is None:
+        return errors.fail(result, "raid.unknown_array", array=array_name)
+
+    array_path = f"/dev/{array_name}"
+    manageable = {a["name"]: a for a in disk_mutate.list_manageable_raid_arrays()}
+    if manageable.get(array_name, {}).get("mounted"):
+        return errors.fail(result, "raid.still_mounted", array=array_name)
+
+    mdadm_path = system_tools.find_binary("mdadm")
+    if mdadm_path is None:
+        return errors.tool_missing(result, "mdadm")
+
+    member_devices = [dev["device"] for dev in (arr.get("devices") or []) if dev.get("device")]
+
+    code, out, err = system_tools.run([mdadm_path, "--stop", array_path], timeout=30)
+    if code != 0:
+        return errors.command_failed(result, err, out, code, "mdadm")
+
+    # The array itself is already stopped and gone at this point - the
+    # part that actually matters - so a single member's zero-superblock
+    # failing must never make the whole operation look like it failed
+    # when it substantively already succeeded. Surfaced as a warning
+    # instead: that one disk may still show up as an (inactive) RAID
+    # member until it's wiped by hand.
+    warnings = []
+    for device in member_devices:
+        zcode, zout, zerr = system_tools.run([mdadm_path, "--zero-superblock", device], timeout=30)
+        if zcode != 0:
+            warnings.append({"code": "raid.zero_superblock_failed", "context": {"device": device, "detail": (zerr or zout or "").strip()}})
+
+    disk_labels.set_label(array_name, "")
+
+    result["success"] = True
+    result["members"] = member_devices
+    if warnings:
+        result["warnings"] = warnings
     return result

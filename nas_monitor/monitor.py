@@ -417,13 +417,38 @@ def get_raid_arrays() -> list[dict[str, Any]]:
         entry["num_devices"] = kv.get("MD_DEVICES")
         entry["metadata"] = kv.get("MD_METADATA")
 
+        # Real mdadm --detail --export keys each member by its device
+        # NAME, not a positional index - MD_DEVICE_dev_sdb_DEV /
+        # MD_DEVICE_dev_sdb_ROLE, one pair per member, in whatever
+        # order mdadm happens to emit them (not sorted, not
+        # necessarily role order). The previous version of this parser
+        # assumed a sequential MD_DEVICE_dev0_DEV/dev1_DEV.../devN_DEV
+        # numbering that real mdadm never actually produces - which
+        # meant `while f"MD_DEVICE_dev{i}_DEV" in kv"` never matched
+        # anything past i=0, silently leaving `devices` empty on every
+        # real system. That, in turn, made working_devices=0 look like
+        # every member was missing (device_shortfall) - a healthy,
+        # fully-populated RAID0 showed as "warning", its member disks
+        # weren't recognized as members anywhere else in the app
+        # (wrong buttons in the management table, not excluded from
+        # the Podsumowanie disk cards), and its card showed "(0
+        # disks)" even though MD_DEVICES itself (a plain top-level key,
+        # unaffected by this) correctly said 5. Scanning for the
+        # MD_DEVICE_<id>_DEV / MD_DEVICE_<id>_ROLE pattern generically
+        # - whatever <id> actually is - fixes all of those at once.
+        device_ids = []
+        seen_ids = set()
+        for k in kv:
+            m = re.match(r"^MD_DEVICE_(.+)_DEV$", k)
+            if m and m.group(1) not in seen_ids:
+                seen_ids.add(m.group(1))
+                device_ids.append(m.group(1))
         devices = []
-        i = 0
-        while f"MD_DEVICE_dev{i}_DEV" in kv or f"MD_DEVICE_DEV_{i}" in kv:
-            dev_path = kv.get(f"MD_DEVICE_dev{i}_DEV") or kv.get(f"MD_DEVICE_DEV_{i}")
-            role = kv.get(f"MD_DEVICE_dev{i}_ROLE")
-            devices.append({"device": dev_path, "role": role})
-            i += 1
+        for dev_id in device_ids:
+            dev_path = kv.get(f"MD_DEVICE_{dev_id}_DEV")
+            role = kv.get(f"MD_DEVICE_{dev_id}_ROLE")
+            if dev_path:
+                devices.append({"device": dev_path, "role": role})
         entry["devices"] = devices
         # A genuinely present, working member has both a real device
         # path AND a numeric role (an active RAID slot) - a "spare" or
@@ -471,6 +496,18 @@ def get_raid_arrays() -> list[dict[str, Any]]:
         elif entry["progress_percent"] is not None:
             entry["health"] = "warning"
         elif state in ("clean", "active"):
+            entry["health"] = "ok"
+        elif not state and entry["active"]:
+            # RAID0/linear genuinely never emit MD_ARRAY_STATE at all -
+            # confirmed against real mdadm output, not a guess: per
+            # mdadm's own docs, that field only carries meaningful
+            # information for the redundant levels (1/4/5/6/10), since
+            # RAID0/linear can't be "degraded" (missing a member fails
+            # the whole array, not a partial state to report). Without
+            # this, a perfectly healthy RAID0 - not degraded, no
+            # shortfall, mdstat itself says active - fell through every
+            # branch above with nothing left to match and stayed at the
+            # unhelpful "unknown" default.
             entry["health"] = "ok"
 
         arrays.append(entry)

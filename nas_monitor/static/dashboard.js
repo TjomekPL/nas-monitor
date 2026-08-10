@@ -659,6 +659,47 @@ async function unmountDisk(disk) {
   }
 }
 
+async function deleteRaidArray(array) {
+  // Same proactive share-warning approach as unmountDisk - the array
+  // is about to be destroyed regardless, so a share still pointing at
+  // it gets called out up front rather than the request just failing
+  // a second time after a separate manual cleanup step.
+  const blocking = array.mount_point
+    ? lastSharesData
+        .filter((s) => s.path === array.mount_point || s.path.startsWith(array.mount_point + "/"))
+        .map((s) => s.name)
+    : [];
+
+  let message = t("msg.confirmDeleteRaidArray", { name: array.name });
+  if (blocking.length) {
+    message += " " + t("msg.unmountWillDeleteShares", { shares: blocking.join(", ") });
+  }
+
+  if (!(await confirmDialog(message, { danger: true }))) return;
+  try {
+    const res = await fetch(`/api/raid/${encodeURIComponent(array.name)}/delete`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ delete_blocking_shares: blocking.length > 0 }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      showToast(apiErrorMessage(data, res), true);
+      return;
+    }
+    const deleted = data.deleted_shares || [];
+    showToast(deleted.length ? t("msg.deletedRaidArrayWithShares", { name: array.name, shares: deleted.join(", ") }) : t("msg.deletedRaidArray", { name: array.name }));
+    if (data.warnings && data.warnings.length) {
+      showToast(warningsText(data.warnings), true);
+    }
+    if (deleted.length) await loadShares();
+    await refresh();
+    await loadRawDisks();
+  } catch (err) {
+    showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
+  }
+}
+
 async function refresh() {
   if (addUserDialog.open) return; // avoid DOM churn while a password field is focused
   try {
@@ -860,6 +901,18 @@ function renderRawDisks(disks) {
       repairBtn.textContent = t("ui.rawDisks.repairBtn");
       repairBtn.addEventListener("click", () => openRaidRepairPicker(d, repairBtn));
       actions.appendChild(repairBtn);
+
+      // Delete - full teardown (his explicit ask): stop the array and
+      // free every member disk for reuse, not just unmount it. Offered
+      // regardless of mount state, same as Repair above - deleting an
+      // already-unmounted-but-never-formatted array is just as valid a
+      // case as deleting a mounted one.
+      const deleteArrBtn = document.createElement("button");
+      deleteArrBtn.type = "button";
+      deleteArrBtn.className = "link-btn danger";
+      deleteArrBtn.textContent = t("ui.rawDisks.deleteArrayBtn");
+      deleteArrBtn.addEventListener("click", () => deleteRaidArray(d));
+      actions.appendChild(deleteArrBtn);
     }
 
     row.appendChild(statusCell);

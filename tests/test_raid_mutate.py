@@ -193,5 +193,78 @@ class TestAddMember(unittest.TestCase):
         self.assertEqual(result["error_code"], "system.command_failed")
 
 
+class TestDeleteRaidArray(unittest.TestCase):
+    ARR = {
+        "name": "md0",
+        "path": "/dev/md0",
+        "devices": [
+            {"device": "/dev/sdb", "role": "0"},
+            {"device": "/dev/sdc", "role": "1"},
+        ],
+    }
+
+    def test_rejects_unknown_array(self):
+        with mock.patch.object(raid_mutate.monitor, "get_raid_arrays", return_value=[]):
+            result = raid_mutate.delete_raid_array("md0")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "raid.unknown_array")
+
+    def test_rejects_a_still_mounted_array(self):
+        with mock.patch.object(raid_mutate.monitor, "get_raid_arrays", return_value=[self.ARR]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=[{"name": "md0", "mounted": True}]):
+            result = raid_mutate.delete_raid_array("md0")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "raid.still_mounted")
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value=None)
+    def test_reports_missing_mdadm_tool(self, mock_find):
+        with mock.patch.object(raid_mutate.monitor, "get_raid_arrays", return_value=[self.ARR]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=[{"name": "md0", "mounted": False}]):
+            result = raid_mutate.delete_raid_array("md0")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.tool_missing")
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_stops_array_and_zeroes_every_member(self, mock_run, mock_find):
+        mock_run.return_value = (0, "", "")
+        with mock.patch.object(raid_mutate.monitor, "get_raid_arrays", return_value=[self.ARR]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=[{"name": "md0", "mounted": False}]), \
+             mock.patch.object(raid_mutate.disk_labels, "set_label") as mock_set_label:
+            result = raid_mutate.delete_raid_array("md0")
+        self.assertTrue(result["success"])
+        self.assertEqual(result["members"], ["/dev/sdb", "/dev/sdc"])
+        mock_run.assert_any_call(["/sbin/mdadm", "--stop", "/dev/md0"], timeout=30)
+        mock_run.assert_any_call(["/sbin/mdadm", "--zero-superblock", "/dev/sdb"], timeout=30)
+        mock_run.assert_any_call(["/sbin/mdadm", "--zero-superblock", "/dev/sdc"], timeout=30)
+        mock_set_label.assert_called_once_with("md0", "")
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_surfaces_stop_failure(self, mock_run, mock_find):
+        mock_run.return_value = (1, "", "mdadm: Cannot get exclusive access to /dev/md0")
+        with mock.patch.object(raid_mutate.monitor, "get_raid_arrays", return_value=[self.ARR]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=[{"name": "md0", "mounted": False}]):
+            result = raid_mutate.delete_raid_array("md0")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "system.command_failed")
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_a_single_member_zero_superblock_failure_is_a_warning_not_a_failure(self, mock_run, mock_find):
+        # --stop already succeeded (the part that actually matters) -
+        # one member's zero-superblock failing must not make the whole
+        # operation look like it failed.
+        mock_run.side_effect = [(0, "", ""), (1, "", "mdadm: Unrecognised md component device"), (0, "", "")]
+        with mock.patch.object(raid_mutate.monitor, "get_raid_arrays", return_value=[self.ARR]), \
+             mock.patch.object(raid_mutate.disk_mutate, "list_manageable_raid_arrays", return_value=[{"name": "md0", "mounted": False}]), \
+             mock.patch.object(raid_mutate.disk_labels, "set_label"):
+            result = raid_mutate.delete_raid_array("md0")
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertEqual(result["warnings"][0]["code"], "raid.zero_superblock_failed")
+        self.assertEqual(result["warnings"][0]["context"]["device"], "/dev/sdb")
+
+
 if __name__ == "__main__":
     unittest.main()

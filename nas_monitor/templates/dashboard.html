@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>NAS monitor</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <link rel="stylesheet" href="{{ static_url('style.css') }}">
   <script>
     // Runs before first paint so there's no flash of the wrong theme.
     (function () {
@@ -644,9 +644,9 @@
     </article>
   </template>
 
-  <script src="{{ url_for('static', filename='i18n/pl.js') }}"></script>
-  <script src="{{ url_for('static', filename='i18n/en.js') }}"></script>
-  <script src="{{ url_for('static', filename='i18n/index.js') }}"></script>
-  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+  <script src="{{ static_url('i18n/pl.js') }}"></script>
+  <script src="{{ static_url('i18n/en.js') }}"></script>
+  <script src="{{ static_url('i18n/index.js') }}"></script>
+  <script src="{{ static_url('dashboard.js') }}"></script>
 </body>
 </html>
