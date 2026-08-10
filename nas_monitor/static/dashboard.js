@@ -275,14 +275,19 @@ async function openAccountDialog() {
     // forms below will just surface their own errors on submit
   }
   accountDialog.showModal();
-  // Both app and system update checks run on their own periodic timer
-  // instead (his explicit ask - previously the app check re-ran every
-  // time this dialog opened, which read as redundant/noisy alongside
-  // the system check's own periodic behavior; unified to the same
-  // model). Opening the dialog just shows whatever the last background
-  // check found for each.
+  // Real report: removing the manual "check" buttons on the
+  // assumption that opening this dialog already re-checked (his
+  // original reasoning for wanting the buttons gone) broke that
+  // assumption too when the periodic-timer-only redesign landed -
+  // left with neither a button nor an on-open check. Shows whatever
+  // the last background check found immediately (avoids a blank
+  // flash), then fires a fresh check for both right away too - the
+  // background timer stays as well, so the statusbar keeps
+  // itself current even when this dialog is never opened.
   if (lastUpdateCheck) renderUpdateInfo(lastUpdateCheck);
   if (lastSystemUpdateCheck) renderSystemUpdateInfo(lastSystemUpdateCheck);
+  checkForUpdate();
+  checkForSystemUpdate();
 }
 
 accountToggleBtn.addEventListener("click", openAccountDialog);
@@ -3707,7 +3712,7 @@ async function loadStatusbar() {
 
 // --------------------------------------------------------------------
 // Update check/apply - version shown in the statusbar, checked once on
-// load and then on the same 30-min background timer as the system
+// load and then on the same background timer as the system
 // update check below (no manual "check" button anymore - his explicit
 // ask, both used to have one and it read as redundant with the
 // automatic checking). Each check does a real `git fetch` against
@@ -3958,10 +3963,14 @@ if (disksTabPanel) {
 // unified to the same model (his explicit ask - the app check used to
 // also re-run every time the account dialog opened, on top of this
 // same interval, which read as redundant and noisy alongside the
-// system check's already-periodic behavior). 30 min: frequent enough
-// that the statusbar is never stale for long, infrequent enough not
-// to hammer GitHub/apt for no reason - neither changes that often.
-const UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+// system check's already-periodic behavior). Opening the account
+// dialog also fires an immediate fresh check on top of this (see
+// openAccountDialog) - this interval only governs how often the
+// statusbar refreshes itself in the background, unattended. 6h (his
+// explicit preference, revised from an initial 30 min): neither GitHub
+// releases nor apt's package index change often enough to justify
+// checking more frequently than that just to keep the statusbar current.
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 checkForUpdate();
 setInterval(checkForUpdate, UPDATE_CHECK_INTERVAL_MS);
 checkForSystemUpdate();
