@@ -533,6 +533,7 @@ class TestGetFilesystemUsage(unittest.TestCase):
         self.assertTrue(result["mounted"])
         self.assertEqual(result["mountpoints"], ["/srv"])
         self.assertEqual(result["total_bytes"], 4000000000000)
+        self.assertEqual(result["fstype"], "ext4")
         self.assertEqual(result["used_bytes"], 3000000000000)
         self.assertEqual(result["available_bytes"], 1000000000000)
 
@@ -627,6 +628,7 @@ class TestGetFilesystemUsage(unittest.TestCase):
     def test_missing_lsblk_reports_not_mounted_not_raises(self, mock_find):
         result = monitor.get_filesystem_usage("/dev/sda")
         self.assertFalse(result["mounted"])
+        self.assertIsNone(result["fstype"])
 
     @mock.patch("nas_monitor.monitor._find_binary", return_value="/usr/bin/lsblk")
     @mock.patch("nas_monitor.monitor._run", return_value=(1, "", "device not found"))

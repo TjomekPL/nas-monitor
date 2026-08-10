@@ -140,6 +140,7 @@ window.NAS_I18N.en = {
       device: "Device",
       disks: "Disks",
       progress: "Progress",
+      filesystem: "Filesystem",
     },
     diskCard: {
       size: "Size",

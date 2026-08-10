@@ -466,7 +466,16 @@ function renderRaid(arrays) {
     const progressRow = node.querySelector(".progress-row");
     if (arr.progress_percent !== null && arr.progress_percent !== undefined) {
       progressRow.classList.add("visible");
+      node.querySelector(".progress-label").textContent = t("ui.raidCard.progress");
       node.querySelector(".progress").textContent = `${arr.progress_action} ${arr.progress_percent.toFixed(1)}%`;
+    } else if (arr.usage && arr.usage.mounted && arr.usage.fstype) {
+      // Nothing actually syncing right now - this slot would otherwise
+      // just sit empty (his explicit ask), so it shows the array's
+      // filesystem type instead, which isn't shown anywhere else on
+      // this card (only in the separate management table below).
+      progressRow.classList.add("visible");
+      node.querySelector(".progress-label").textContent = t("ui.raidCard.filesystem");
+      node.querySelector(".progress").textContent = arr.usage.fstype;
     }
 
     if (arr.error) {
@@ -785,6 +794,7 @@ function renderRawDisks(disks) {
     const row = document.createElement("tr");
     const isMember = d.is_raid_member && d.raid_array && arrayNames.has(d.raid_array);
     if (isMember) row.className = "disk-row-member";
+    else if (d.transport === "raid") row.className = "disk-row-array";
     row.innerHTML = `
       <td class="mono">${d.name}</td>
       <td>${d.label || ""}</td>

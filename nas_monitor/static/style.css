@@ -611,6 +611,12 @@ h2 {
   left: 12px;
   color: var(--text-muted);
 }
+.disk-row-array {
+  background: var(--table-row-highlight, rgba(127, 127, 127, 0.06));
+}
+.disk-row-array td:first-child {
+  font-weight: 700;
+}
 .share-group-table {
   table-layout: fixed;
 }
@@ -681,6 +687,7 @@ h2 {
   border-radius: 999px;
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 /* Column widths that don't visibly reflow as content changes - e.g.

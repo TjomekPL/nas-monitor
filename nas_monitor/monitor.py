@@ -70,6 +70,7 @@ def get_filesystem_usage(device_path: str) -> dict[str, Any]:
         "total_bytes": None,
         "used_bytes": None,
         "available_bytes": None,
+        "fstype": None,
     }
 
     lsblk_path = _find_binary("lsblk")
@@ -114,6 +115,14 @@ def get_filesystem_usage(device_path: str) -> dict[str, Any]:
     result["total_bytes"] = total
     result["used_bytes"] = used
     result["available_bytes"] = avail
+    # First match's fstype is enough here - in practice this device
+    # (a single disk or a whole RAID array) has exactly one real
+    # filesystem on it; a multi-partition disk with several distinct
+    # filesystems is already an edge case this combined total/used
+    # figure above doesn't try to represent per-filesystem either.
+    # Only consumer today: the RAID card's idle "Progress" slot, shown
+    # once there's nothing actually syncing.
+    result["fstype"] = matches[0].get("fstype")
     return result
 
 
@@ -575,7 +584,7 @@ def get_full_status() -> dict[str, Any]:
             # every other array and disk in the response - see the
             # matching comment on the disk loop below for why this
             # matters more than it looks like it should.
-            arr["usage"] = {"mounted": False, "mountpoints": [], "total_bytes": None, "used_bytes": None, "available_bytes": None}
+            arr["usage"] = {"mounted": False, "mountpoints": [], "total_bytes": None, "used_bytes": None, "available_bytes": None, "fstype": None}
             arr["error"] = arr.get("error") or f"usage lookup failed: {exc}"
 
     raid_member_names = {
