@@ -286,18 +286,17 @@ def set_session_duration_minutes(minutes: int | None) -> dict[str, Any]:
     return result
 
 
-# Same "increase by 10%, then +/-20% from that" he described for the
-# browser zoom he'd been manually using anyway - so 90/110/130 rather
-# than a free-form number, kept to the same three deliberate presets
-# instead of open-ended input. 110 is the baseline/default whenever
-# nothing's been chosen yet.
-VALID_UI_SCALES = (90, 110, 130)
+# Round, intuitive numbers (his correction after the first pass used
+# 90/110/130 purely as an arbitrary reference point) - 80/100/120, with
+# 100 meaning the browser's own true, unscaled default (no CSS zoom
+# applied at all), not an app-side boost on top of it.
+VALID_UI_SCALES = (80, 100, 120)
 
 
 def get_ui_scale() -> int:
     data = state_store.load(CREDENTIALS_FILE, default=None)
     scale = data.get("ui_scale") if data else None
-    return scale if scale in VALID_UI_SCALES else 110
+    return scale if scale in VALID_UI_SCALES else 100
 
 
 def set_ui_scale(scale: Any) -> dict[str, Any]:

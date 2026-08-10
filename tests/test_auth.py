@@ -164,27 +164,27 @@ class TestSessionDuration(AuthTestCase):
 
 
 class TestUiScale(AuthTestCase):
-    def test_default_is_110(self):
+    def test_default_is_100(self):
         auth.set_credentials("admin", "correcthorse9")
-        self.assertEqual(auth.get_ui_scale(), 110)
+        self.assertEqual(auth.get_ui_scale(), 100)
 
-    def test_default_is_110_even_before_credentials_exist(self):
-        self.assertEqual(auth.get_ui_scale(), 110)
+    def test_default_is_100_even_before_credentials_exist(self):
+        self.assertEqual(auth.get_ui_scale(), 100)
 
     def test_set_and_get(self):
         auth.set_credentials("admin", "correcthorse9")
-        result = auth.set_ui_scale(90)
+        result = auth.set_ui_scale(80)
         self.assertTrue(result["success"])
-        self.assertEqual(auth.get_ui_scale(), 90)
+        self.assertEqual(auth.get_ui_scale(), 80)
 
-    def test_set_130(self):
+    def test_set_120(self):
         auth.set_credentials("admin", "correcthorse9")
-        auth.set_ui_scale(130)
-        self.assertEqual(auth.get_ui_scale(), 130)
+        auth.set_ui_scale(120)
+        self.assertEqual(auth.get_ui_scale(), 120)
 
     def test_rejects_values_outside_the_three_presets(self):
         auth.set_credentials("admin", "correcthorse9")
-        for bad in [0, 100, 120, 150, -90]:
+        for bad in [0, 90, 110, 150, -80]:
             result = auth.set_ui_scale(bad)
             self.assertFalse(result["success"])
             self.assertEqual(result["error_code"], "auth.invalid_ui_scale")
@@ -196,7 +196,7 @@ class TestUiScale(AuthTestCase):
         self.assertEqual(result["error_code"], "auth.invalid_ui_scale")
 
     def test_requires_credentials_configured_first(self):
-        result = auth.set_ui_scale(90)
+        result = auth.set_ui_scale(80)
         self.assertFalse(result["success"])
         self.assertEqual(result["error_code"], "auth.not_configured")
 

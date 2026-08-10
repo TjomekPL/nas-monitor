@@ -235,10 +235,10 @@ const logoutBtn = document.getElementById("logout-btn");
 
 function applyUiScale(scale) {
   const s = String(scale);
-  if (s === "90" || s === "130") {
+  if (s === "80" || s === "120") {
     document.documentElement.setAttribute("data-ui-scale", s);
   } else {
-    document.documentElement.removeAttribute("data-ui-scale"); // 110 = the CSS default, no override needed
+    document.documentElement.removeAttribute("data-ui-scale"); // 100 = truly native, no zoom rule applies at all
   }
   localStorage.setItem("nas-monitor-ui-scale", s);
 }
@@ -267,7 +267,7 @@ async function openAccountDialog() {
     // same as session duration) - the head-script/localStorage copy is
     // only a same-browser cache to avoid a flash of the wrong size
     // before this fetch can complete. Reconcile the two here.
-    const uiScale = data.ui_scale || 110;
+    const uiScale = data.ui_scale || 100;
     uiScaleSelect.value = String(uiScale);
     applyUiScale(uiScale);
   } catch (err) {
@@ -276,7 +276,12 @@ async function openAccountDialog() {
   }
   accountDialog.showModal();
   checkForUpdate();
-  checkForSystemUpdate();
+  // System update check runs on its own periodic timer instead (his
+  // explicit ask: it was re-running apt-get update - a real network +
+  // disk-I/O call - every single time this dialog opened, not just
+  // once in a while). Opening the dialog just shows whatever the last
+  // background check found.
+  if (lastSystemUpdateCheck) renderSystemUpdateInfo(lastSystemUpdateCheck);
 }
 
 accountToggleBtn.addEventListener("click", openAccountDialog);
@@ -3650,6 +3655,7 @@ const systemUpdateCheckBtn = document.getElementById("system-update-check-btn");
 const systemUpdateApplyBtn = document.getElementById("system-update-apply-btn");
 const systemUpdateLogDetails = document.getElementById("system-update-log-details");
 const systemUpdateLogEl = document.getElementById("system-update-log");
+const statusbarSystemUpdateBadge = document.getElementById("statusbar-system-update-badge");
 
 let lastSystemUpdateCheck = null;
 let systemUpdatePollTimer = null;
@@ -3660,6 +3666,7 @@ function renderSystemUpdateInfo(data) {
     systemUpdateStatusEl.style.display = "none";
     systemUpdateErrorEl.textContent = window.i18n.errorText(data.error_code, data.error_context);
     systemUpdateApplyBtn.style.display = "none";
+    statusbarSystemUpdateBadge.style.display = "none";
     return;
   }
   systemUpdateErrorEl.textContent = "";
@@ -3672,11 +3679,19 @@ function renderSystemUpdateInfo(data) {
     systemUpdateApplyBtn.style.display = "inline-block";
     systemUpdateApplyBtn.textContent = t("ui.accountDialog.applySystemUpdateBtn", { count: data.count });
     systemUpdateApplyBtn.disabled = false;
+    // Same button/column the app version already lives in (his
+    // explicit ask: no separate statusbar segment just for this) -
+    // just another small pill alongside the existing "aktualizacja"
+    // one, so both an app update and a system update can be visible
+    // there at once without either one hiding the other.
+    statusbarSystemUpdateBadge.style.display = "inline-block";
+    statusbarSystemUpdateBadge.textContent = t("ui.statusbar.systemUpdatesAvailable", { count: data.count });
   } else {
     systemUpdateStatusEl.textContent = data.reboot_required
       ? t("ui.accountDialog.systemUpToDateRebootRequired")
       : t("ui.accountDialog.systemUpToDate");
     systemUpdateApplyBtn.style.display = "none";
+    statusbarSystemUpdateBadge.style.display = "none";
   }
 }
 
@@ -3774,3 +3789,13 @@ if (disksTabPanel) {
   wireSectionDragging(disksTabPanel, "disks-tab-sections");
   applySavedSectionOrder(disksTabPanel, "disks-tab-sections");
 }
+
+// System (apt) updates check on its own periodic timer - apt-get
+// update is a real network + disk-I/O call, not something to repeat
+// every time the account dialog happens to be opened (his explicit
+// ask). 30 min: frequent enough that the statusbar badge is never
+// stale for long, infrequent enough not to hammer apt for no reason -
+// package indexes don't meaningfully change more often than that.
+const SYSTEM_UPDATE_CHECK_INTERVAL_MS = 30 * 60 * 1000;
+checkForSystemUpdate();
+setInterval(checkForSystemUpdate, SYSTEM_UPDATE_CHECK_INTERVAL_MS);

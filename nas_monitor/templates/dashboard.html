@@ -20,7 +20,7 @@
       // that fetch can complete; dashboard.js reconciles the two once
       // /api/auth/status responds.
       var scale = localStorage.getItem("nas-monitor-ui-scale");
-      if (scale === "90" || scale === "130") document.documentElement.setAttribute("data-ui-scale", scale);
+      if (scale === "80" || scale === "120") document.documentElement.setAttribute("data-ui-scale", scale);
     })();
   </script>
 </head>
@@ -200,6 +200,7 @@
       <button type="button" class="statusbar-seg statusbar-version" id="statusbar-version-btn" title="">
         <span id="statusbar-version-val" class="mono">&ndash;</span>
         <span class="pill pill-warn" id="statusbar-update-badge" style="display:none;" data-i18n="ui.statusbar.updateAvailable">aktualizacja</span>
+        <span class="pill pill-warn" id="statusbar-system-update-badge" style="display:none;"></span>
       </button>
       <div class="statusbar-seg statusbar-live">
         <span class="dot" id="statusbar-dot"></span>
@@ -507,36 +508,38 @@
       <label>
         <span class="label-text" data-i18n="ui.accountDialog.uiScaleLabel">Powiększenie interfejsu</span>
         <select id="ui-scale-select">
-          <option value="90" data-i18n="ui.accountDialog.uiScale90">90%</option>
-          <option value="110" data-i18n="ui.accountDialog.uiScale110">110% (domyślnie)</option>
-          <option value="130" data-i18n="ui.accountDialog.uiScale130">130%</option>
+          <option value="80" data-i18n="ui.accountDialog.uiScale80">80%</option>
+          <option value="100" data-i18n="ui.accountDialog.uiScale100">100% (domyślnie)</option>
+          <option value="120" data-i18n="ui.accountDialog.uiScale120">120%</option>
         </select>
       </label>
       <p class="form-error" id="ui-scale-error"></p>
     </form>
 
-    <div class="account-section" id="update-section">
-      <h4 data-i18n="ui.accountDialog.updateHeading">Wersja</h4>
-      <p class="field-hint" id="update-current-version">&ndash;</p>
-      <p class="field-hint" id="update-status" style="display:none;"></p>
-      <p class="form-error" id="update-error"></p>
-      <div class="dialog-actions">
-        <button type="button" id="update-check-btn" class="link-btn" data-i18n="ui.accountDialog.checkUpdateBtn">Sprawdź aktualizacje</button>
-        <button type="button" id="update-apply-btn" class="btn-primary" style="display:none;"></button>
+    <div class="account-updates-row">
+      <div class="account-section" id="update-section">
+        <h4 data-i18n="ui.accountDialog.updateHeading">Wersja</h4>
+        <p class="field-hint" id="update-current-version">&ndash;</p>
+        <p class="field-hint" id="update-status" style="display:none;"></p>
+        <p class="form-error" id="update-error"></p>
+        <div class="dialog-actions">
+          <button type="button" id="update-check-btn" class="link-btn" data-i18n="ui.accountDialog.checkUpdateBtn">Sprawdź aktualizacje</button>
+          <button type="button" id="update-apply-btn" class="btn-primary" style="display:none;"></button>
+        </div>
       </div>
-    </div>
 
-    <div class="account-section" id="system-update-section">
-      <h4 data-i18n="ui.accountDialog.systemUpdateHeading">Aktualizacje systemu</h4>
-      <p class="field-hint" id="system-update-status" style="display:none;"></p>
-      <p class="form-error" id="system-update-error"></p>
-      <details id="system-update-log-details" style="display:none;">
-        <summary data-i18n="ui.accountDialog.systemUpdateLogSummary">Log</summary>
-        <pre id="system-update-log" class="mono"></pre>
-      </details>
-      <div class="dialog-actions">
-        <button type="button" id="system-update-check-btn" class="link-btn" data-i18n="ui.accountDialog.checkSystemUpdateBtn">Sprawdź aktualizacje systemu</button>
-        <button type="button" id="system-update-apply-btn" class="btn-primary" style="display:none;"></button>
+      <div class="account-section" id="system-update-section">
+        <h4 data-i18n="ui.accountDialog.systemUpdateHeading">Aktualizacje systemu</h4>
+        <p class="field-hint" id="system-update-status" style="display:none;"></p>
+        <p class="form-error" id="system-update-error"></p>
+        <details id="system-update-log-details" style="display:none;">
+          <summary data-i18n="ui.accountDialog.systemUpdateLogSummary">Log</summary>
+          <pre id="system-update-log" class="mono"></pre>
+        </details>
+        <div class="dialog-actions">
+          <button type="button" id="system-update-check-btn" class="link-btn" data-i18n="ui.accountDialog.checkSystemUpdateBtn">Sprawdź aktualizacje systemu</button>
+          <button type="button" id="system-update-apply-btn" class="btn-primary" style="display:none;"></button>
+        </div>
       </div>
     </div>
 
