@@ -18,7 +18,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth, system_stats, update_manager, disk_mutate, layout, raid_mutate
+from nas_monitor import monitor, users, smb, smb_shares, ssh_keys, network, network_mutate, oplog, auth, system_stats, update_manager, disk_mutate, layout, raid_mutate, system_update
 
 # Every account that gets SMB access lands here by default - removable
 # afterward like any other group (just uncheck it in the edit form).
@@ -139,6 +139,7 @@ def api_auth_status():
             "authenticated": bool(session.get("authenticated")),
             "username": auth.get_username(),
             "session_duration_minutes": auth.get_session_duration_minutes(),
+            "ui_scale": auth.get_ui_scale(),
         }
     )
 
@@ -167,6 +168,17 @@ def api_auth_session_duration():
     if not result["success"]:
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     return jsonify({"success": True, "session_duration_minutes": result["session_duration_minutes"]})
+
+
+@app.route("/api/auth/ui-scale", methods=["POST"])
+def api_auth_ui_scale():
+    data = request.get_json(force=True, silent=True) or {}
+    scale = data.get("scale")
+
+    result = auth.set_ui_scale(scale)
+    if not result["success"]:
+        return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
+    return jsonify({"success": True, "ui_scale": result["ui_scale"]})
 
 
 @app.route("/")
@@ -453,6 +465,26 @@ def api_update_apply():
         return jsonify(result), 400
     oplog.log_event("update", "apply", "success", params={"version": result.get("version") or "?"})
     return jsonify(result)
+
+
+@app.route("/api/system-update/check")
+def api_system_update_check():
+    return jsonify(system_update.check_for_updates())
+
+
+@app.route("/api/system-update/apply", methods=["POST"])
+def api_system_update_apply():
+    result = system_update.apply_updates()
+    if not result.get("success"):
+        oplog.log_event("system_update", "apply", "failure", params={})
+        return jsonify(result), 400
+    oplog.log_event("system_update", "apply", "success", params={})
+    return jsonify(result)
+
+
+@app.route("/api/system-update/progress")
+def api_system_update_progress():
+    return jsonify(system_update.get_progress())
 
 
 def _general_groups():

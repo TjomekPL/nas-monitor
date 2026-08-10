@@ -229,12 +229,25 @@ const sessionDurationSelect = document.getElementById("session-duration-select")
 const sessionDurationCustomLabel = document.getElementById("session-duration-custom-label");
 const sessionDurationCustomInput = document.getElementById("session-duration-custom");
 const sessionDurationError = document.getElementById("session-duration-error");
+const uiScaleSelect = document.getElementById("ui-scale-select");
+const uiScaleError = document.getElementById("ui-scale-error");
 const logoutBtn = document.getElementById("logout-btn");
+
+function applyUiScale(scale) {
+  const s = String(scale);
+  if (s === "90" || s === "130") {
+    document.documentElement.setAttribute("data-ui-scale", s);
+  } else {
+    document.documentElement.removeAttribute("data-ui-scale"); // 110 = the CSS default, no override needed
+  }
+  localStorage.setItem("nas-monitor-ui-scale", s);
+}
 
 async function openAccountDialog() {
   changePasswordForm.reset();
   changePasswordError.textContent = "";
   sessionDurationError.textContent = "";
+  uiScaleError.textContent = "";
   try {
     const res = await nativeFetch("/api/auth/status");
     const data = await res.json();
@@ -250,12 +263,20 @@ async function openAccountDialog() {
       sessionDurationCustomInput.value = Math.round(minutes / 60);
     }
     sessionDurationCustomLabel.style.display = sessionDurationSelect.value === "custom" ? "block" : "none";
+    // The server is authoritative (persists across browsers/devices,
+    // same as session duration) - the head-script/localStorage copy is
+    // only a same-browser cache to avoid a flash of the wrong size
+    // before this fetch can complete. Reconcile the two here.
+    const uiScale = data.ui_scale || 110;
+    uiScaleSelect.value = String(uiScale);
+    applyUiScale(uiScale);
   } catch (err) {
     // status fetch failing shouldn't block opening the dialog - the
     // forms below will just surface their own errors on submit
   }
   accountDialog.showModal();
   checkForUpdate();
+  checkForSystemUpdate();
 }
 
 accountToggleBtn.addEventListener("click", openAccountDialog);
@@ -263,6 +284,25 @@ accountDialogClose.addEventListener("click", () => accountDialog.close());
 
 sessionDurationSelect.addEventListener("change", () => {
   sessionDurationCustomLabel.style.display = sessionDurationSelect.value === "custom" ? "block" : "none";
+});
+
+uiScaleSelect.addEventListener("change", async () => {
+  uiScaleError.textContent = "";
+  const scale = uiScaleSelect.value;
+  applyUiScale(scale); // immediate, same-tab feedback - no reason to wait on the network round trip
+  try {
+    const res = await fetch("/api/auth/ui-scale", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scale: parseInt(scale, 10) }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      uiScaleError.textContent = apiErrorMessage(data, res);
+    }
+  } catch (err) {
+    uiScaleError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
+  }
 });
 
 changePasswordForm.addEventListener("submit", async (ev) => {
@@ -619,6 +659,61 @@ function wireCardDragging(container, section) {
     const order = Array.from(container.querySelectorAll(".card")).map((el) => el.dataset.cardId);
     saveCardOrder(section, order);
   });
+}
+
+// Same drag-and-drop pattern as the card reordering above, but for
+// whole <section> blocks within a tab (his explicit ask: the "Dyski i
+// macierze" tab's two sections - the RAID cards and the management
+// table - should be reorderable relative to each other too, not just
+// cards within one of them). Reuses the exact same generic
+// save/loadCardOrder + /api/layout/<section> plumbing - a "section" to
+// that backend is just an arbitrary string key, it was never
+// specifically about cards.
+let draggedSection = null;
+
+function wireSectionDragging(container, layoutKey) {
+  if (container.dataset.dragWired) return;
+  container.dataset.dragWired = "true";
+
+  container.addEventListener("dragstart", (ev) => {
+    const section = ev.target.closest("section[data-section-id]");
+    if (!section || section.parentElement !== container) return;
+    draggedSection = section;
+    section.classList.add("dragging");
+    ev.dataTransfer.effectAllowed = "move";
+  });
+
+  container.addEventListener("dragend", () => {
+    if (draggedSection) draggedSection.classList.remove("dragging");
+    draggedSection = null;
+  });
+
+  container.addEventListener("dragover", (ev) => {
+    if (!draggedSection) return;
+    ev.preventDefault();
+    const target = ev.target.closest("section[data-section-id]");
+    if (!target || target === draggedSection || target.parentElement !== container) return;
+    const rect = target.getBoundingClientRect();
+    const before = (ev.clientY - rect.top) < rect.height / 2;
+    container.insertBefore(draggedSection, before ? target : target.nextSibling);
+  });
+
+  container.addEventListener("drop", (ev) => {
+    if (!draggedSection) return;
+    ev.preventDefault();
+    const order = Array.from(container.querySelectorAll("section[data-section-id]")).map((el) => el.dataset.sectionId);
+    saveCardOrder(layoutKey, order);
+  });
+}
+
+async function applySavedSectionOrder(container, layoutKey) {
+  await loadCardOrder(layoutKey);
+  const saved = cardOrderCache[layoutKey];
+  if (!saved || !saved.length) return; // no saved preference yet - the HTML's own order (table first) is the default
+  for (const id of saved) {
+    const el = container.querySelector(`section[data-section-id="${id}"]`);
+    if (el) container.appendChild(el); // moves it to the end, in saved order
+  }
 }
 
 async function unmountDisk(disk) {
@@ -3540,6 +3635,118 @@ updateCheckBtn.addEventListener("click", checkForUpdate);
 updateApplyBtn.addEventListener("click", applyUpdate);
 statusbarVersionBtn.addEventListener("click", openAccountDialog);
 
+// --------------------------------------------------------------------
+// System (apt) updates - the OS-level counterpart to the app-update
+// block above. Same overall shape (check button surfaces a count and
+// an apply button; apply hands off to a detached background process),
+// but progress is polled via a log-tail endpoint instead of "wait for
+// the service to come back" - apt-get upgrade doesn't restart
+// nas-monitor's own service, so that signal doesn't apply here.
+// --------------------------------------------------------------------
+
+const systemUpdateStatusEl = document.getElementById("system-update-status");
+const systemUpdateErrorEl = document.getElementById("system-update-error");
+const systemUpdateCheckBtn = document.getElementById("system-update-check-btn");
+const systemUpdateApplyBtn = document.getElementById("system-update-apply-btn");
+const systemUpdateLogDetails = document.getElementById("system-update-log-details");
+const systemUpdateLogEl = document.getElementById("system-update-log");
+
+let lastSystemUpdateCheck = null;
+let systemUpdatePollTimer = null;
+
+function renderSystemUpdateInfo(data) {
+  lastSystemUpdateCheck = data;
+  if (data.error_code) {
+    systemUpdateStatusEl.style.display = "none";
+    systemUpdateErrorEl.textContent = window.i18n.errorText(data.error_code, data.error_context);
+    systemUpdateApplyBtn.style.display = "none";
+    return;
+  }
+  systemUpdateErrorEl.textContent = "";
+  systemUpdateStatusEl.style.display = "block";
+
+  if (data.update_available) {
+    let text = t("ui.accountDialog.systemUpdatesAvailable", { count: data.count });
+    if (data.reboot_required) text += " " + t("ui.accountDialog.rebootRequired");
+    systemUpdateStatusEl.textContent = text;
+    systemUpdateApplyBtn.style.display = "inline-block";
+    systemUpdateApplyBtn.textContent = t("ui.accountDialog.applySystemUpdateBtn", { count: data.count });
+    systemUpdateApplyBtn.disabled = false;
+  } else {
+    systemUpdateStatusEl.textContent = data.reboot_required
+      ? t("ui.accountDialog.systemUpToDateRebootRequired")
+      : t("ui.accountDialog.systemUpToDate");
+    systemUpdateApplyBtn.style.display = "none";
+  }
+}
+
+async function checkForSystemUpdate() {
+  systemUpdateStatusEl.style.display = "block";
+  systemUpdateStatusEl.textContent = t("ui.accountDialog.checkingSystemUpdate");
+  systemUpdateErrorEl.textContent = "";
+  systemUpdateApplyBtn.style.display = "none";
+  try {
+    const res = await fetch("/api/system-update/check");
+    const data = await res.json();
+    renderSystemUpdateInfo(data);
+  } catch (err) {
+    systemUpdateStatusEl.style.display = "none";
+    systemUpdateErrorEl.textContent = t("err._unknown");
+  }
+}
+
+function pollSystemUpdateProgress() {
+  systemUpdatePollTimer = setInterval(async () => {
+    try {
+      const res = await fetch("/api/system-update/progress");
+      const data = await res.json();
+      if (data.tail) {
+        systemUpdateLogDetails.style.display = "block";
+        systemUpdateLogEl.textContent = data.tail;
+        systemUpdateLogEl.scrollTop = systemUpdateLogEl.scrollHeight;
+      }
+      if (data.done) {
+        clearInterval(systemUpdatePollTimer);
+        systemUpdatePollTimer = null;
+        systemUpdateStatusEl.textContent = data.reboot_required
+          ? t("ui.accountDialog.systemUpdateDoneRebootRequired")
+          : t("ui.accountDialog.systemUpdateDone");
+        systemUpdateCheckBtn.disabled = false;
+      }
+    } catch (err) {
+      // a transient fetch failure mid-poll just tries again next tick
+    }
+  }, 3000);
+}
+
+async function applySystemUpdate() {
+  if (!(await confirmDialog(t("msg.confirmApplySystemUpdate", { count: (lastSystemUpdateCheck && lastSystemUpdateCheck.count) || 0 }), { danger: true }))) return;
+  systemUpdateApplyBtn.disabled = true;
+  systemUpdateCheckBtn.disabled = true;
+  systemUpdateErrorEl.textContent = "";
+  systemUpdateStatusEl.style.display = "block";
+  systemUpdateStatusEl.textContent = t("ui.accountDialog.applyingSystemUpdate");
+  try {
+    const res = await fetch("/api/system-update/apply", { method: "POST" });
+    const data = await res.json();
+    if (!data.success) {
+      systemUpdateErrorEl.textContent = window.i18n.errorText(data.error_code, data.error_context);
+      systemUpdateApplyBtn.disabled = false;
+      systemUpdateCheckBtn.disabled = false;
+      return;
+    }
+    systemUpdateApplyBtn.style.display = "none";
+    pollSystemUpdateProgress();
+  } catch (err) {
+    systemUpdateErrorEl.textContent = t("err._unknown");
+    systemUpdateApplyBtn.disabled = false;
+    systemUpdateCheckBtn.disabled = false;
+  }
+}
+
+systemUpdateCheckBtn.addEventListener("click", checkForSystemUpdate);
+systemUpdateApplyBtn.addEventListener("click", applySystemUpdate);
+
 // Kick off polling now that everything above is declared.
 loadUsers();
 setInterval(loadUsers, REFRESH_MS);
@@ -3554,3 +3761,16 @@ setInterval(loadRawDisks, REFRESH_MS);
 loadStatusbar();
 setInterval(loadStatusbar, STATUSBAR_REFRESH_MS);
 checkForUpdate();
+
+// Reconcile the UI scale with the server's persisted value once on
+// load - the head-script/localStorage copy only avoids a flash of the
+// wrong size before this can complete (see applyUiScale).
+fetch("/api/auth/status").then((r) => r.json()).then((data) => {
+  if (data && data.ui_scale) applyUiScale(data.ui_scale);
+}).catch(() => {});
+
+const disksTabPanel = document.querySelector('.tab-panel[data-tab="disks"]');
+if (disksTabPanel) {
+  wireSectionDragging(disksTabPanel, "disks-tab-sections");
+  applySavedSectionOrder(disksTabPanel, "disks-tab-sections");
+}

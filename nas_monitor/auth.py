@@ -286,6 +286,40 @@ def set_session_duration_minutes(minutes: int | None) -> dict[str, Any]:
     return result
 
 
+# Same "increase by 10%, then +/-20% from that" he described for the
+# browser zoom he'd been manually using anyway - so 90/110/130 rather
+# than a free-form number, kept to the same three deliberate presets
+# instead of open-ended input. 110 is the baseline/default whenever
+# nothing's been chosen yet.
+VALID_UI_SCALES = (90, 110, 130)
+
+
+def get_ui_scale() -> int:
+    data = state_store.load(CREDENTIALS_FILE, default=None)
+    scale = data.get("ui_scale") if data else None
+    return scale if scale in VALID_UI_SCALES else 110
+
+
+def set_ui_scale(scale: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {"success": False}
+    data = state_store.load(CREDENTIALS_FILE, default=None)
+    if not data:
+        return errors.fail(result, "auth.not_configured")
+    try:
+        scale = int(scale)
+    except (TypeError, ValueError):
+        return errors.fail(result, "auth.invalid_ui_scale")
+    if scale not in VALID_UI_SCALES:
+        return errors.fail(result, "auth.invalid_ui_scale")
+    data["ui_scale"] = scale
+    save_result = state_store.save(CREDENTIALS_FILE, data)
+    if not save_result["success"]:
+        return errors.fail(result, "system.io_failed", path=CREDENTIALS_FILE, detail=save_result.get("error", ""))
+    result["success"] = True
+    result["ui_scale"] = scale
+    return result
+
+
 def get_or_create_secret_key() -> str:
     """The Flask session-signing key - generated once, persisted, and
     reused by every gunicorn worker process (see module docstring).

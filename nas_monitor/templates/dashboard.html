@@ -7,11 +7,20 @@
   <link rel="stylesheet" href="{{ static_url('style.css') }}">
   <script>
     // Runs before first paint so there's no flash of the wrong theme.
+    // Respect an explicit saved choice either way; with none yet
+    // (first login ever, or a browser that's never opened the
+    // dashboard before), default to dark rather than following the OS
+    // preference - same rule the login page already used, now applied
+    // consistently to the dashboard itself too (his explicit ask).
     (function () {
       var saved = localStorage.getItem("nas-monitor-theme");
-      if (saved === "light" || saved === "dark") {
-        document.documentElement.setAttribute("data-theme", saved);
-      }
+      document.documentElement.setAttribute("data-theme", saved === "light" ? "light" : "dark");
+      // UI scale is authoritative server-side (see /api/auth/ui-scale)
+      // - this cached copy only avoids a flash of the wrong size before
+      // that fetch can complete; dashboard.js reconciles the two once
+      // /api/auth/status responds.
+      var scale = localStorage.getItem("nas-monitor-ui-scale");
+      if (scale === "90" || scale === "130") document.documentElement.setAttribute("data-ui-scale", scale);
     })();
   </script>
 </head>
@@ -55,7 +64,8 @@
     </div>
 
     <div class="tab-panel" data-tab="disks">
-      <section>
+      <p class="subtitle" data-i18n="ui.disks.sectionsDragHint">Przeciągnij sekcję, żeby zmienić kolejność - zapamiętywana na stałe.</p>
+      <section data-section-id="raid-arrays" draggable="true">
         <div class="section-head">
           <h2 data-i18n="ui.disks.raidHeading">Macierze RAID</h2>
           <button id="add-raid-btn" class="btn-primary" type="button" data-i18n="ui.raidCreateDialog.addBtn">+ Utwórz macierz</button>
@@ -63,7 +73,7 @@
         <div id="raid-container" class="cards"></div>
       </section>
 
-      <section>
+      <section data-section-id="manage-disks" draggable="true">
         <h2 data-i18n="ui.rawDisks.heading">Zarządzanie dyskami</h2>
         <p class="subtitle" data-i18n="ui.rawDisks.subtitle">Wszystkie dyski poza systemowym - formatuj, czyść, odmontowuj i sprawdzaj ich stan niezależnie od tego, czy są aktualnie w użyciu.</p>
         <div id="raw-disks-container" class="user-table"></div>
@@ -493,6 +503,18 @@
       </div>
     </form>
 
+    <form id="ui-scale-form">
+      <label>
+        <span class="label-text" data-i18n="ui.accountDialog.uiScaleLabel">Powiększenie interfejsu</span>
+        <select id="ui-scale-select">
+          <option value="90" data-i18n="ui.accountDialog.uiScale90">90%</option>
+          <option value="110" data-i18n="ui.accountDialog.uiScale110">110% (domyślnie)</option>
+          <option value="130" data-i18n="ui.accountDialog.uiScale130">130%</option>
+        </select>
+      </label>
+      <p class="form-error" id="ui-scale-error"></p>
+    </form>
+
     <div class="account-section" id="update-section">
       <h4 data-i18n="ui.accountDialog.updateHeading">Wersja</h4>
       <p class="field-hint" id="update-current-version">&ndash;</p>
@@ -501,6 +523,20 @@
       <div class="dialog-actions">
         <button type="button" id="update-check-btn" class="link-btn" data-i18n="ui.accountDialog.checkUpdateBtn">Sprawdź aktualizacje</button>
         <button type="button" id="update-apply-btn" class="btn-primary" style="display:none;"></button>
+      </div>
+    </div>
+
+    <div class="account-section" id="system-update-section">
+      <h4 data-i18n="ui.accountDialog.systemUpdateHeading">Aktualizacje systemu</h4>
+      <p class="field-hint" id="system-update-status" style="display:none;"></p>
+      <p class="form-error" id="system-update-error"></p>
+      <details id="system-update-log-details" style="display:none;">
+        <summary data-i18n="ui.accountDialog.systemUpdateLogSummary">Log</summary>
+        <pre id="system-update-log" class="mono"></pre>
+      </details>
+      <div class="dialog-actions">
+        <button type="button" id="system-update-check-btn" class="link-btn" data-i18n="ui.accountDialog.checkSystemUpdateBtn">Sprawdź aktualizacje systemu</button>
+        <button type="button" id="system-update-apply-btn" class="btn-primary" style="display:none;"></button>
       </div>
     </div>
 

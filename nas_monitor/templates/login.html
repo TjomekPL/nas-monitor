@@ -13,6 +13,8 @@
       // dark rather than following the OS preference - his call for the
       // login page specifically.
       document.documentElement.setAttribute("data-theme", saved === "light" ? "light" : "dark");
+      var scale = localStorage.getItem("nas-monitor-ui-scale");
+      if (scale === "90" || scale === "130") document.documentElement.setAttribute("data-ui-scale", scale);
     })();
   </script>
 </head>

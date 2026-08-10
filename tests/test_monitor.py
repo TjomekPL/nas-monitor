@@ -747,6 +747,23 @@ class TestGetFullStatusVisibility(unittest.TestCase):
         self.assertTrue(by_name["sda"]["is_boot_disk"])
         self.assertFalse(by_name["sdb"]["is_boot_disk"])
 
+    def test_a_nested_array_does_not_get_its_own_card_alongside_its_parent(self):
+        # His real report: two RAID0 arrays mirrored into a RAID1 on
+        # top showed as THREE separate cards (both components plus the
+        # actual result) instead of just the one that matters - the
+        # parent's own card already represents that storage, exactly
+        # the same reasoning that already excluded member DISKS.
+        raid = [
+            {"name": "md0", "path": "/dev/md0", "devices": [{"device": "/dev/sdb"}, {"device": "/dev/sdc"}]},
+            {"name": "md1", "path": "/dev/md1", "devices": [{"device": "/dev/sdd"}, {"device": "/dev/sde"}]},
+            {"name": "md2", "path": "/dev/md2", "devices": [{"device": "/dev/md0"}, {"device": "/dev/md1"}]},
+        ]
+        with mock.patch("nas_monitor.monitor.list_disks", return_value=[]), \
+             mock.patch("nas_monitor.monitor.get_raid_arrays", return_value=raid), \
+             mock.patch("nas_monitor.monitor.get_filesystem_usage", return_value={"mounted": False}):
+            status = monitor.get_full_status()
+        self.assertEqual([a["name"] for a in status["raid"]], ["md2"])
+
 
 if __name__ == "__main__":
     unittest.main()

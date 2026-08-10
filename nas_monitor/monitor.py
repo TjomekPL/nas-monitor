@@ -593,6 +593,15 @@ def get_full_status() -> dict[str, Any]:
         for dev in arr.get("devices", [])
         if dev.get("device")
     }
+    # A nested array (itself a member of a parent array - real case
+    # now that nested RAID is supported, e.g. two RAID0s mirrored into
+    # a RAID1 on top) is represented by its parent's own card already
+    # - showing md0, md1, AND md2 as three separate cards for what is
+    # really one logical volume was a real report (his explicit ask,
+    # the same complaint that already applied to member DISKS before
+    # nested arrays existed at all). raid_member_names already covers
+    # /dev/mdN paths exactly like physical disk paths - reused as-is.
+    raid = [arr for arr in raid if arr.get("name") not in raid_member_names]
     boot_disk = _boot_disk_name()
 
     # A disk shows here only once it means something: it has a real,

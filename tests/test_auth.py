@@ -163,6 +163,44 @@ class TestSessionDuration(AuthTestCase):
         self.assertEqual(result["error_code"], "auth.not_configured")
 
 
+class TestUiScale(AuthTestCase):
+    def test_default_is_110(self):
+        auth.set_credentials("admin", "correcthorse9")
+        self.assertEqual(auth.get_ui_scale(), 110)
+
+    def test_default_is_110_even_before_credentials_exist(self):
+        self.assertEqual(auth.get_ui_scale(), 110)
+
+    def test_set_and_get(self):
+        auth.set_credentials("admin", "correcthorse9")
+        result = auth.set_ui_scale(90)
+        self.assertTrue(result["success"])
+        self.assertEqual(auth.get_ui_scale(), 90)
+
+    def test_set_130(self):
+        auth.set_credentials("admin", "correcthorse9")
+        auth.set_ui_scale(130)
+        self.assertEqual(auth.get_ui_scale(), 130)
+
+    def test_rejects_values_outside_the_three_presets(self):
+        auth.set_credentials("admin", "correcthorse9")
+        for bad in [0, 100, 120, 150, -90]:
+            result = auth.set_ui_scale(bad)
+            self.assertFalse(result["success"])
+            self.assertEqual(result["error_code"], "auth.invalid_ui_scale")
+
+    def test_rejects_non_numeric(self):
+        auth.set_credentials("admin", "correcthorse9")
+        result = auth.set_ui_scale("huge")
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "auth.invalid_ui_scale")
+
+    def test_requires_credentials_configured_first(self):
+        result = auth.set_ui_scale(90)
+        self.assertFalse(result["success"])
+        self.assertEqual(result["error_code"], "auth.not_configured")
+
+
 class TestAuthEnabled(unittest.TestCase):
     def test_enabled_by_default(self):
         with mock.patch.dict(os.environ, {}, clear=True):
