@@ -8,18 +8,26 @@
    "everything is fine".
    ------------------------------------------------------------------- */
 
-/* UI scale - three deliberate presets (80/100/120), his explicit
-   correction after the first pass: 100% must be the browser's own
-   true, unscaled default - no artificial app-side boost sitting under
-   it - with 80%/120% as the two adjustable steps either side. Saved
-   the same way (server-side, via /api/auth/ui-scale) and surfaced in
-   the same place as the session-duration setting. `zoom` (not a
-   transform) so layout reflows properly instead of just visually
-   scaling with leftover/clipped whitespace. html[data-ui-scale] is set
-   as early as possible (an inline <head> script, same timing as the
-   dark-theme default) so there's no flash of the wrong size on load. */
-html[data-ui-scale="80"] { zoom: 0.8; }
-html[data-ui-scale="120"] { zoom: 1.2; }
+/* UI scale - three presets, labeled 80/100/120 as reference points
+   (his own words) rather than literal browser-zoom percentages. His
+   real report after the first pass: at the "100%" option the app's
+   own actual base typography (every table cell, label, and pill
+   throughout style.css hardcodes something in the 12-14px range - not
+   a zoom artifact, just genuinely small by design) read as too small
+   compared to a normal comfortable reading size (his reference: this
+   chat window's own text). Rather than only changing what "100%"
+   happens to render as, this bakes a real, permanent 15% size increase
+   into the actual default (unconditional, not tied to the attribute -
+   this is now just what the app looks like), and 80%/120% keep the
+   same relative relationship to that new comfortable baseline instead
+   of to old, too-small metrics. `zoom` (not a transform) so layout
+   reflows properly instead of just visually scaling with leftover/
+   clipped whitespace. html[data-ui-scale] is set as early as possible
+   (an inline <head> script, same timing as the dark-theme default) so
+   there's no flash of the wrong size on load. */
+html { zoom: 1.15; }
+html[data-ui-scale="80"] { zoom: 0.92; }
+html[data-ui-scale="120"] { zoom: 1.38; }
 
 :root,
 :root[data-theme="light"] {

@@ -238,7 +238,7 @@ function applyUiScale(scale) {
   if (s === "80" || s === "120") {
     document.documentElement.setAttribute("data-ui-scale", s);
   } else {
-    document.documentElement.removeAttribute("data-ui-scale"); // 100 = truly native, no zoom rule applies at all
+    document.documentElement.removeAttribute("data-ui-scale"); // 100 = the unconditional html{zoom} base rule in style.css applies (the new comfortable default)
   }
   localStorage.setItem("nas-monitor-ui-scale", s);
 }
