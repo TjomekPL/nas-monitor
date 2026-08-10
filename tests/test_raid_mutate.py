@@ -188,21 +188,42 @@ class TestCreateRaidArray(unittest.TestCase):
 
     @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
     @mock.patch.object(raid_mutate.system_tools, "run")
-    def test_fails_then_removes_the_device(self, mock_run, mock_find):
+    def test_fails_then_removes_the_device_then_zeroes_its_superblock(self, mock_run, mock_find):
+        # Real report: after Detach, the freed disk still showed up as
+        # linux_raid_member (its old superblock was never cleared) and
+        # was invisible to Repair's free-disk picker as a result - the
+        # only way back in was a separate, non-obvious manual Wipe
+        # first. Zeroing it here as part of detach itself closes that
+        # gap - the disk comes back genuinely free immediately.
         mock_run.return_value = (0, "", "")
         result = raid_mutate.detach_member("md0", "/dev/sdb")
         self.assertTrue(result["success"])
         mock_run.assert_any_call(["/sbin/mdadm", "--manage", "/dev/md0", "--fail", "/dev/sdb"], timeout=30)
         mock_run.assert_any_call(["/sbin/mdadm", "--manage", "/dev/md0", "--remove", "/dev/sdb"], timeout=30)
+        mock_run.assert_any_call(["/sbin/mdadm", "--zero-superblock", "/dev/sdb"], timeout=30)
+        self.assertNotIn("warnings", result)
 
     @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
     @mock.patch.object(raid_mutate.system_tools, "run")
     def test_tolerates_fail_no_op_but_not_remove_failure(self, mock_run, mock_find):
         # --fail can legitimately no-op (device already gone/marked
         # failed) - only --remove actually failing should be an error.
-        mock_run.side_effect = [(1, "", "mdadm: set device faulty failed"), (0, "", "")]
+        mock_run.side_effect = [(1, "", "mdadm: set device faulty failed"), (0, "", ""), (0, "", "")]
         result = raid_mutate.detach_member("md0", "/dev/sdb")
         self.assertTrue(result["success"])
+
+    @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
+    @mock.patch.object(raid_mutate.system_tools, "run")
+    def test_a_superblock_zero_failure_is_a_warning_not_a_failure(self, mock_run, mock_find):
+        # --remove already succeeded (the part that actually matters) -
+        # a stale-superblock cleanup failing afterward must not make
+        # the whole detach look like it failed.
+        mock_run.side_effect = [(0, "", ""), (0, "", ""), (1, "", "mdadm: Unrecognised md component device")]
+        result = raid_mutate.detach_member("md0", "/dev/sdb")
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertEqual(result["warnings"][0]["code"], "raid.zero_superblock_failed")
+        self.assertEqual(result["warnings"][0]["context"]["device"], "/dev/sdb")
 
     @mock.patch.object(raid_mutate.system_tools, "find_binary", return_value="/sbin/mdadm")
     @mock.patch.object(raid_mutate.system_tools, "run")

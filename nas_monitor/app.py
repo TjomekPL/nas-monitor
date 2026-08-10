@@ -220,7 +220,7 @@ def api_raid_detach(array_name):
         oplog.log_event("raid", "detach", "failure", params={"array": array_name, "device": device})
         return jsonify({"success": False, "error_code": result["error_code"], "error_context": result["error_context"]}), 400
     oplog.log_event("raid", "detach", "success", params={"array": array_name, "device": device})
-    return jsonify({"success": True})
+    return jsonify({"success": True, "warnings": result.get("warnings", [])})
 
 
 @app.route("/api/raid/<array_name>/add", methods=["POST"])

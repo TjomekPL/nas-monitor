@@ -143,7 +143,11 @@ def detach_member(array_name: str, device: str) -> dict[str, Any]:
     by one - this never touches the array as a whole, only this one
     member's participation in it. --fail is allowed to no-op (a
     disk that's already gone/marked failed has nothing left to fail);
-    only --remove actually failing is treated as an error."""
+    only --remove actually failing is treated as an error. The freed
+    disk's old RAID superblock is zeroed afterward too, so it comes
+    back as a genuinely free disk immediately - not still flagged
+    linux_raid_member and invisible to Repair's picker until a
+    separate manual Wipe."""
     result: dict[str, Any] = {"success": False}
 
     arrays = {arr["name"]: arr for arr in monitor.get_raid_arrays()}
@@ -161,7 +165,25 @@ def detach_member(array_name: str, device: str) -> dict[str, Any]:
     if code != 0:
         return errors.command_failed(result, err, out, code, "mdadm")
 
+    # mdadm has now genuinely let go of the device, but its on-disk
+    # superblock still says "I'm part of this array" - lsblk (and every
+    # "is this disk free?" check in this app) would keep reporting it as
+    # linux_raid_member and refuse to treat it as available, even though
+    # the array itself no longer references it. A real report: after
+    # Detach there was no way to get the freed disk back into Repair's
+    # picker without a separate manual Wipe first - not obvious, and
+    # inconsistent with delete_raid_array, which already zeroes every
+    # member's superblock on the way out. Best-effort: the detach itself
+    # already succeeded (the part that matters), so a failure here is
+    # surfaced as a warning, not a reason to report the whole action failed.
+    warnings = []
+    zcode, zout, zerr = system_tools.run([mdadm_path, "--zero-superblock", device], timeout=30)
+    if zcode != 0:
+        warnings.append({"code": "raid.zero_superblock_failed", "context": {"device": device, "detail": (zerr or zout or "").strip()}})
+
     result["success"] = True
+    if warnings:
+        result["warnings"] = warnings
     return result
 
 

@@ -1083,6 +1083,9 @@ async function detachRaidMember(disk) {
       showToast(apiErrorMessage(data, res), true);
       return;
     }
+    if (data.warnings && data.warnings.length) {
+      showToast(warningsText(data.warnings), true);
+    }
     await refresh();
     await loadRawDisks();
   } catch (err) {
