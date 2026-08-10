@@ -767,7 +767,13 @@ class TestLegacyAccessGroupMigration(unittest.TestCase):
     @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
     def test_delete_never_groupdels_a_foreign_group(self, mock_apply, mock_run, mock_find, mock_smb):
         smb_shares.delete_share("test", managed_conf_path=self.managed)
-        mock_run.assert_not_called()  # "tomek" must never be passed to groupdel
+        # "tomek" must never be passed to groupdel - close-share (a
+        # separate, unrelated best-effort step) is still expected to
+        # run, so this checks specifically for the absence of a
+        # groupdel-shaped call rather than asserting run() was never
+        # invoked at all.
+        for call in mock_run.call_args_list:
+            self.assertNotIn("tomek", call.args[0])
 
     @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/sbin/groupdel")
     @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(0, "", ""))
@@ -779,7 +785,7 @@ class TestLegacyAccessGroupMigration(unittest.TestCase):
         with open(self.managed, "w") as fh:
             fh.write(content)
         smb_shares.delete_share("test", managed_conf_path=self.managed)
-        mock_run.assert_called_once_with(["/usr/sbin/groupdel", "test_access"])
+        mock_run.assert_any_call(["/usr/sbin/groupdel", "test_access"])
 
     @mock.patch("nas_monitor.smb_shares.system_tools.find_binary", return_value="/usr/sbin/groupdel")
     @mock.patch("nas_monitor.smb_shares.system_tools.run", return_value=(1, "", "groupdel: cannot remove the group, it's still used"))
@@ -812,6 +818,37 @@ class TestLegacyAccessGroupMigration(unittest.TestCase):
         result = smb_shares.delete_share("test", managed_conf_path=self.managed)
         self.assertTrue(result["success"])
         self.assertEqual(result["warnings"][0]["code"], "shares.access_group_cleanup_tool_missing")
+
+    def test_delete_closes_lingering_smbd_connections_using_the_display_name(self, mock_smb):
+        # Real report: even after manually deleting a share, unmounting
+        # its disk still failed with "target is busy" - reload_smbd()
+        # (inside _validate_and_apply) only makes smbd re-read
+        # smb.conf, it doesn't drop existing client connections to a
+        # share that's now gone from it. close-share is the actual
+        # fix, and it needs the share's Samba-visible name (what a
+        # client connected to), not the technical `name`.
+        content = smb_shares._render_managed_shares(
+            [{"name": "test", "display_name": "Ładna Nazwa", "path": "/srv/test", "comment": "", "access_group": None, "permissions": {}}]
+        )
+        with open(self.managed, "w") as fh:
+            fh.write(content)
+        with mock.patch.object(smb_shares, "_validate_and_apply", return_value={"success": True}), \
+             mock.patch.object(smb_shares.system_tools, "find_binary", return_value="/usr/bin/smbcontrol") as mock_find, \
+             mock.patch.object(smb_shares.system_tools, "run", return_value=(0, "", "")) as mock_run:
+            result = smb_shares.delete_share("test", managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
+        mock_run.assert_any_call(["/usr/bin/smbcontrol", "smbd", "close-share", "Ładna Nazwa"])
+
+    def test_delete_still_succeeds_when_smbcontrol_is_missing(self, mock_smb):
+        content = smb_shares._render_managed_shares(
+            [{"name": "test", "path": "/srv/test", "comment": "", "access_group": None, "permissions": {}}]
+        )
+        with open(self.managed, "w") as fh:
+            fh.write(content)
+        with mock.patch.object(smb_shares, "_validate_and_apply", return_value={"success": True}), \
+             mock.patch.object(smb_shares.system_tools, "find_binary", return_value=None):
+            result = smb_shares.delete_share("test", managed_conf_path=self.managed)
+        self.assertTrue(result["success"])
 
     @mock.patch("nas_monitor.smb_shares._validate_and_apply", return_value={"success": True})
     def test_delete_files_false_leaves_the_directory_alone(self, mock_apply, mock_smb):

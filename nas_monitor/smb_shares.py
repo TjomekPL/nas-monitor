@@ -1039,6 +1039,21 @@ def delete_share(
     for granted_group in (match.get("group_grants") or {}):
         _remove_group_acl(match["path"], granted_group)  # best-effort, ignore result
 
+    # reload_smbd() (inside _validate_and_apply above) only makes smbd
+    # re-read smb.conf - it does NOT drop existing client connections
+    # to the share that's now gone from it. A real report: even after
+    # manually deleting a share, unmounting its disk still failed with
+    # "target is busy" - smbd was still holding the directory open for
+    # whatever client had connected to it before deletion. close-share
+    # tells smbd to actively disconnect anyone still attached, using
+    # the share's own Samba-visible name (display_name if it has one -
+    # that's what a client actually connected to, not the technical
+    # `name`). Best-effort: smbcontrol missing or erroring shouldn't
+    # block a deletion that has already fully succeeded otherwise.
+    smbcontrol_path = system_tools.find_binary("smbcontrol")
+    if smbcontrol_path is not None:
+        system_tools.run([smbcontrol_path, "smbd", "close-share", match.get("display_name") or name])
+
     if delete_files:
         import shutil as _shutil
 
