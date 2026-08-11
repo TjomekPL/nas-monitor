@@ -272,7 +272,7 @@ if __name__ == "__main__":
 class TestSetHostname(unittest.TestCase):
     @mock.patch.object(network_mutate.system_tools, "find_binary")
     @mock.patch.object(network_mutate.system_tools, "run")
-    def test_sets_hostname_and_restarts_avahi(self, mock_run, mock_find):
+    def test_sets_hostname_and_restarts_avahi_and_samba(self, mock_run, mock_find):
         mock_find.side_effect = lambda name: f"/usr/bin/{name}"
         mock_run.return_value = (0, "", "")
         result = network_mutate.set_hostname("nas-mon")
@@ -280,6 +280,12 @@ class TestSetHostname(unittest.TestCase):
         self.assertEqual(result["hostname"], "nas-mon")
         mock_run.assert_any_call(["/usr/bin/hostnamectl", "set-hostname", "nas-mon"], timeout=15)
         mock_run.assert_any_call(["/usr/bin/systemctl", "restart", "avahi-daemon"], timeout=15)
+        # Real report: a Windows machine kept showing the box under its
+        # old name in network browsing well after avahi/.local had
+        # already picked up the new one - smbd/nmbd cache the hostname
+        # at their own startup and were never being restarted at all.
+        mock_run.assert_any_call(["/usr/bin/systemctl", "restart", "smbd"], timeout=15)
+        mock_run.assert_any_call(["/usr/bin/systemctl", "restart", "nmbd"], timeout=15)
 
     def test_rejects_empty_hostname(self):
         result = network_mutate.set_hostname("")
@@ -319,8 +325,22 @@ class TestSetHostname(unittest.TestCase):
         # part that actually matters - so avahi failing to restart
         # must not make the whole rename look like it failed.
         mock_find.side_effect = lambda name: f"/usr/bin/{name}"
-        mock_run.side_effect = [(0, "", ""), (1, "", "Unit avahi-daemon.service not found.")]
+        mock_run.side_effect = [(0, "", ""), (1, "", "Unit avahi-daemon.service not found."), (0, "", ""), (0, "", "")]
         result = network_mutate.set_hostname("nas-mon")
         self.assertTrue(result["success"])
         self.assertEqual(len(result["warnings"]), 1)
         self.assertEqual(result["warnings"][0]["code"], "network.avahi_restart_failed")
+
+    @mock.patch.object(network_mutate.system_tools, "find_binary")
+    @mock.patch.object(network_mutate.system_tools, "run")
+    def test_a_failed_samba_restart_is_a_warning_not_a_failure(self, mock_run, mock_find):
+        # nmbd specifically isn't always installed/enabled on every
+        # setup (some minimal Samba configs skip it) - its restart
+        # failing is just as much a non-fatal warning as avahi's.
+        mock_find.side_effect = lambda name: f"/usr/bin/{name}"
+        mock_run.side_effect = [(0, "", ""), (0, "", ""), (0, "", ""), (1, "", "Unit nmbd.service not found.")]
+        result = network_mutate.set_hostname("nas-mon")
+        self.assertTrue(result["success"])
+        self.assertEqual(len(result["warnings"]), 1)
+        self.assertEqual(result["warnings"][0]["code"], "network.samba_restart_failed")
+        self.assertEqual(result["warnings"][0]["context"]["service"], "nmbd")

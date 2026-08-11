@@ -614,6 +614,7 @@ window.NAS_I18N.pl = {
     },
     network: {
       avahi_restart_failed: "Nazwa hosta zmieniona, ale nie udało się zrestartować avahi-daemon - nowa nazwa może nie być od razu widoczna w sieci lokalnej: {detail}",
+      samba_restart_failed: "Nazwa hosta zmieniona, ale nie udało się zrestartować {service} - w przeglądaniu sieci Windows może nadal pokazywać się stara nazwa: {detail}",
     },
   },
 

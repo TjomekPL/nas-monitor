@@ -513,6 +513,14 @@ h2 {
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
   gap: 14px;
 }
+/* `gap` above only spaces cards WITHIN one .cards grid - a real report
+   showed no breathing room at all between two separate .cards blocks
+   stacked one after another (Network tab: the Overview card group,
+   then a second .cards group for interface cards, right underneath
+   with nothing between them). */
+.cards + .cards {
+  margin-top: 14px;
+}
 
 .card {
   background: var(--surface);
@@ -1084,6 +1092,29 @@ form select {
   display: block;
   width: 100%;
   margin-top: 4px;
+  padding: 7px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 14px;
+  box-sizing: border-box;
+}
+/* The hostname editor lives directly on the Overview card, not inside
+   a <form> - the selector above never matched it, so it fell back to
+   the browser's completely unstyled default input (real report: "ledwo
+   widoczna czcionka" - barely visible text, no theme colors at all).
+   Given its own full block below the facts list (not squeezed inline
+   next to a <dt>/<dd> pair anymore either - a real report that the
+   hostname text itself didn't fit in that cramped space). */
+.hostname-edit-row {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+.hostname-input {
+  display: block;
+  width: 100%;
   padding: 7px 10px;
   border-radius: 7px;
   border: 1px solid var(--border);

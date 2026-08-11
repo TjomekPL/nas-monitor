@@ -3447,6 +3447,7 @@ setInterval(loadShares, REFRESH_MS);
 
 const networkContainer = document.getElementById("network-container");
 let lastNetworkData = null;
+let isEditingHostname = false;
 
 function formatIfaceType(type) {
   if (!type || !type.kind) return "";
@@ -3476,15 +3477,17 @@ function renderNetwork(data) {
         <dd>
           <span class="hostname-display mono">${data.hostname || "\u2013"}</span>
           <button type="button" class="link-btn hostname-edit-btn">${t("ui.network.editHostnameBtn")}</button>
-          <span class="hostname-edit-row" style="display:none;">
-            <input type="text" class="hostname-input mono" maxlength="63" />
-            <button type="button" class="link-btn hostname-save-btn">${t("ui.network.saveHostnameBtn")}</button>
-            <button type="button" class="link-btn hostname-cancel-btn">${t("ui.network.cancelHostnameBtn")}</button>
-          </span>
         </dd>
       </div>
       <div><dt>${t("ui.network.managedBy")}</dt><dd>${t(`net.backend.${data.backend}`)}</dd></div>
     </dl>
+    <div class="hostname-edit-row" style="display:none;">
+      <input type="text" class="hostname-input mono" maxlength="63" />
+      <div class="dialog-actions">
+        <button type="button" class="hostname-cancel-btn">${t("ui.network.cancelHostnameBtn")}</button>
+        <button type="button" class="btn-primary hostname-save-btn">${t("ui.network.saveHostnameBtn")}</button>
+      </div>
+    </div>
     <p class="form-error hostname-error"></p>
   `;
   summary.appendChild(overview);
@@ -3499,14 +3502,16 @@ function renderNetwork(data) {
   const hostnameError = overview.querySelector(".hostname-error");
 
   hostnameEditBtn.addEventListener("click", () => {
+    isEditingHostname = true;
     hostnameInput.value = data.hostname || "";
     hostnameDisplay.style.display = "none";
     hostnameEditBtn.style.display = "none";
-    hostnameEditRow.style.display = "inline-flex";
+    hostnameEditRow.style.display = "block";
     hostnameError.textContent = "";
     hostnameInput.focus();
   });
   hostnameCancelBtn.addEventListener("click", () => {
+    isEditingHostname = false;
     hostnameDisplay.style.display = "";
     hostnameEditBtn.style.display = "";
     hostnameEditRow.style.display = "none";
@@ -3532,6 +3537,7 @@ function renderNetwork(data) {
         showToast(warningsText(resData.warnings), true);
       }
       showToast(t("msg.hostnameChanged", { hostname: resData.hostname }));
+      isEditingHostname = false;
       await loadNetwork();
     } catch (err) {
       hostnameError.textContent = t("msg.connectionErrorDetail", { detail: err.message });
@@ -3592,6 +3598,12 @@ function renderNetwork(data) {
 
 async function loadNetwork() {
   if (networkEditDialog.open) return;
+  // Real report: this poll rebuilds the Overview card from scratch on
+  // every tick, which kept silently closing the hostname edit field
+  // mid-type - same class of bug the dialog-open check above already
+  // guards against, just for an inline (non-<dialog>) edit affordance
+  // instead.
+  if (isEditingHostname) return;
   try {
     const res = await fetch("/api/network");
     if (!res.ok) throw new Error(`HTTP ${res.status}`);

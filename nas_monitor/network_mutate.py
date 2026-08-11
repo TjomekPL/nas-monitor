@@ -261,7 +261,18 @@ def set_hostname(new_hostname: str) -> dict[str, Any]:
     a D-Bus signal, but that's an implementation detail this doesn't
     want to gamble on; restarting it explicitly here guarantees the
     new <hostname>.local announcement goes out immediately regardless
-    of whether the automatic path is working on this particular box."""
+    of whether the automatic path is working on this particular box.
+
+    smbd/nmbd are restarted too - a real report: a Windows machine kept
+    showing the box under its OLD name when browsing the network, well
+    after avahi (and `.local` resolution) had already picked up the
+    new one. Root cause: this smb.conf never sets an explicit `netbios
+    name`, so Samba falls back to reading the system hostname - but
+    only ONCE, at smbd/nmbd's own startup, then keeps that in memory
+    for the life of the process. Nothing here was ever restarting them,
+    so the NetBIOS name Windows discovers stayed stale indefinitely,
+    completely independent of whatever avahi/mDNS was already
+    announcing correctly."""
     result: dict[str, Any] = {"success": False}
     new_hostname = (new_hostname or "").strip()
     if not new_hostname or len(new_hostname) > 63 or not _HOSTNAME_RE.match(new_hostname):
@@ -283,6 +294,10 @@ def set_hostname(new_hostname: str) -> dict[str, Any]:
         rcode, rout, rerr = system_tools.run([systemctl_path, "restart", "avahi-daemon"], timeout=15)
         if rcode != 0:
             warnings.append({"code": "network.avahi_restart_failed", "context": {"detail": (rerr or rout or "").strip()}})
+        for service in ("smbd", "nmbd"):
+            scode, sout, serr = system_tools.run([systemctl_path, "restart", service], timeout=15)
+            if scode != 0:
+                warnings.append({"code": "network.samba_restart_failed", "context": {"service": service, "detail": (serr or sout or "").strip()}})
 
     result["success"] = True
     result["hostname"] = new_hostname

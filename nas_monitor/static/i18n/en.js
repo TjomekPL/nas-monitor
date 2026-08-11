@@ -614,6 +614,7 @@ window.NAS_I18N.en = {
     },
     network: {
       avahi_restart_failed: "Hostname changed, but restarting avahi-daemon failed - the new name may not be immediately visible on the local network: {detail}",
+      samba_restart_failed: "Hostname changed, but restarting {service} failed - Windows network browsing may still show the old name: {detail}",
     },
   },
 
