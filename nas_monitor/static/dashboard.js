@@ -698,7 +698,15 @@ function wireCardDragging(container, section) {
     const target = ev.target.closest(".card");
     if (!target || target === draggedCard || target.parentElement !== container) return;
     const rect = target.getBoundingClientRect();
-    const before = (ev.clientY - rect.top) < rect.height / 2;
+    let before = (ev.clientY - rect.top) < rect.height / 2;
+    // The boot-disk card is pinned first and never itself draggable,
+    // but nothing stopped some OTHER card from being dropped ahead of
+    // it mid-drag - visually bumping it out of first place until the
+    // next natural re-render silently put it back (real report: it
+    // "wasn't staying pinned" during interactive reordering). Simplest
+    // fix: refuse the "before" placement specifically against the
+    // boot-disk card, so nothing can ever land ahead of it at all.
+    if (target.classList.contains("boot-disk")) before = false;
     container.insertBefore(draggedCard, before ? target : target.nextSibling);
   });
 
