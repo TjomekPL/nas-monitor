@@ -185,8 +185,8 @@ class TestApiRaidSmart(unittest.TestCase):
         # SMART data for md0" instead of showing anything useful.
         arrays = [{"name": "md0", "devices": [{"device": "/dev/sdb"}, {"device": "/dev/sdc"}]}]
         smart_by_device = {
-            "/dev/sdb": {"available": True, "temperature_c": 34, "passed": True, "attributes": {}},
-            "/dev/sdc": {"available": True, "temperature_c": 41, "passed": True, "attributes": {}},
+            "/dev/sdb": {"available": True, "temperature_c": 34, "passed": True, "power_on_hours": 8760, "attributes": {"reallocated_sectors": 0, "pending_sectors": 0}},
+            "/dev/sdc": {"available": True, "temperature_c": 41, "passed": False, "power_on_hours": 12000, "attributes": {"reallocated_sectors": 3, "pending_sectors": 1}},
         }
         with mock.patch.object(app_module.monitor, "get_raid_arrays", return_value=arrays), \
              mock.patch.object(app_module.monitor, "get_smart_health", side_effect=lambda p: smart_by_device[p]):
@@ -198,6 +198,13 @@ class TestApiRaidSmart(unittest.TestCase):
         self.assertEqual(by_name["sdb"]["temperature_c"], 34)
         self.assertEqual(by_name["sdb"]["health"], "ok")
         self.assertEqual(by_name["sdc"]["temperature_c"], 41)
+        # Real ask: besides temperature, the pre-failure indicators
+        # (reallocated/pending sectors etc.) already collected server-
+        # side were never actually surfaced anywhere in the UI.
+        self.assertTrue(by_name["sdb"]["passed"])
+        self.assertEqual(by_name["sdb"]["power_on_hours"], 8760)
+        self.assertFalse(by_name["sdc"]["passed"])
+        self.assertEqual(by_name["sdc"]["attributes"]["reallocated_sectors"], 3)
 
     def test_unknown_array_returns_404(self):
         with mock.patch.object(app_module.monitor, "get_raid_arrays", return_value=[]):

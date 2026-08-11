@@ -357,6 +357,9 @@ def api_raid_smart(array_name):
             "available": smart.get("available", False),
             "temperature_c": smart.get("temperature_c"),
             "health": monitor.classify_health(smart),
+            "passed": smart.get("passed"),
+            "power_on_hours": smart.get("power_on_hours"),
+            "attributes": smart.get("attributes", {}),
         })
     return jsonify({"available": True, "members": members})
 

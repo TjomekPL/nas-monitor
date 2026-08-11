@@ -971,6 +971,12 @@ function renderRawDisks(disks) {
   const arrayNames = new Set(topLevelArrays.map((a) => a.name));
   const ordered = [];
   const placed = new Set();
+  // System disk goes first, unconditionally, before arrays or anything
+  // else - real report: it was still ending up below every RAID array
+  // (and their indented members), since the array-placement loop below
+  // ran first and this push only happened afterward.
+  const bootDisk = disks.find((d) => d.is_boot_disk);
+  if (bootDisk) ordered.push(bootDisk);
   function placeArrayAndMembers(arr) {
     if (placed.has(arr.name)) return; // guards against a malformed/cyclic mdadm report
     placed.add(arr.name);
@@ -981,8 +987,6 @@ function renderRawDisks(disks) {
     }
   }
   for (const arr of topLevelArrays) placeArrayAndMembers(arr);
-  const bootDisk = disks.find((d) => d.is_boot_disk);
-  if (bootDisk) ordered.push(bootDisk);
   for (const d of disks) {
     if (d.transport === "raid") continue;
     if (d.is_boot_disk) continue; // already placed first, above
@@ -1558,6 +1562,80 @@ function addCheckStatusButton(actions, d) {
   actions.appendChild(checkBtn);
 }
 
+// Real ask: besides temperature, what else can this show? The
+// underlying attributes (reallocated/pending sectors, uncorrectable
+// errors, command timeouts, the drive's own overall PASSED/FAILED
+// self-assessment) were already being collected server-side the whole
+// time (monitor.get_smart_health) - just never actually surfaced
+// anywhere in the UI beyond a bare temperature. Shared between a
+// single disk and a whole array's member list so both get the same
+// depth of detail, not just the array's aggregated view.
+const _SMART_ATTR_LABELS = {
+  reallocated_sectors: "reallocatedSectors",
+  reported_uncorrect: "reportedUncorrect",
+  command_timeout: "commandTimeout",
+  pending_sectors: "pendingSectors",
+  offline_uncorrectable: "offlineUncorrectable",
+  media_errors: "mediaErrors",
+  percentage_used: "percentageUsed",
+  critical_warning: "criticalWarning",
+  unsafe_shutdowns: "unsafeShutdowns",
+};
+// These specific attributes being non-zero is itself the actual
+// warning signal (a healthy drive reads 0 on all of them) - shown in
+// the crit color rather than plain text so a real problem doesn't
+// just blend into a wall of neutral numbers.
+const _SMART_ATTR_BAD_ABOVE_ZERO = new Set([
+  "reallocated_sectors", "reported_uncorrect", "command_timeout",
+  "pending_sectors", "offline_uncorrectable", "media_errors", "critical_warning",
+]);
+
+function renderSmartDetail(container, data) {
+  container.innerHTML = "";
+  if (!data.available) {
+    container.appendChild(Object.assign(document.createElement("p"), {
+      className: "field-hint", textContent: data.error || t("ui.rawDisks.smartUnavailable", { name: data.name || "" }),
+    }));
+    return;
+  }
+  const dl = document.createElement("dl");
+  dl.className = "facts";
+
+  const addRow = (label, value, bad) => {
+    const row = document.createElement("div");
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    dd.textContent = value;
+    if (bad) dd.style.color = "var(--crit)";
+    row.appendChild(dt);
+    row.appendChild(dd);
+    dl.appendChild(row);
+  };
+
+  if (data.passed !== null && data.passed !== undefined) {
+    addRow(t("ui.smartDetail.overallHealth"), data.passed ? t("ui.smartDetail.passed") : t("ui.smartDetail.failed"), !data.passed);
+  }
+  if (data.temperature_c != null) addRow(t("ui.smartDetail.temperature"), t("ui.rawDisks.smartTemp", { temp: data.temperature_c }).trim());
+  if (data.power_on_hours != null) addRow(t("ui.smartDetail.powerOnHours"), fmtHours(data.power_on_hours));
+
+  const attrs = data.attributes || {};
+  for (const [key, i18nKey] of Object.entries(_SMART_ATTR_LABELS)) {
+    const value = attrs[key];
+    if (value === null || value === undefined) continue;
+    const bad = _SMART_ATTR_BAD_ABOVE_ZERO.has(key) && Number(value) > 0;
+    addRow(t(`ui.smartDetail.${i18nKey}`), String(value), bad);
+  }
+
+  if (dl.children.length === 0) {
+    container.appendChild(Object.assign(document.createElement("p"), {
+      className: "field-hint", textContent: t("ui.rawDisks.smartUnavailable", { name: data.name || "" }),
+    }));
+    return;
+  }
+  container.appendChild(dl);
+}
+
 async function checkRawDiskStatus(disk, button) {
   if (disk.transport === "raid") {
     await checkRaidSmart(disk, button);
@@ -1569,12 +1647,9 @@ async function checkRawDiskStatus(disk, button) {
   try {
     const res = await fetch(`/api/disks/${encodeURIComponent(disk.name)}/smart`);
     const data = await res.json();
-    if (!data.available) {
-      showToast(t("ui.rawDisks.smartUnavailable", { name: disk.name }), true);
-      return;
-    }
-    const tempPart = data.temperature_c != null ? t("ui.rawDisks.smartTemp", { temp: data.temperature_c }) : "";
-    showToast(t("ui.rawDisks.smartResult", { name: disk.name, health: data.health, temp: tempPart }));
+    raidSmartTitle.textContent = t("ui.smartDetail.titleFor", { name: disk.name });
+    renderSmartDetail(raidSmartMembers, { ...data, name: disk.name });
+    raidSmartDialog.showModal();
   } catch (err) {
     showToast(t("msg.connectionErrorDetail", { detail: err.message }), true);
   } finally {
@@ -1610,21 +1685,19 @@ async function checkRaidSmart(array, button) {
       }));
     } else {
       for (const member of data.members) {
-        const row = document.createElement("div");
-        row.className = "raid-repair-row";
-        const label = document.createElement("span");
-        label.className = "mono";
-        label.textContent = member.name;
-        row.appendChild(label);
-        const status = document.createElement("span");
-        if (member.available) {
-          const tempPart = member.temperature_c != null ? t("ui.rawDisks.smartTemp", { temp: member.temperature_c }) : "";
-          status.textContent = `${member.health}${tempPart}`;
-        } else {
-          status.textContent = t("ui.rawDisks.smartUnavailable", { name: member.name });
-        }
-        row.appendChild(status);
-        raidSmartMembers.appendChild(row);
+        const wrap = document.createElement("div");
+        wrap.className = "raid-repair-row";
+        wrap.style.flexDirection = "column";
+        wrap.style.alignItems = "stretch";
+        const heading = document.createElement("span");
+        heading.className = "mono";
+        heading.style.fontWeight = "700";
+        heading.textContent = member.name;
+        wrap.appendChild(heading);
+        const detail = document.createElement("div");
+        renderSmartDetail(detail, member);
+        wrap.appendChild(detail);
+        raidSmartMembers.appendChild(wrap);
       }
     }
     raidSmartDialog.showModal();

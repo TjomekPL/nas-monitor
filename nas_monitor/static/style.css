@@ -16,18 +16,25 @@
    a zoom artifact, just genuinely small by design) read as too small
    compared to a normal comfortable reading size (his reference: this
    chat window's own text). Rather than only changing what "100%"
-   happens to render as, this bakes a real, permanent 15% size increase
+   happens to render as, this bakes a real, permanent size increase
    into the actual default (unconditional, not tied to the attribute -
    this is now just what the app looks like), and 80%/120% keep the
-   same relative relationship to that new comfortable baseline instead
-   of to old, too-small metrics. `zoom` (not a transform) so layout
-   reflows properly instead of just visually scaling with leftover/
-   clipped whitespace. html[data-ui-scale] is set as early as possible
-   (an inline <head> script, same timing as the dark-theme default) so
+   same relative relationship to that comfortable baseline instead of
+   to old, too-small metrics.
+   Revised again [stated]: all three trimmed a further flat 10% off
+   their then-current rendered size (1.15/0.92/1.38 -> 1.035/0.828/
+   1.242) - computed and written as single flat zoom values below, not
+   as a second stacked scaling rule on top of the old ones, per his
+   explicit "bez skalowania" reminder (no compounding/hidden layers -
+   whatever a preset renders as should be readable directly off its
+   own zoom value here). `zoom` (not a transform) so layout reflows
+   properly instead of just visually scaling with leftover/clipped
+   whitespace. html[data-ui-scale] is set as early as possible (an
+   inline <head> script, same timing as the dark-theme default) so
    there's no flash of the wrong size on load. */
-html { zoom: 1.15; }
-html[data-ui-scale="80"] { zoom: 0.92; }
-html[data-ui-scale="120"] { zoom: 1.38; }
+html { zoom: 1.035; }
+html[data-ui-scale="80"] { zoom: 0.828; }
+html[data-ui-scale="120"] { zoom: 1.242; }
 
 :root,
 :root[data-theme="light"] {
@@ -51,6 +58,15 @@ html[data-ui-scale="120"] { zoom: 1.38; }
   --crit-bg: #fbe8e6;
   --unknown: #6a6d68;
   --unknown-bg: #ececea;
+  /* Real report: the boot-disk highlight (reusing --crit-bg, the same
+     red background used for critical status everywhere else) read
+     fine in dark mode but looked wrong/off in light mode - a plain
+     desaturated gray reads as "this one's different/set aside"
+     without implying anything is actually wrong with it, which red
+     does. Dark mode keeps the red (--boot-disk-bg set again, to
+     --crit-bg, in the dark block below) since he said that one
+     already looked right. */
+  --boot-disk-bg: var(--unknown-bg);
 }
 
 :root[data-theme="dark"] {
@@ -74,6 +90,7 @@ html[data-ui-scale="120"] { zoom: 1.38; }
   --crit-bg: #2c1815;
   --unknown: #a3a69c;
   --unknown-bg: #23251d;
+  --boot-disk-bg: var(--crit-bg);
 }
 
 /* Falls back to the OS preference only until the person picks explicitly
@@ -98,12 +115,27 @@ html[data-ui-scale="120"] { zoom: 1.38; }
     --crit-bg: #2c1815;
     --unknown: #a3a69c;
     --unknown-bg: #23251d;
+    --boot-disk-bg: var(--crit-bg);
   }
 }
 
 * { box-sizing: border-box; }
 
 html { color-scheme: light dark; }
+
+/* Real report: the login page (nothing on it but one centered card)
+   was still scrollable by a noticeable amount. Root cause: `.login-
+   wrap` centered its card using `min-height: 100vh`, but `vh` units
+   and CSS `zoom` (used for the UI-scale setting above) don't compose
+   cleanly in every browser - the box gets laid out against the
+   UNzoomed viewport height, then rendered at zoom scale, ending up
+   visibly taller than the actual visible viewport. Percentage
+   heights don't have that ambiguity (they resolve through the normal
+   box model against their ancestor, which zooms consistently
+   alongside everything else) - html/body given an explicit 100%
+   height chain here so `.login-wrap` can use `min-height: 100%`
+   instead of `100vh`.  */
+html, body { height: 100%; }
 
 body {
   margin: 0;
@@ -495,7 +527,7 @@ h2 {
    visually invites picking it up. */
 .card[draggable="true"] .card-head { cursor: grab; }
 .card.boot-disk {
-  background: var(--crit-bg);
+  background: var(--boot-disk-bg);
 }
 .card.dragging {
   opacity: 0.4;
@@ -701,7 +733,7 @@ section[data-section-id].dragging {
    a glance, using the same "danger" red family as everywhere else
    critical status is shown rather than inventing a new color. */
 .disk-row-boot {
-  background: var(--crit-bg);
+  background: var(--boot-disk-bg);
 }
 .disk-row-boot td:first-child {
   font-weight: 700;
@@ -1259,7 +1291,7 @@ form label.inline {
    ------------------------------------------------------------------- */
 
 .login-wrap {
-  min-height: 100vh;
+  min-height: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
